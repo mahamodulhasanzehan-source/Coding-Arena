@@ -121,7 +121,7 @@ export const Node: React.FC<NodeProps> = ({
   return (
     <div
       ref={nodeRef}
-      className={`absolute flex flex-col bg-panel border rounded-lg shadow-2xl transition-shadow animate-in fade-in zoom-in-95 duration-300 ${
+      className={`absolute flex flex-col bg-panel border rounded-lg shadow-2xl transition-shadow animate-in fade-in zoom-in-95 duration-300 pointer-events-auto ${
         isSelected ? 'border-accent shadow-accent/20' : 'border-panelBorder'
       }`}
       style={{

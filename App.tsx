@@ -100,7 +100,7 @@ function graphReducer(state: GraphState, action: Action): GraphState {
 export default function App() {
   const [state, dispatch] = useReducer(graphReducer, initialState);
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, targetNodeId?: string, targetPortId?: string } | null>(null);
-  
+  const [isPanning, setIsPanning] = useState(false);
   const [dragWire, setDragWire] = useState<{ x1: number, y1: number, x2: number, y2: number, startPortId: string, startNodeId: string, isInput: boolean } | null>(null);
   
   const containerRef = useRef<HTMLDivElement>(null);
@@ -174,8 +174,11 @@ export default function App() {
     const newPanX = mouseX - worldX * newZoom;
     const newPanY = mouseY - worldY * newZoom;
 
-    dispatch({ type: 'ZOOM', payload: { zoom: newZoom } });
-    dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
+    // Ensure we don't dispatch NaNs
+    if (!isNaN(newZoom) && !isNaN(newPanX) && !isNaN(newPanY)) {
+        dispatch({ type: 'ZOOM', payload: { zoom: newZoom } });
+        dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
+    }
   };
 
   const handleAddNode = (type: NodeType) => {
@@ -224,12 +227,8 @@ export default function App() {
     e.stopPropagation();
     e.preventDefault();
     
-    // Use the explicitly passed nodeId which is robust against ID formats
     const node = state.nodes.find(n => n.id === nodeId);
-    if (!node) {
-        console.error("Node not found for drag", nodeId);
-        return;
-    }
+    if (!node) return;
 
     const pos = calculatePortPosition(node, portId, isInput ? 'input' : 'output');
     
@@ -246,18 +245,34 @@ export default function App() {
     e.currentTarget.setPointerCapture(e.pointerId);
   };
 
+  const handleBgPointerDown = (e: React.PointerEvent) => {
+      // If we clicked a node or port, that component handles it via stopPropagation.
+      // So if we are here, we are on the background.
+      
+      e.preventDefault(); // Prevent text selection
+      e.currentTarget.setPointerCapture(e.pointerId);
+      setIsPanning(true);
+  };
+
   const handlePointerMove = (e: React.PointerEvent) => {
     if (dragWire && containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
         const x = (e.clientX - rect.left - state.pan.x) / state.zoom;
         const y = (e.clientY - rect.top - state.pan.y) / state.zoom;
         setDragWire(prev => prev ? { ...prev, x2: x, y2: y } : null);
-    } else if (e.buttons === 1 && (e.target as HTMLElement).id === 'canvas-bg') {
+    } 
+    
+    if (isPanning) {
         dispatch({ type: 'PAN', payload: { x: state.pan.x + e.movementX, y: state.pan.y + e.movementY } });
     }
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
+    if (isPanning) {
+        setIsPanning(false);
+        (e.currentTarget as Element).releasePointerCapture(e.pointerId);
+    }
+
     if (!dragWire) return;
     
     const targetEl = document.elementFromPoint(e.clientX, e.clientY);
@@ -265,11 +280,11 @@ export default function App() {
     
     if (portEl) {
         const endPortId = portEl.getAttribute('data-port-id');
-        const endNodeId = portEl.getAttribute('data-node-id'); // Use explicit data attribute
+        const endNodeId = portEl.getAttribute('data-node-id');
 
         if (endPortId && endNodeId && endPortId !== dragWire.startPortId) {
             const isStartInput = dragWire.isInput;
-            const isTargetInput = endPortId.includes('-in-'); // Convention still useful for type check
+            const isTargetInput = endPortId.includes('-in-');
             
             if (isStartInput !== isTargetInput && dragWire.startNodeId !== endNodeId) {
                 dispatch({
@@ -295,7 +310,7 @@ export default function App() {
 
   return (
     <div 
-      className="w-screen h-screen bg-canvas overflow-hidden flex flex-col text-zinc-100 font-sans"
+      className="w-screen h-screen bg-canvas overflow-hidden flex flex-col text-zinc-100 font-sans select-none"
       onContextMenu={(e) => e.preventDefault()}
     >
       <div className="absolute top-4 left-4 z-50 pointer-events-none select-none">
@@ -317,6 +332,7 @@ export default function App() {
         id="canvas-bg"
         className="flex-1 relative cursor-grab active:cursor-grabbing"
         onContextMenu={(e) => handleContextMenu(e)}
+        onPointerDown={handleBgPointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onWheel={handleWheel}
@@ -335,7 +351,11 @@ export default function App() {
                 pointerEvents: 'none'
             }}
         >
-            <div className="pointer-events-auto w-full h-full relative">
+            {/* 
+              This wrapper is pointer-events-none so clicks fall through to the background for panning.
+              The nodes inside must explicitly enable pointer-events.
+            */}
+            <div className="pointer-events-none w-full h-full relative">
                 {/* Wires - Established connections at bottom */}
                 <svg className="absolute top-0 left-0 w-full h-full overflow-visible pointer-events-none z-0">
                     {state.connections.map(conn => {
@@ -372,15 +392,17 @@ export default function App() {
                                 logs={logs}
                             >
                                 {(node.type === 'CODE') && (
-                                    <Editor
-                                        value={node.content}
-                                        onValueChange={code => dispatch({ type: 'UPDATE_NODE_CONTENT', payload: { id: node.id, content: code } })}
-                                        highlight={code => Prism.highlight(code, Prism.languages.markup, 'markup')}
-                                        padding={12}
-                                        style={{ fontFamily: '"JetBrains Mono", monospace', fontSize: 13, lineHeight: '1.5' }}
-                                        className="min-h-full"
-                                        textareaClassName="focus:outline-none whitespace-pre"
-                                    />
+                                    <div className="pointer-events-auto cursor-text">
+                                        <Editor
+                                            value={node.content}
+                                            onValueChange={code => dispatch({ type: 'UPDATE_NODE_CONTENT', payload: { id: node.id, content: code } })}
+                                            highlight={code => Prism.highlight(code, Prism.languages.markup, 'markup')}
+                                            padding={12}
+                                            style={{ fontFamily: '"JetBrains Mono", monospace', fontSize: 13, lineHeight: '1.5' }}
+                                            className="min-h-full"
+                                            textareaClassName="focus:outline-none whitespace-pre"
+                                        />
+                                    </div>
                                 )}
                             </Node>
                         </div>
