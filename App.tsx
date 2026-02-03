@@ -53,7 +53,6 @@ function graphReducer(state: GraphState, action: Action): GraphState {
     case 'CONNECT':
       const { sourceNodeId, sourcePortId, targetNodeId, targetPortId } = action.payload;
       
-      // Prevent duplicate connections
       const exists = state.connections.some(c => 
         c.sourceNodeId === sourceNodeId && 
         c.sourcePortId === sourcePortId && 
@@ -62,8 +61,6 @@ function graphReducer(state: GraphState, action: Action): GraphState {
       );
       if (exists) return state;
 
-      // Restrict multiple inputs for DOM Preview to ensure single entry point.
-      // Allow multiple inputs for Code (imports) and Terminal (logs).
       const isSingleInputPort = targetPortId.includes('in-dom');
       if (isSingleInputPort && state.connections.some(c => c.targetPortId === targetPortId)) {
         return state;
@@ -72,7 +69,6 @@ function graphReducer(state: GraphState, action: Action): GraphState {
       return { ...state, connections: [...state.connections, action.payload] };
       
     case 'DISCONNECT':
-       // Disconnect based on Port ID (removes all connections involving this port)
       return { 
           ...state, 
           connections: state.connections.filter(c => c.sourcePortId !== action.payload && c.targetPortId !== action.payload) 
@@ -105,55 +101,22 @@ export default function App() {
   const [state, dispatch] = useReducer(graphReducer, initialState);
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, targetNodeId?: string, targetPortId?: string } | null>(null);
   
-  // Dragging Wire State
   const [dragWire, setDragWire] = useState<{ x1: number, y1: number, x2: number, y2: number, startPortId: string, startNodeId: string, isInput: boolean } | null>(null);
   
   const containerRef = useRef<HTMLDivElement>(null);
   const initialized = useRef(false);
 
-  // Load / Save
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try { dispatch({ type: 'LOAD_STATE', payload: JSON.parse(saved) }); } catch (e) {}
     } else {
-        // Defaults
         const codeDefaults = NODE_DEFAULTS.CODE;
         const previewDefaults = NODE_DEFAULTS.PREVIEW;
 
-        dispatch({ 
-            type: 'ADD_NODE', 
-            payload: { 
-                id: 'node-1', 
-                type: 'CODE', 
-                position: { x: 100, y: 100 }, 
-                size: { width: codeDefaults.width, height: codeDefaults.height },
-                title: 'index.html', 
-                content: '<h1>Hello World</h1>\n<link href="style.css" rel="stylesheet">\n<script src="app.js"></script>' 
-            } 
-        });
-        dispatch({ 
-            type: 'ADD_NODE', 
-            payload: { 
-                id: 'node-2', 
-                type: 'CODE', 
-                position: { x: 100, y: 300 }, 
-                size: { width: codeDefaults.width, height: codeDefaults.height },
-                title: 'style.css', 
-                content: 'body { background: #222; color: #fff; }' 
-            } 
-        });
-        dispatch({ 
-            type: 'ADD_NODE', 
-            payload: { 
-                id: 'node-3', 
-                type: 'PREVIEW', 
-                position: { x: 600, y: 100 }, 
-                size: { width: previewDefaults.width, height: previewDefaults.height },
-                title: previewDefaults.title, 
-                content: previewDefaults.content 
-            } 
-        });
+        dispatch({ type: 'ADD_NODE', payload: { id: 'node-1', type: 'CODE', position: { x: 100, y: 100 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'index.html', content: '<h1>Hello World</h1>\n<link href="style.css" rel="stylesheet">\n<script src="app.js"></script>' } });
+        dispatch({ type: 'ADD_NODE', payload: { id: 'node-2', type: 'CODE', position: { x: 100, y: 300 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'style.css', content: 'body { background: #222; color: #fff; }' } });
+        dispatch({ type: 'ADD_NODE', payload: { id: 'node-3', type: 'PREVIEW', position: { x: 600, y: 100 }, size: { width: previewDefaults.width, height: previewDefaults.height }, title: previewDefaults.title, content: previewDefaults.content } });
     }
     initialized.current = true;
   }, []);
@@ -166,7 +129,6 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [state.nodes, state.connections, state.pan, state.zoom]);
 
-  // Logs listener
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       const data = event.data;
@@ -178,10 +140,6 @@ export default function App() {
     return () => window.removeEventListener('message', handleMessage);
   }, []);
 
-  // -------------------------
-  // Interaction Handlers
-  // -------------------------
-
   const handleContextMenu = (e: React.MouseEvent, nodeId?: string) => {
     e.preventDefault();
     setContextMenu({ x: e.clientX, y: e.clientY, targetNodeId: nodeId });
@@ -190,7 +148,6 @@ export default function App() {
   const handlePortContextMenu = (e: React.MouseEvent, portId: string) => {
     e.preventDefault();
     e.stopPropagation();
-    // Only show if connected
     if (state.connections.some(c => c.sourcePortId === portId || c.targetPortId === portId)) {
         setContextMenu({ x: e.clientX, y: e.clientY, targetPortId: portId });
     }
@@ -245,10 +202,6 @@ export default function App() {
     }
   };
 
-  // -------------------------
-  // Drag-from-Port Wiring
-  // -------------------------
-
   const handlePortDown = (e: React.PointerEvent, portId: string, isInput: boolean) => {
     e.stopPropagation();
     e.preventDefault();
@@ -258,7 +211,6 @@ export default function App() {
     const node = state.nodes.find(n => n.id === nodeId);
     if (!node) return;
 
-    // Calculate start position
     const pos = calculatePortPosition(node, portId, isInput ? 'input' : 'output');
     
     setDragWire({
@@ -271,7 +223,6 @@ export default function App() {
         isInput
     });
     
-    // Capture pointer on the container to track movement anywhere
     (containerRef.current as Element).setPointerCapture(e.pointerId);
   };
 
@@ -289,7 +240,6 @@ export default function App() {
   const handlePointerUp = (e: React.PointerEvent) => {
     if (!dragWire) return;
     
-    // Check what we dropped on
     const targetEl = document.elementFromPoint(e.clientX, e.clientY);
     const portEl = targetEl?.closest('[data-port-id]');
     
@@ -297,14 +247,10 @@ export default function App() {
         const endPortId = portEl.getAttribute('data-port-id');
         if (endPortId && endPortId !== dragWire.startPortId) {
             const endNodeId = endPortId.split('-')[0];
-            
-            // Logic: Must connect Input <-> Output
             const isStartInput = dragWire.isInput;
             const isTargetInput = endPortId.includes('-in-');
             
             if (isStartInput !== isTargetInput && dragWire.startNodeId !== endNodeId) {
-                // Determine Source/Target based on direction
-                // We always store Source (Output) -> Target (Input)
                 dispatch({
                     type: 'CONNECT',
                     payload: {
@@ -352,7 +298,7 @@ export default function App() {
         className="flex-1 relative cursor-grab active:cursor-grabbing"
         onContextMenu={(e) => handleContextMenu(e)}
         onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp} // Capture drops anywhere
+        onPointerUp={handlePointerUp}
         onWheel={handleWheel}
         style={{
             backgroundImage: 'radial-gradient(#27272a 1px, transparent 1px)',
@@ -370,7 +316,7 @@ export default function App() {
             }}
         >
             <div className="pointer-events-auto w-full h-full relative">
-                {/* Wires - Rendered First (Behind Nodes) */}
+                {/* Wires - Established connections at bottom */}
                 <svg className="absolute top-0 left-0 w-full h-full overflow-visible pointer-events-none z-0">
                     {state.connections.map(conn => {
                         const sourceNode = state.nodes.find(n => n.id === conn.sourceNodeId);
@@ -380,12 +326,9 @@ export default function App() {
                         const end = calculatePortPosition(targetNode, conn.targetPortId, 'input');
                         return <Wire key={conn.id} x1={start.x} y1={start.y} x2={end.x} y2={end.y} />;
                     })}
-                    {dragWire && (
-                        <Wire x1={dragWire.x1} y1={dragWire.y1} x2={dragWire.x2} y2={dragWire.y2} active />
-                    )}
                 </svg>
 
-                {/* Nodes - Rendered On Top */}
+                {/* Nodes - Middle Layer */}
                 {state.nodes.map(node => {
                     let logs: LogEntry[] = [];
                     if (node.type === 'TERMINAL') {
@@ -423,6 +366,13 @@ export default function App() {
                         </div>
                     );
                 })}
+
+                {/* Dragging Wire - Top Layer (z-50 equivalent but inside SVG at end of list for paint order) */}
+                {dragWire && (
+                    <svg className="absolute top-0 left-0 w-full h-full overflow-visible pointer-events-none" style={{ zIndex: 999 }}>
+                        <Wire x1={dragWire.x1} y1={dragWire.y1} x2={dragWire.x2} y2={dragWire.y2} active />
+                    </svg>
+                )}
             </div>
         </div>
       </div>

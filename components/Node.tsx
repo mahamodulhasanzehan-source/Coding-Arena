@@ -116,6 +116,7 @@ export const Node: React.FC<NodeProps> = ({
 
   const lineCount = data.content.split('\n').length;
   const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1).join('\n');
+  const isCode = data.type === 'CODE';
 
   return (
     <div
@@ -126,7 +127,9 @@ export const Node: React.FC<NodeProps> = ({
       style={{
         transform: `translate(${data.position.x}px, ${data.position.y}px)`,
         width: data.size.width,
-        height: data.size.height,
+        // Auto-grow height for CODE, fixed height for others
+        height: isCode ? 'auto' : data.size.height,
+        minHeight: data.size.height,
       }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -134,7 +137,7 @@ export const Node: React.FC<NodeProps> = ({
       onContextMenu={(e) => e.preventDefault()}
     >
       {/* Header */}
-      <div className="h-10 flex items-center justify-between px-3 border-b border-panelBorder bg-zinc-900/50 rounded-t-lg select-none">
+      <div className="h-10 flex items-center justify-between px-3 border-b border-panelBorder bg-zinc-900/50 rounded-t-lg select-none shrink-0">
         <div className="flex items-center gap-2 text-zinc-400 font-medium text-sm flex-1">
           <GripVertical size={14} className="opacity-50" />
           {isEditingTitle ? (
@@ -178,7 +181,8 @@ export const Node: React.FC<NodeProps> = ({
       </div>
 
       {/* Content Area */}
-      <div className="flex-1 overflow-hidden relative group nodrag flex flex-col">
+      {/* For Code, we allow visible overflow so it grows. For others, we clip. */}
+      <div className={`flex-1 relative group nodrag flex flex-col ${isCode ? 'overflow-visible' : 'overflow-hidden'}`}>
         {data.type === 'PREVIEW' || data.type === 'TERMINAL' ? (
              data.type === 'TERMINAL' ? (
                  <div className="w-full h-full bg-black p-2 font-mono text-xs overflow-y-auto custom-scrollbar">
@@ -207,14 +211,13 @@ export const Node: React.FC<NodeProps> = ({
                 />
              )
         ) : (
-            <div className="w-full h-full bg-[#0f0f11] overflow-auto custom-scrollbar flex">
+            <div className="w-full h-full bg-[#0f0f11] flex">
                <div 
                   className="bg-[#0f0f11] text-zinc-600 text-right pr-3 pl-2 select-none border-r border-zinc-800"
                   style={{ 
                     fontFamily: '"JetBrains Mono", monospace', 
                     fontSize: 13,
                     lineHeight: '1.5',
-                    minHeight: '100%',
                     paddingTop: 12,
                     paddingBottom: 12
                   }}
