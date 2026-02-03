@@ -220,14 +220,16 @@ export default function App() {
     }
   };
 
-  const handlePortDown = (e: React.PointerEvent, portId: string, isInput: boolean) => {
+  const handlePortDown = (e: React.PointerEvent, portId: string, nodeId: string, isInput: boolean) => {
     e.stopPropagation();
     e.preventDefault();
     
-    const nodeEl = (e.target as HTMLElement).closest('[data-port-id]');
-    const nodeId = nodeEl?.getAttribute('data-port-id')?.split('-')[0] || '';
+    // Use the explicitly passed nodeId which is robust against ID formats
     const node = state.nodes.find(n => n.id === nodeId);
-    if (!node) return;
+    if (!node) {
+        console.error("Node not found for drag", nodeId);
+        return;
+    }
 
     const pos = calculatePortPosition(node, portId, isInput ? 'input' : 'output');
     
@@ -241,8 +243,6 @@ export default function App() {
         isInput
     });
     
-    // CRITICAL FIX: Capture on the port element itself, not the container.
-    // This ensures pointer events are tracked even if moved quickly over other elements.
     e.currentTarget.setPointerCapture(e.pointerId);
   };
 
@@ -260,16 +260,16 @@ export default function App() {
   const handlePointerUp = (e: React.PointerEvent) => {
     if (!dragWire) return;
     
-    // Need to find what is under the cursor
     const targetEl = document.elementFromPoint(e.clientX, e.clientY);
     const portEl = targetEl?.closest('[data-port-id]');
     
     if (portEl) {
         const endPortId = portEl.getAttribute('data-port-id');
-        if (endPortId && endPortId !== dragWire.startPortId) {
-            const endNodeId = endPortId.split('-')[0];
+        const endNodeId = portEl.getAttribute('data-node-id'); // Use explicit data attribute
+
+        if (endPortId && endNodeId && endPortId !== dragWire.startPortId) {
             const isStartInput = dragWire.isInput;
-            const isTargetInput = endPortId.includes('-in-');
+            const isTargetInput = endPortId.includes('-in-'); // Convention still useful for type check
             
             if (isStartInput !== isTargetInput && dragWire.startNodeId !== endNodeId) {
                 dispatch({
@@ -287,8 +287,6 @@ export default function App() {
     }
 
     setDragWire(null);
-    // Release capture implicitly happens on pointerup, but good to be safe if manual release is needed.
-    // Note: Since we captured on the target, standard behavior releases it.
   };
 
   const isConnected = (portId: string) => {

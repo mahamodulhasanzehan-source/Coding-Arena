@@ -14,7 +14,7 @@ interface NodeProps {
   onResize: (id: string, size: Size) => void;
   onDelete: (id: string) => void;
   onRun: (id: string) => void;
-  onPortDown: (e: React.PointerEvent, portId: string, isInput: boolean) => void;
+  onPortDown: (e: React.PointerEvent, portId: string, nodeId: string, isInput: boolean) => void;
   onPortContextMenu: (e: React.MouseEvent, portId: string) => void;
   onUpdateTitle: (id: string, title: string) => void;
   logs?: any[]; 
@@ -181,7 +181,6 @@ export const Node: React.FC<NodeProps> = ({
       </div>
 
       {/* Content Area */}
-      {/* For Code, we allow visible overflow so it grows. For others, we clip. */}
       <div className={`flex-1 relative group nodrag flex flex-col ${isCode ? 'overflow-visible' : 'overflow-hidden'}`}>
         {data.type === 'PREVIEW' || data.type === 'TERMINAL' ? (
              data.type === 'TERMINAL' ? (
@@ -245,9 +244,10 @@ export const Node: React.FC<NodeProps> = ({
                   className={`w-3 h-3 border border-zinc-900 rounded-full transition-all cursor-crosshair nodrag ${
                     connected ? 'bg-yellow-500' : 'bg-zinc-600 hover:bg-zinc-400'
                   }`}
-                  onPointerDown={(e) => onPortDown(e, port.id, true)}
+                  onPointerDown={(e) => onPortDown(e, port.id, data.id, true)}
                   onContextMenu={(e) => onPortContextMenu(e, port.id)}
                   data-port-id={port.id}
+                  data-node-id={data.id}
                 />
                 <span className="absolute left-4 text-[10px] text-zinc-500 uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity bg-black/80 px-1 rounded pointer-events-none whitespace-nowrap z-50">
                   {port.label}
@@ -274,9 +274,10 @@ export const Node: React.FC<NodeProps> = ({
                   className={`w-3 h-3 border border-zinc-900 rounded-full transition-all cursor-crosshair nodrag ${
                     connected ? 'bg-yellow-500' : 'bg-zinc-600 hover:bg-zinc-400'
                   }`}
-                  onPointerDown={(e) => onPortDown(e, port.id, false)}
+                  onPointerDown={(e) => onPortDown(e, port.id, data.id, false)}
                   onContextMenu={(e) => onPortContextMenu(e, port.id)}
                   data-port-id={port.id}
+                  data-node-id={data.id}
                 />
               </div>
             );
