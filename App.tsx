@@ -61,6 +61,7 @@ function graphReducer(state: GraphState, action: Action): GraphState {
       );
       if (exists) return state;
 
+      // Only restrict connection count for DOM input on Preview nodes
       const isSingleInputPort = targetPortId.includes('in-dom');
       if (isSingleInputPort && state.connections.some(c => c.targetPortId === targetPortId)) {
         return state;
@@ -96,6 +97,13 @@ function graphReducer(state: GraphState, action: Action): GraphState {
       return state;
   }
 }
+
+// Helper to determine syntax highlighting language
+const getHighlightLanguage = (filename: string) => {
+    if (filename.endsWith('.css')) return Prism.languages.css;
+    if (filename.endsWith('.js') || filename.endsWith('.jsx') || filename.endsWith('.ts') || filename.endsWith('.tsx')) return Prism.languages.javascript;
+    return Prism.languages.markup; // HTML/XML default
+};
 
 export default function App() {
   const [state, dispatch] = useReducer(graphReducer, initialState);
@@ -163,18 +171,15 @@ export default function App() {
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
 
-    // Convert mouse to world space before zoom
     const worldX = (mouseX - state.pan.x) / state.zoom;
     const worldY = (mouseY - state.pan.y) / state.zoom;
 
     const zoomIntensity = 0.001;
     const newZoom = Math.min(Math.max(0.1, state.zoom - e.deltaY * zoomIntensity), 3);
 
-    // Calculate new pan to keep world point under mouse
     const newPanX = mouseX - worldX * newZoom;
     const newPanY = mouseY - worldY * newZoom;
 
-    // Ensure we don't dispatch NaNs
     if (!isNaN(newZoom) && !isNaN(newPanX) && !isNaN(newPanY)) {
         dispatch({ type: 'ZOOM', payload: { zoom: newZoom } });
         dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
@@ -246,10 +251,7 @@ export default function App() {
   };
 
   const handleBgPointerDown = (e: React.PointerEvent) => {
-      // If we clicked a node or port, that component handles it via stopPropagation.
-      // So if we are here, we are on the background.
-      
-      e.preventDefault(); // Prevent text selection
+      e.preventDefault(); 
       e.currentTarget.setPointerCapture(e.pointerId);
       setIsPanning(true);
   };
@@ -321,7 +323,7 @@ export default function App() {
       <div className="absolute top-4 right-4 z-50">
         <button 
             onClick={() => { if(confirm('Reset?')) { localStorage.removeItem(STORAGE_KEY); window.location.reload(); } }}
-            className="px-3 py-1.5 bg-zinc-900/80 hover:bg-red-900/50 text-xs text-zinc-400 border border-zinc-800 rounded flex items-center gap-2 transition-colors"
+            className="px-3 py-1.5 bg-zinc-900/80 hover:bg-red-900/50 text-xs text-zinc-400 border border-zinc-800 rounded flex items-center gap-2 transition-colors pointer-events-auto cursor-pointer"
         >
             <Trash2 size={12} /> Reset
         </button>
@@ -337,7 +339,8 @@ export default function App() {
         onPointerUp={handlePointerUp}
         onWheel={handleWheel}
         style={{
-            backgroundImage: 'radial-gradient(#27272a 1px, transparent 1px)',
+            // Increased dot size (1.5px) and changed color to zinc-700 (#3f3f46) for better visibility
+            backgroundImage: 'radial-gradient(#3f3f46 1.5px, transparent 1.5px)',
             backgroundSize: `${20 * state.zoom}px ${20 * state.zoom}px`,
             backgroundPosition: `${state.pan.x}px ${state.pan.y}px`,
         }}
@@ -351,12 +354,8 @@ export default function App() {
                 pointerEvents: 'none'
             }}
         >
-            {/* 
-              This wrapper is pointer-events-none so clicks fall through to the background for panning.
-              The nodes inside must explicitly enable pointer-events.
-            */}
             <div className="pointer-events-none w-full h-full relative">
-                {/* Wires - Established connections at bottom */}
+                {/* Wires */}
                 <svg className="absolute top-0 left-0 w-full h-full overflow-visible pointer-events-none z-0">
                     {state.connections.map(conn => {
                         const sourceNode = state.nodes.find(n => n.id === conn.sourceNodeId);
@@ -368,7 +367,7 @@ export default function App() {
                     })}
                 </svg>
 
-                {/* Nodes - Middle Layer */}
+                {/* Nodes */}
                 {state.nodes.map(node => {
                     let logs: LogEntry[] = [];
                     if (node.type === 'TERMINAL') {
@@ -392,13 +391,13 @@ export default function App() {
                                 logs={logs}
                             >
                                 {(node.type === 'CODE') && (
-                                    <div className="pointer-events-auto cursor-text">
+                                    <div className="pointer-events-auto cursor-text select-text h-full">
                                         <Editor
                                             value={node.content}
                                             onValueChange={code => dispatch({ type: 'UPDATE_NODE_CONTENT', payload: { id: node.id, content: code } })}
-                                            highlight={code => Prism.highlight(code, Prism.languages.markup, 'markup')}
+                                            highlight={code => Prism.highlight(code, getHighlightLanguage(node.title), 'javascript')}
                                             padding={12}
-                                            style={{ fontFamily: '"JetBrains Mono", monospace', fontSize: 13, lineHeight: '1.5' }}
+                                            style={{ fontFamily: '"JetBrains Mono", monospace', fontSize: 13, lineHeight: '1.5', minHeight: '100%' }}
                                             className="min-h-full"
                                             textareaClassName="focus:outline-none whitespace-pre"
                                         />
@@ -409,7 +408,7 @@ export default function App() {
                     );
                 })}
 
-                {/* Dragging Wire - Top Layer */}
+                {/* Dragging Wire */}
                 {dragWire && (
                     <svg className="absolute top-0 left-0 w-full h-full overflow-visible pointer-events-none" style={{ zIndex: 999 }}>
                         <Wire x1={dragWire.x1} y1={dragWire.y1} x2={dragWire.x2} y2={dragWire.y2} active />

@@ -2,8 +2,6 @@ import React, { useRef, useEffect, useState } from 'react';
 import { NodeData, Port, Position, Size } from '../types';
 import { getPortsForNode } from '../constants';
 import { X, Play, GripVertical, Pencil } from 'lucide-react';
-import Editor from 'react-simple-code-editor';
-import Prism from 'prismjs';
 
 interface NodeProps {
   data: NodeData;
@@ -41,7 +39,7 @@ export const Node: React.FC<NodeProps> = ({
   const outputs = ports.filter(p => p.type === 'output');
   
   const nodeRef = useRef<HTMLDivElement>(null);
-  const terminalEndRef = useRef<HTMLDivElement>(null);
+  const terminalContainerRef = useRef<HTMLDivElement>(null);
   
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
@@ -52,13 +50,16 @@ export const Node: React.FC<NodeProps> = ({
   const initialPosRef = useRef<Position>({ x: 0, y: 0 });
   const initialSizeRef = useRef<Size>({ width: 0, height: 0 });
 
+  // Fix for terminal locking screen: Use scrollTop on the specific container instead of scrollIntoView
   useEffect(() => {
-    if (data.type === 'TERMINAL' && terminalEndRef.current) {
-      terminalEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    if (data.type === 'TERMINAL' && terminalContainerRef.current) {
+        const el = terminalContainerRef.current;
+        el.scrollTop = el.scrollHeight;
     }
-  }, [logs]);
+  }, [logs, data.type]);
 
   const handlePointerDown = (e: React.PointerEvent) => {
+    // If interacting with controls or editor, don't drag node
     if ((e.target as HTMLElement).closest('.nodrag')) return;
     
     e.stopPropagation();
@@ -147,7 +148,7 @@ export const Node: React.FC<NodeProps> = ({
               onChange={(e) => setTempTitle(e.target.value)}
               onBlur={finishEditing}
               onKeyDown={(e) => e.key === 'Enter' && finishEditing()}
-              className="bg-black border border-zinc-700 rounded px-1 py-0.5 text-xs w-full nodrag text-white focus:outline-none focus:border-accent"
+              className="bg-black border border-zinc-700 rounded px-1 py-0.5 text-xs w-full nodrag text-white focus:outline-none focus:border-accent select-text"
               autoFocus
             />
           ) : (
@@ -164,15 +165,15 @@ export const Node: React.FC<NodeProps> = ({
         </div>
         <div className="flex items-center gap-1">
           <button 
-            onClick={() => onRun(data.id)}
-            className="nodrag p-1.5 hover:bg-green-500/20 text-green-500 rounded transition-colors"
+            onClick={(e) => { e.stopPropagation(); onRun(data.id); }}
+            className="nodrag p-1.5 hover:bg-green-500/20 text-green-500 rounded transition-colors cursor-pointer relative z-10"
             title="Start / Run"
           >
             <Play size={14} fill="currentColor" />
           </button>
           <button 
-            onClick={() => onDelete(data.id)}
-            className="nodrag p-1.5 hover:bg-red-500/20 text-red-500 rounded transition-colors"
+            onClick={(e) => { e.stopPropagation(); onDelete(data.id); }}
+            className="nodrag p-1.5 hover:bg-red-500/20 text-red-500 rounded transition-colors cursor-pointer relative z-10"
             title="Delete"
           >
             <X size={14} />
@@ -184,7 +185,10 @@ export const Node: React.FC<NodeProps> = ({
       <div className={`flex-1 relative group nodrag flex flex-col ${isCode ? 'overflow-visible' : 'overflow-hidden'}`}>
         {data.type === 'PREVIEW' || data.type === 'TERMINAL' ? (
              data.type === 'TERMINAL' ? (
-                 <div className="w-full h-full bg-black p-2 font-mono text-xs overflow-y-auto custom-scrollbar">
+                 <div 
+                    ref={terminalContainerRef}
+                    className="w-full h-full bg-black p-2 font-mono text-xs overflow-y-auto custom-scrollbar select-text"
+                 >
                     {(!logs || logs.length === 0) ? (
                         <span className="text-zinc-600 italic">Waiting for logs...</span>
                     ) : (
@@ -199,7 +203,6 @@ export const Node: React.FC<NodeProps> = ({
                             </div>
                         ))
                     )}
-                    <div ref={terminalEndRef} />
                  </div>
              ) : (
                  <iframe
@@ -210,7 +213,7 @@ export const Node: React.FC<NodeProps> = ({
                 />
              )
         ) : (
-            <div className="w-full h-full bg-[#0f0f11] flex">
+            <div className="w-full h-full bg-[#0f0f11] flex rounded-b-lg overflow-hidden">
                <div 
                   className="bg-[#0f0f11] text-zinc-600 text-right pr-3 pl-2 select-none border-r border-zinc-800"
                   style={{ 
@@ -223,7 +226,8 @@ export const Node: React.FC<NodeProps> = ({
                >
                  <pre className="m-0 font-inherit">{lineNumbers}</pre>
                </div>
-               <div className="flex-1 min-w-0">
+               <div className="flex-1 min-w-0 bg-[#0f0f11]">
+                  {/* Children passed here is the Editor */}
                   {React.Children.map(children, child => child)}
                </div>
             </div>
