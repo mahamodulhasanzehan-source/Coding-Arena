@@ -193,7 +193,6 @@ export const compilePreview = (
         ${errorInjections}
       })();
     </script>
-    <!-- Force Reload Timestamp: ${Date.now()} -->
   `;
 
   return `

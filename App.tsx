@@ -109,9 +109,9 @@ function graphReducer(state: GraphState, action: Action): GraphState {
 }
 
 const getHighlightLanguage = (filename: string) => {
-    if (filename.endsWith('.css')) return Prism.languages.css;
-    if (filename.endsWith('.js') || filename.endsWith('.jsx') || filename.endsWith('.ts') || filename.endsWith('.tsx')) return Prism.languages.javascript;
-    return Prism.languages.markup; 
+    if (filename.endsWith('.css')) return Prism.languages.css || Prism.languages.plain;
+    if (filename.endsWith('.js') || filename.endsWith('.jsx') || filename.endsWith('.ts') || filename.endsWith('.tsx')) return Prism.languages.javascript || Prism.languages.plain;
+    return Prism.languages.markup || Prism.languages.plain; 
 };
 
 export default function App() {
