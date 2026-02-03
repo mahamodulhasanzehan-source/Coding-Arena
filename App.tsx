@@ -61,7 +61,6 @@ function graphReducer(state: GraphState, action: Action): GraphState {
       );
       if (exists) return state;
 
-      // Only restrict connection count for DOM input on Preview nodes
       const isSingleInputPort = targetPortId.includes('in-dom');
       if (isSingleInputPort && state.connections.some(c => c.targetPortId === targetPortId)) {
         return state;
@@ -98,11 +97,10 @@ function graphReducer(state: GraphState, action: Action): GraphState {
   }
 }
 
-// Helper to determine syntax highlighting language
 const getHighlightLanguage = (filename: string) => {
     if (filename.endsWith('.css')) return Prism.languages.css;
     if (filename.endsWith('.js') || filename.endsWith('.jsx') || filename.endsWith('.ts') || filename.endsWith('.tsx')) return Prism.languages.javascript;
-    return Prism.languages.markup; // HTML/XML default
+    return Prism.languages.markup; 
 };
 
 export default function App() {
@@ -164,7 +162,6 @@ export default function App() {
   const handleWheel = (e: React.WheelEvent) => {
     if ((e.target as HTMLElement).closest('.custom-scrollbar')) return;
     
-    // Zoom toward cursor
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
 
@@ -205,27 +202,48 @@ export default function App() {
     setContextMenu(null);
   };
 
+  const triggerPreviewUpdate = (targetId: string, clear: boolean = false) => {
+      const iframe = document.getElementById(`preview-iframe-${targetId}`) as HTMLIFrameElement;
+      if (iframe) {
+           if (clear) {
+               iframe.srcdoc = '<body style="background-color: #000; color: #555; height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; font-family: sans-serif;">STOPPED</body>';
+               dispatch({ type: 'CLEAR_LOGS', payload: { nodeId: targetId } });
+           } else {
+               const compiled = compilePreview(targetId, state.nodes, state.connections);
+               dispatch({ type: 'CLEAR_LOGS', payload: { nodeId: targetId } });
+               iframe.srcdoc = compiled;
+           }
+      }
+  };
+
   const handleRun = (id: string) => {
     const node = state.nodes.find(n => n.id === id);
     if (!node) return;
-    const triggerUpdate = (targetId: string) => {
-      const targetNode = state.nodes.find(n => n.id === targetId);
-      if (!targetNode) return;
-      if (targetNode.type === 'PREVIEW') {
-        const compiled = compilePreview(targetId, state.nodes, state.connections);
-        const iframe = document.getElementById(`preview-iframe-${targetId}`) as HTMLIFrameElement;
-        if (iframe) {
-           dispatch({ type: 'CLEAR_LOGS', payload: { nodeId: targetId } });
-           iframe.srcdoc = compiled;
-        }
-      }
-    };
+    
     if (node.type === 'PREVIEW') {
-      triggerUpdate(node.id);
+      triggerPreviewUpdate(node.id);
     } else {
       const downstreamConnections = state.connections.filter(c => c.sourceNodeId === id);
-      downstreamConnections.forEach(c => triggerUpdate(c.targetNodeId));
+      downstreamConnections.forEach(c => {
+         const target = state.nodes.find(n => n.id === c.targetNodeId);
+         if (target?.type === 'PREVIEW') triggerPreviewUpdate(target.id);
+      });
     }
+  };
+
+  const handleStop = (id: string) => {
+      const node = state.nodes.find(n => n.id === id);
+      if (!node) return;
+
+      if (node.type === 'PREVIEW') {
+          triggerPreviewUpdate(node.id, true);
+      } else {
+          const downstreamConnections = state.connections.filter(c => c.sourceNodeId === id);
+          downstreamConnections.forEach(c => {
+            const target = state.nodes.find(n => n.id === c.targetNodeId);
+            if (target?.type === 'PREVIEW') triggerPreviewUpdate(target.id, true);
+         });
+      }
   };
 
   const handlePortDown = (e: React.PointerEvent, portId: string, nodeId: string, isInput: boolean) => {
@@ -324,6 +342,7 @@ export default function App() {
         <button 
             onClick={() => { if(confirm('Reset?')) { localStorage.removeItem(STORAGE_KEY); window.location.reload(); } }}
             className="px-3 py-1.5 bg-zinc-900/80 hover:bg-red-900/50 text-xs text-zinc-400 border border-zinc-800 rounded flex items-center gap-2 transition-colors pointer-events-auto cursor-pointer"
+            onPointerDown={(e) => e.stopPropagation()}
         >
             <Trash2 size={12} /> Reset
         </button>
@@ -339,9 +358,8 @@ export default function App() {
         onPointerUp={handlePointerUp}
         onWheel={handleWheel}
         style={{
-            // Increased dot size (1.5px) and changed color to zinc-700 (#3f3f46) for better visibility
-            backgroundImage: 'radial-gradient(#3f3f46 1.5px, transparent 1.5px)',
-            backgroundSize: `${20 * state.zoom}px ${20 * state.zoom}px`,
+            backgroundImage: 'radial-gradient(#3f3f46 2px, transparent 2px)',
+            backgroundSize: `${Math.max(20 * state.zoom, 10)}px ${Math.max(20 * state.zoom, 10)}px`,
             backgroundPosition: `${state.pan.x}px ${state.pan.y}px`,
         }}
       >
@@ -355,7 +373,6 @@ export default function App() {
             }}
         >
             <div className="pointer-events-none w-full h-full relative">
-                {/* Wires */}
                 <svg className="absolute top-0 left-0 w-full h-full overflow-visible pointer-events-none z-0">
                     {state.connections.map(conn => {
                         const sourceNode = state.nodes.find(n => n.id === conn.sourceNodeId);
@@ -367,7 +384,6 @@ export default function App() {
                     })}
                 </svg>
 
-                {/* Nodes */}
                 {state.nodes.map(node => {
                     let logs: LogEntry[] = [];
                     if (node.type === 'TERMINAL') {
@@ -385,6 +401,7 @@ export default function App() {
                                 onResize={(id, size) => dispatch({ type: 'UPDATE_NODE_SIZE', payload: { id, size } })}
                                 onDelete={(id) => dispatch({ type: 'DELETE_NODE', payload: id })}
                                 onRun={handleRun}
+                                onStop={handleStop}
                                 onPortDown={handlePortDown}
                                 onPortContextMenu={handlePortContextMenu}
                                 onUpdateTitle={(id, title) => dispatch({ type: 'UPDATE_NODE_TITLE', payload: { id, title } })}
@@ -408,7 +425,6 @@ export default function App() {
                     );
                 })}
 
-                {/* Dragging Wire */}
                 {dragWire && (
                     <svg className="absolute top-0 left-0 w-full h-full overflow-visible pointer-events-none" style={{ zIndex: 999 }}>
                         <Wire x1={dragWire.x1} y1={dragWire.y1} x2={dragWire.x2} y2={dragWire.y2} active />

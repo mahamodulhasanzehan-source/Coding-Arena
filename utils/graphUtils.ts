@@ -99,17 +99,24 @@ export const compilePreview = (
   }
 
   // 2. Resolve Dependencies (Wired nodes only, recursively)
-  // We collect all unique dependencies including nested imports
   const dependencyNodes = collectDependencies(rootNode, nodes, connections);
   
   // Remove duplicates just in case
   const uniqueDeps = Array.from(new Set(dependencyNodes.map(n => n.id)))
       .map(id => nodes.find(n => n.id === id)!)
-      .filter(n => n.id !== rootNode.id); // Don't include root as dependency of itself
+      .filter(n => n.id !== rootNode.id); 
 
   let finalContent = rootNode.content;
 
-  // 3. Inject Dependencies based on Filenames (Node Titles)
+  // Wrap content if root is not HTML
+  const lowerTitle = rootNode.title.toLowerCase();
+  if (lowerTitle.endsWith('.js') || lowerTitle.endsWith('.ts')) {
+      finalContent = `<script>\n${finalContent}\n</script>`;
+  } else if (lowerTitle.endsWith('.css')) {
+      finalContent = `<style>\n${finalContent}\n</style>`;
+  }
+
+  // 3. Inject Dependencies based on Filenames
   uniqueDeps.forEach(depNode => {
     const filename = depNode.title;
     const content = depNode.content;
@@ -127,7 +134,7 @@ export const compilePreview = (
     }
   });
 
-  // 4. Inject Console Interceptor
+  // 4. Inject Console Interceptor & Force Reload Timestamp
   const interceptor = `
     <script>
       (function() {
@@ -168,6 +175,7 @@ export const compilePreview = (
         };
       })();
     </script>
+    <!-- Force Reload Timestamp: ${Date.now()} -->
   `;
 
   return `

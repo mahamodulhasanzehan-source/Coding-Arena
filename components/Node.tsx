@@ -12,6 +12,7 @@ interface NodeProps {
   onResize: (id: string, size: Size) => void;
   onDelete: (id: string) => void;
   onRun: (id: string) => void;
+  onStop?: (id: string) => void; // New prop for stopping
   onPortDown: (e: React.PointerEvent, portId: string, nodeId: string, isInput: boolean) => void;
   onPortContextMenu: (e: React.MouseEvent, portId: string) => void;
   onUpdateTitle: (id: string, title: string) => void;
@@ -28,6 +29,7 @@ export const Node: React.FC<NodeProps> = ({
   onResize,
   onDelete,
   onRun,
+  onStop,
   onPortDown,
   onPortContextMenu,
   onUpdateTitle,
@@ -59,7 +61,7 @@ export const Node: React.FC<NodeProps> = ({
   }, [logs, data.type]);
 
   const handlePointerDown = (e: React.PointerEvent) => {
-    // CRITICAL FIX: Explicitly check for nodrag class to allow text selection
+    // Check if the target is part of a nodrag element (inputs, buttons, editors)
     if ((e.target as HTMLElement).closest('.nodrag')) {
         return;
     }
@@ -119,8 +121,13 @@ export const Node: React.FC<NodeProps> = ({
 
   const handleRunClick = (e: React.MouseEvent) => {
       e.stopPropagation();
-      setIsRunning(!isRunning); // Toggle state
-      onRun(data.id);
+      const newState = !isRunning;
+      setIsRunning(newState);
+      if (newState) {
+          onRun(data.id);
+      } else {
+          onStop && onStop(data.id);
+      }
   };
 
   const lineCount = data.content.split('\n').length;
@@ -155,6 +162,7 @@ export const Node: React.FC<NodeProps> = ({
               onChange={(e) => setTempTitle(e.target.value)}
               onBlur={finishEditing}
               onKeyDown={(e) => e.key === 'Enter' && finishEditing()}
+              onPointerDown={(e) => e.stopPropagation()} 
               className="bg-black border border-zinc-700 rounded px-1 py-0.5 text-xs w-full nodrag text-white focus:outline-none focus:border-accent select-text"
               autoFocus
             />
@@ -162,7 +170,8 @@ export const Node: React.FC<NodeProps> = ({
              <div className="flex items-center gap-2 group/title">
                 <span>{data.title}</span>
                 <button 
-                    onClick={() => setIsEditingTitle(true)}
+                    onClick={(e) => { e.stopPropagation(); setIsEditingTitle(true); }}
+                    onPointerDown={(e) => e.stopPropagation()}
                     className="opacity-0 group-hover/title:opacity-100 p-1 hover:bg-zinc-800 rounded text-zinc-500 hover:text-zinc-300 transition-all nodrag"
                 >
                     <Pencil size={12} />
@@ -173,14 +182,14 @@ export const Node: React.FC<NodeProps> = ({
         <div className="flex items-center gap-1">
           <button 
             onClick={handleRunClick}
+            onPointerDown={(e) => e.stopPropagation()}
             className={`nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 ${
                 isRunning ? 'text-yellow-500 hover:bg-yellow-500/20' : 'text-green-500 hover:bg-green-500/20'
             }`}
-            title={isRunning ? "Pause/Stop" : "Run"}
+            title={isRunning ? "Stop" : "Run"}
           >
             {isRunning ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
           </button>
-          {/* Removed Delete 'X' button as requested */}
         </div>
       </div>
 
@@ -191,7 +200,7 @@ export const Node: React.FC<NodeProps> = ({
                  <div 
                     ref={terminalContainerRef}
                     className="w-full h-full bg-black p-2 font-mono text-xs overflow-y-auto custom-scrollbar select-text nodrag"
-                    onPointerDown={(e) => e.stopPropagation()} // Stop drag for terminal text selection
+                    onPointerDown={(e) => e.stopPropagation()} 
                  >
                     {(!logs || logs.length === 0) ? (
                         <span className="text-zinc-600 italic">Waiting for logs...</span>
@@ -212,14 +221,15 @@ export const Node: React.FC<NodeProps> = ({
                  <iframe
                     id={`preview-iframe-${data.id}`}
                     title="preview"
-                    className="w-full h-full bg-white"
+                    className="w-full h-full bg-white nodrag"
                     sandbox="allow-scripts allow-same-origin allow-modals"
+                    onPointerDown={(e) => e.stopPropagation()}
                 />
              )
         ) : (
             <div 
                 className="w-full h-full bg-[#0f0f11] flex rounded-b-lg overflow-hidden nodrag"
-                onPointerDown={(e) => e.stopPropagation()} // Stop propagation to prevent drag when clicking editor
+                onPointerDown={(e) => e.stopPropagation()}
             >
                <div 
                   className="bg-[#0f0f11] text-zinc-600 text-right pr-3 pl-2 select-none border-r border-zinc-800"
