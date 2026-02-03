@@ -411,32 +411,33 @@ export default function App() {
 
       try {
           // Initialize Gemini
-          // NOTE: Using the requested environment variable for the key.
-          const apiKey = process.env.GEMINI_API_KEY_4; 
+          // NOTE: Using process.env.API_KEY as per guidelines
+          const apiKey = process.env.API_KEY; 
           
           if (!apiKey) {
-              dispatch({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: 'Error: API Key GEMINI_API_KEY_4 not found.' } } });
+              dispatch({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: 'Error: API Key not found. Please ensure GEMINI_API_KEY_4 is set in your environment.' } } });
               return;
           }
 
           const ai = new GoogleGenAI({ apiKey });
           
-          const model = ai.models.getGenerativeModel({
-              model: 'gemini-flash-lite-latest',
-              systemInstruction,
-              tools: [{ functionDeclarations: [updateCodeFunction] }]
-          });
-
-          // Build Prompt
           const fullPrompt = `User Query: ${text}\n\nContext Files:\n${fileContext}`;
 
-          // Generate
-          const result = await model.generateContent(fullPrompt);
-          const response = await result.response;
-          const textResponse = response.text();
+          // Generate using ai.models.generateContent directly
+          const response = await ai.models.generateContent({
+              model: 'gemini-flash-lite-latest',
+              contents: fullPrompt,
+              config: {
+                  systemInstruction,
+                  tools: [{ functionDeclarations: [updateCodeFunction] }]
+              }
+          });
+
+          // Correctly access text property (not method)
+          const textResponse = response.text;
           
-          // Handle Tool Calls
-          const functionCalls = response.functionCalls();
+          // Correctly access functionCalls property (not method)
+          const functionCalls = response.functionCalls;
           
           let toolOutputText = '';
 
