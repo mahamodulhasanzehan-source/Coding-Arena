@@ -56,6 +56,27 @@ export const getAllConnectedSources = (
         .filter((n): n is NodeData => !!n);
 };
 
+// Helper to recursively collect all code dependencies
+const collectDependencies = (
+  rootNode: NodeData,
+  nodes: NodeData[],
+  connections: Connection[],
+  visited: Set<string> = new Set()
+): NodeData[] => {
+    if (visited.has(rootNode.id)) return [];
+    visited.add(rootNode.id);
+
+    const directDeps = getAllConnectedSources(rootNode.id, 'file', nodes, connections);
+    let allDeps: NodeData[] = [...directDeps];
+
+    directDeps.forEach(dep => {
+        const nestedDeps = collectDependencies(dep, nodes, connections, visited);
+        allDeps = [...allDeps, ...nestedDeps];
+    });
+
+    return allDeps;
+};
+
 export const compilePreview = (
   previewNodeId: string,
   nodes: NodeData[],
@@ -77,14 +98,19 @@ export const compilePreview = (
     `;
   }
 
-  // 2. Resolve Dependencies (Wired nodes only)
-  // Find all nodes connected to the root node's input
-  const dependencyNodes = getAllConnectedSources(rootNode.id, 'file', nodes, connections);
+  // 2. Resolve Dependencies (Wired nodes only, recursively)
+  // We collect all unique dependencies including nested imports
+  const dependencyNodes = collectDependencies(rootNode, nodes, connections);
   
+  // Remove duplicates just in case
+  const uniqueDeps = Array.from(new Set(dependencyNodes.map(n => n.id)))
+      .map(id => nodes.find(n => n.id === id)!)
+      .filter(n => n.id !== rootNode.id); // Don't include root as dependency of itself
+
   let finalContent = rootNode.content;
 
   // 3. Inject Dependencies based on Filenames (Node Titles)
-  dependencyNodes.forEach(depNode => {
+  uniqueDeps.forEach(depNode => {
     const filename = depNode.title;
     const content = depNode.content;
 

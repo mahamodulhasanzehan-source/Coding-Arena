@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { NodeData, Port, Position, Size } from '../types';
 import { getPortsForNode } from '../constants';
-import { X, Play, GripVertical, Pencil } from 'lucide-react';
+import { Play, GripVertical, Pencil, Pause } from 'lucide-react';
 
 interface NodeProps {
   data: NodeData;
@@ -45,12 +45,12 @@ export const Node: React.FC<NodeProps> = ({
   const [isResizing, setIsResizing] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [tempTitle, setTempTitle] = useState(data.title);
+  const [isRunning, setIsRunning] = useState(false);
 
   const dragStartRef = useRef<{ x: number, y: number } | null>(null);
   const initialPosRef = useRef<Position>({ x: 0, y: 0 });
   const initialSizeRef = useRef<Size>({ width: 0, height: 0 });
 
-  // Fix for terminal locking screen: Use scrollTop on the specific container instead of scrollIntoView
   useEffect(() => {
     if (data.type === 'TERMINAL' && terminalContainerRef.current) {
         const el = terminalContainerRef.current;
@@ -59,8 +59,10 @@ export const Node: React.FC<NodeProps> = ({
   }, [logs, data.type]);
 
   const handlePointerDown = (e: React.PointerEvent) => {
-    // If interacting with controls or editor, don't drag node
-    if ((e.target as HTMLElement).closest('.nodrag')) return;
+    // CRITICAL FIX: Explicitly check for nodrag class to allow text selection
+    if ((e.target as HTMLElement).closest('.nodrag')) {
+        return;
+    }
     
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -115,6 +117,12 @@ export const Node: React.FC<NodeProps> = ({
     }
   };
 
+  const handleRunClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      setIsRunning(!isRunning); // Toggle state
+      onRun(data.id);
+  };
+
   const lineCount = data.content.split('\n').length;
   const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1).join('\n');
   const isCode = data.type === 'CODE';
@@ -128,7 +136,6 @@ export const Node: React.FC<NodeProps> = ({
       style={{
         transform: `translate(${data.position.x}px, ${data.position.y}px)`,
         width: data.size.width,
-        // Auto-grow height for CODE, fixed height for others
         height: isCode ? 'auto' : data.size.height,
         minHeight: data.size.height,
       }}
@@ -165,19 +172,15 @@ export const Node: React.FC<NodeProps> = ({
         </div>
         <div className="flex items-center gap-1">
           <button 
-            onClick={(e) => { e.stopPropagation(); onRun(data.id); }}
-            className="nodrag p-1.5 hover:bg-green-500/20 text-green-500 rounded transition-colors cursor-pointer relative z-10"
-            title="Start / Run"
+            onClick={handleRunClick}
+            className={`nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 ${
+                isRunning ? 'text-yellow-500 hover:bg-yellow-500/20' : 'text-green-500 hover:bg-green-500/20'
+            }`}
+            title={isRunning ? "Pause/Stop" : "Run"}
           >
-            <Play size={14} fill="currentColor" />
+            {isRunning ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
           </button>
-          <button 
-            onClick={(e) => { e.stopPropagation(); onDelete(data.id); }}
-            className="nodrag p-1.5 hover:bg-red-500/20 text-red-500 rounded transition-colors cursor-pointer relative z-10"
-            title="Delete"
-          >
-            <X size={14} />
-          </button>
+          {/* Removed Delete 'X' button as requested */}
         </div>
       </div>
 
@@ -187,7 +190,8 @@ export const Node: React.FC<NodeProps> = ({
              data.type === 'TERMINAL' ? (
                  <div 
                     ref={terminalContainerRef}
-                    className="w-full h-full bg-black p-2 font-mono text-xs overflow-y-auto custom-scrollbar select-text"
+                    className="w-full h-full bg-black p-2 font-mono text-xs overflow-y-auto custom-scrollbar select-text nodrag"
+                    onPointerDown={(e) => e.stopPropagation()} // Stop drag for terminal text selection
                  >
                     {(!logs || logs.length === 0) ? (
                         <span className="text-zinc-600 italic">Waiting for logs...</span>
@@ -213,7 +217,10 @@ export const Node: React.FC<NodeProps> = ({
                 />
              )
         ) : (
-            <div className="w-full h-full bg-[#0f0f11] flex rounded-b-lg overflow-hidden">
+            <div 
+                className="w-full h-full bg-[#0f0f11] flex rounded-b-lg overflow-hidden nodrag"
+                onPointerDown={(e) => e.stopPropagation()} // Stop propagation to prevent drag when clicking editor
+            >
                <div 
                   className="bg-[#0f0f11] text-zinc-600 text-right pr-3 pl-2 select-none border-r border-zinc-800"
                   style={{ 
@@ -226,8 +233,7 @@ export const Node: React.FC<NodeProps> = ({
                >
                  <pre className="m-0 font-inherit">{lineNumbers}</pre>
                </div>
-               <div className="flex-1 min-w-0 bg-[#0f0f11]">
-                  {/* Children passed here is the Editor */}
+               <div className="flex-1 min-w-0 bg-[#0f0f11] cursor-text">
                   {React.Children.map(children, child => child)}
                </div>
             </div>
