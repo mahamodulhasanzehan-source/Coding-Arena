@@ -1,22 +1,25 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { NodeData, Port, Position, Size } from '../types';
 import { getPortsForNode } from '../constants';
-import { Play, GripVertical, Pencil, Pause } from 'lucide-react';
+import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode } from 'lucide-react';
 
 interface NodeProps {
   data: NodeData;
   isSelected: boolean;
-  isHighlighted?: boolean; // New prop for highlighting
-  isRunning?: boolean;     // New prop derived from global state
+  isHighlighted?: boolean;
+  isRunning?: boolean;
   scale: number;
   isConnected: (portId: string) => boolean;
   onMove: (id: string, pos: Position) => void;
   onResize: (id: string, size: Size) => void;
   onDelete: (id: string) => void;
-  onToggleRun: (id: string) => void; // Combined toggle handler
+  onToggleRun: (id: string) => void;
+  onRefresh?: (id: string) => void;
   onPortDown: (e: React.PointerEvent, portId: string, nodeId: string, isInput: boolean) => void;
   onPortContextMenu: (e: React.MouseEvent, portId: string) => void;
   onUpdateTitle: (id: string, title: string) => void;
+  onSendMessage?: (id: string, text: string) => void; // For AI Chat
+  onStartContextSelection?: (id: string) => void; // For AI Chat
   logs?: any[]; 
   children?: React.ReactNode;
 }
@@ -32,9 +35,12 @@ export const Node: React.FC<NodeProps> = ({
   onResize,
   onDelete,
   onToggleRun,
+  onRefresh,
   onPortDown,
   onPortContextMenu,
   onUpdateTitle,
+  onSendMessage,
+  onStartContextSelection,
   logs,
   children
 }) => {
@@ -44,11 +50,13 @@ export const Node: React.FC<NodeProps> = ({
   
   const nodeRef = useRef<HTMLDivElement>(null);
   const terminalContainerRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
   
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [tempTitle, setTempTitle] = useState(data.title);
+  const [chatInput, setChatInput] = useState('');
 
   const dragStartRef = useRef<{ x: number, y: number } | null>(null);
   const initialPosRef = useRef<Position>({ x: 0, y: 0 });
@@ -60,6 +68,14 @@ export const Node: React.FC<NodeProps> = ({
         el.scrollTop = el.scrollHeight;
     }
   }, [logs, data.type]);
+
+  // Auto-scroll chat to bottom
+  useEffect(() => {
+      if (data.type === 'AI_CHAT' && chatContainerRef.current) {
+          const el = chatContainerRef.current;
+          el.scrollTop = el.scrollHeight;
+      }
+  }, [data.messages, data.type]);
 
   const handlePointerDown = (e: React.PointerEvent) => {
     // Check if the target is part of a nodrag element (inputs, buttons, editors)
@@ -125,6 +141,18 @@ export const Node: React.FC<NodeProps> = ({
       onToggleRun(data.id);
   };
 
+  const handleRefreshClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (onRefresh) onRefresh(data.id);
+  };
+
+  const handleSendChat = () => {
+      if (chatInput.trim() && onSendMessage) {
+          onSendMessage(data.id, chatInput.trim());
+          setChatInput('');
+      }
+  };
+
   const lineCount = data.content.split('\n').length;
   const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1).join('\n');
   const isCode = data.type === 'CODE';
@@ -170,6 +198,7 @@ export const Node: React.FC<NodeProps> = ({
             />
           ) : (
              <div className="flex items-center gap-2 group/title">
+                {data.type === 'AI_CHAT' && <Bot size={14} className="text-indigo-400" />}
                 <span>{data.title}</span>
                 <button 
                     onClick={(e) => { e.stopPropagation(); setIsEditingTitle(true); }}
@@ -184,16 +213,26 @@ export const Node: React.FC<NodeProps> = ({
         <div className="flex items-center gap-1">
           {/* Only show Run/Stop button for PREVIEW nodes */}
           {data.type === 'PREVIEW' && (
-              <button 
-                onClick={handleRunClick}
-                onPointerDown={(e) => e.stopPropagation()}
-                className={`nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 ${
-                    isRunning ? 'text-yellow-500 hover:bg-yellow-500/20' : 'text-green-500 hover:bg-green-500/20'
-                }`}
-                title={isRunning ? "Stop" : "Run"}
-            >
-                {isRunning ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
-            </button>
+             <div className="flex items-center gap-1">
+               <button 
+                  onClick={handleRefreshClick}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  className="nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 text-zinc-400 hover:text-white hover:bg-zinc-800"
+                  title="Refresh"
+                >
+                   <RotateCcw size={14} />
+               </button>
+               <button 
+                  onClick={handleRunClick}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  className={`nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 ${
+                      isRunning ? 'text-yellow-500 hover:bg-yellow-500/20' : 'text-green-500 hover:bg-green-500/20'
+                  }`}
+                  title={isRunning ? "Stop" : "Run"}
+              >
+                  {isRunning ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -231,6 +270,76 @@ export const Node: React.FC<NodeProps> = ({
                     onPointerDown={(e) => e.stopPropagation()}
                 />
              )
+        ) : data.type === 'AI_CHAT' ? (
+             <div className="flex flex-col h-full bg-zinc-950">
+                 {/* Chat History */}
+                 <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-3 space-y-3 custom-scrollbar">
+                     {(!data.messages || data.messages.length === 0) && (
+                         <div className="text-center text-zinc-600 text-xs mt-10">
+                             <Bot size={24} className="mx-auto mb-2 opacity-50" />
+                             <p>Ask me anything about your code.</p>
+                         </div>
+                     )}
+                     {data.messages?.map((msg, i) => (
+                         <div key={i} className={`flex gap-2 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
+                             <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 mt-1 ${
+                                 msg.role === 'user' ? 'bg-zinc-700' : 'bg-indigo-600'
+                             }`}>
+                                 {msg.role === 'user' ? <User size={14} /> : <Bot size={14} />}
+                             </div>
+                             <div className={`p-2 rounded-lg text-xs whitespace-pre-wrap max-w-[85%] ${
+                                 msg.role === 'user' 
+                                    ? 'bg-zinc-800 text-zinc-200' 
+                                    : 'bg-indigo-900/30 text-indigo-100 border border-indigo-500/20'
+                             }`}>
+                                 {msg.text}
+                             </div>
+                         </div>
+                     ))}
+                 </div>
+                 
+                 {/* Input Area */}
+                 <div className="p-2 border-t border-zinc-800 bg-zinc-900/50">
+                     {/* Context Chips */}
+                     {(data.contextNodeIds?.length || 0) > 0 && (
+                         <div className="flex flex-wrap gap-1 mb-2 px-1">
+                             {data.contextNodeIds!.map(nodeId => (
+                                 <div key={nodeId} className="flex items-center gap-1 bg-amber-500/10 text-amber-500 text-[10px] px-1.5 py-0.5 rounded border border-amber-500/20">
+                                     <FileCode size={10} />
+                                     <span>File Selected</span> 
+                                 </div>
+                             ))}
+                         </div>
+                     )}
+
+                     <div className="relative flex items-center gap-2">
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); onStartContextSelection?.(data.id); }}
+                            className="p-1.5 rounded bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700 transition-colors shrink-0"
+                            title="Select files for context"
+                            onPointerDown={(e) => e.stopPropagation()}
+                        >
+                            <Plus size={14} />
+                        </button>
+                        <input
+                            type="text"
+                            value={chatInput}
+                            onChange={(e) => setChatInput(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && handleSendChat()}
+                            placeholder="Ask Gemini..."
+                            className="flex-1 bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 transition-colors nodrag select-text"
+                            onPointerDown={(e) => e.stopPropagation()}
+                        />
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); handleSendChat(); }}
+                            className="p-1.5 rounded bg-indigo-600 text-white hover:bg-indigo-500 transition-colors shrink-0"
+                            onPointerDown={(e) => e.stopPropagation()}
+                        >
+                            <Send size={14} />
+                        </button>
+                     </div>
+                 </div>
+             </div>
         ) : (
             <div 
                 className={`w-full bg-[#0f0f11] flex rounded-b-lg nodrag ${isAutoHeight ? '' : 'h-full overflow-auto custom-scrollbar'}`}

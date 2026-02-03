@@ -3,12 +3,13 @@ import { Node } from './components/Node';
 import { Wire } from './components/Wire';
 import { ContextMenu } from './components/ContextMenu';
 import { Sidebar } from './components/Sidebar';
-import { GraphState, Action, NodeData, NodeType, LogEntry } from './types';
+import { GraphState, Action, NodeData, NodeType, LogEntry, ChatMessage } from './types';
 import { NODE_DEFAULTS } from './constants';
 import { compilePreview, calculatePortPosition } from './utils/graphUtils';
 import { Trash2, Menu } from 'lucide-react';
 import Editor from 'react-simple-code-editor';
 import Prism from 'prismjs';
+import { GoogleGenAI, FunctionDeclaration, Type } from "@google/genai";
 
 const STORAGE_KEY = 'nodecode-studio-v1';
 
@@ -19,6 +20,7 @@ const initialState: GraphState = {
   zoom: 1,
   logs: {},
   runningPreviewIds: [],
+  selectionMode: { isActive: false, requestingNodeId: '', selectedIds: [] },
 };
 
 function graphReducer(state: GraphState, action: Action): GraphState {
@@ -53,6 +55,31 @@ function graphReducer(state: GraphState, action: Action): GraphState {
         ...state,
         nodes: state.nodes.map(n => n.id === action.payload.id ? { ...n, title: action.payload.title } : n)
       };
+    case 'ADD_MESSAGE':
+       return {
+           ...state,
+           nodes: state.nodes.map(n => n.id === action.payload.id ? {
+               ...n,
+               messages: [...(n.messages || []), action.payload.message]
+           } : n)
+       };
+    case 'UPDATE_CONTEXT_NODES':
+        return {
+            ...state,
+            nodes: state.nodes.map(n => n.id === action.payload.id ? {
+                ...n,
+                contextNodeIds: action.payload.nodeIds
+            } : n)
+        };
+    case 'SET_SELECTION_MODE':
+        return {
+            ...state,
+            selectionMode: {
+                isActive: action.payload.isActive,
+                requestingNodeId: action.payload.requestingNodeId || '',
+                selectedIds: action.payload.selectedIds || []
+            }
+        };
     case 'CONNECT':
       const { sourceNodeId, sourcePortId, targetNodeId, targetPortId } = action.payload;
       
@@ -102,7 +129,7 @@ function graphReducer(state: GraphState, action: Action): GraphState {
                 : state.runningPreviewIds.filter(id => id !== nodeId)
         };
     case 'LOAD_STATE':
-        return { ...initialState, ...action.payload, logs: {}, runningPreviewIds: [] };
+        return { ...initialState, ...action.payload, logs: {}, runningPreviewIds: [], selectionMode: { isActive: false, requestingNodeId: '', selectedIds: [] } };
     default:
       return state;
   }
@@ -124,6 +151,26 @@ const getHighlightLanguage = (filename: string) => {
     return Prism.languages.markup || Prism.languages.plain;
 };
 
+// --- Gemini Tool Definition ---
+const updateCodeFunction: FunctionDeclaration = {
+    name: 'updateFile',
+    description: 'Update the code content of a specific file. Use this to write code or make changes. ALWAYS provide the FULL content of the file, not just the diff.',
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            filename: {
+                type: Type.STRING,
+                description: 'The exact name of the file to update (e.g., script.js, index.html).'
+            },
+            code: {
+                type: Type.STRING,
+                description: 'The NEW full content of the file. Do not reduce code size unless optimizing. Maintain existing functionality.'
+            }
+        },
+        required: ['filename', 'code']
+    }
+};
+
 export default function App() {
   const [state, dispatch] = useReducer(graphReducer, initialState);
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, targetNodeId?: string, targetPortId?: string } | null>(null);
@@ -131,6 +178,10 @@ export default function App() {
   const [dragWire, setDragWire] = useState<{ x1: number, y1: number, x2: number, y2: number, startPortId: string, startNodeId: string, isInput: boolean } | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [highlightedNodeId, setHighlightedNodeId] = useState<string | null>(null);
+
+  // Mobile Pinch Zoom Logic
+  const lastTouchDist = useRef<number | null>(null);
+  const isPinching = useRef(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const initialized = useRef(false);
@@ -169,7 +220,7 @@ export default function App() {
       state.runningPreviewIds.forEach(previewId => {
           const iframe = document.getElementById(`preview-iframe-${previewId}`) as HTMLIFrameElement;
           if (iframe) {
-               const compiled = compilePreview(previewId, state.nodes, state.connections);
+               const compiled = compilePreview(previewId, state.nodes, state.connections, false);
                // We only update if content is different to avoid flickering (though srcdoc usually handles this okay)
                // But here we just update it. The timestamp in compilePreview forces reload.
                if (iframe.srcdoc !== compiled) {
@@ -276,6 +327,145 @@ export default function App() {
       }
   };
 
+  const handleRefresh = (id: string) => {
+     const iframe = document.getElementById(`preview-iframe-${id}`) as HTMLIFrameElement;
+     if (iframe) {
+          // Pass true to force reload via timestamp injection
+          const compiled = compilePreview(id, state.nodes, state.connections, true);
+          iframe.srcdoc = compiled;
+     }
+  };
+
+  // --- AI Chat Logic ---
+
+  const handleStartContextSelection = (nodeId: string) => {
+      // Open sidebar in selection mode
+      const node = state.nodes.find(n => n.id === nodeId);
+      dispatch({ 
+          type: 'SET_SELECTION_MODE', 
+          payload: { 
+              isActive: true, 
+              requestingNodeId: nodeId, 
+              selectedIds: node?.contextNodeIds || [] 
+          } 
+      });
+      setIsSidebarOpen(true);
+  };
+
+  const handleToggleSelection = (nodeId: string) => {
+      if (!state.selectionMode?.isActive) return;
+      
+      const current = state.selectionMode.selectedIds;
+      const next = current.includes(nodeId)
+          ? current.filter(id => id !== nodeId)
+          : [...current, nodeId];
+      
+      dispatch({ 
+          type: 'SET_SELECTION_MODE', 
+          payload: { ...state.selectionMode, selectedIds: next } 
+      });
+  };
+
+  const handleConfirmSelection = () => {
+      if (!state.selectionMode?.isActive) return;
+      
+      dispatch({ 
+          type: 'UPDATE_CONTEXT_NODES', 
+          payload: { 
+              id: state.selectionMode.requestingNodeId, 
+              nodeIds: state.selectionMode.selectedIds 
+          } 
+      });
+      
+      dispatch({ 
+          type: 'SET_SELECTION_MODE', 
+          payload: { isActive: false } 
+      });
+      // Sidebar stays open but returns to list mode
+  };
+
+  const handleSendMessage = async (nodeId: string, text: string) => {
+      // 1. Add user message
+      dispatch({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'user', text } } });
+
+      // 2. Prepare Context
+      const node = state.nodes.find(n => n.id === nodeId);
+      if (!node) return;
+
+      const contextFiles = (node.contextNodeIds || [])
+          .map(id => state.nodes.find(n => n.id === id))
+          .filter(n => n && n.type === 'CODE');
+
+      const fileContext = contextFiles.map(n => `Filename: ${n!.title}\nContent:\n${n!.content}`).join('\n\n');
+
+      const systemInstruction = `You are an expert coding assistant in NodeCode Studio. 
+      You are concise in conversation but thorough in coding.
+      You have access to the user's files via context.
+      Important:
+      1. When asked to code, ALWAYS check if you should edit an existing file.
+      2. To edit a file, you MUST use the 'updateFile' tool.
+      3. The 'updateFile' tool requires the FULL content of the file. Do not just return the diff.
+      4. Do not reduce code size or functionality unless explicitly asked to optimize.
+      5. If you change code, briefly explain what you changed in the text response.
+      `;
+
+      try {
+          // Initialize Gemini
+          // NOTE: Using the requested environment variable for the key.
+          const apiKey = process.env.GEMINI_API_KEY_4; 
+          
+          if (!apiKey) {
+              dispatch({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: 'Error: API Key GEMINI_API_KEY_4 not found.' } } });
+              return;
+          }
+
+          const ai = new GoogleGenAI({ apiKey });
+          
+          const model = ai.models.getGenerativeModel({
+              model: 'gemini-flash-lite-latest',
+              systemInstruction,
+              tools: [{ functionDeclarations: [updateCodeFunction] }]
+          });
+
+          // Build Prompt
+          const fullPrompt = `User Query: ${text}\n\nContext Files:\n${fileContext}`;
+
+          // Generate
+          const result = await model.generateContent(fullPrompt);
+          const response = await result.response;
+          const textResponse = response.text();
+          
+          // Handle Tool Calls
+          const functionCalls = response.functionCalls();
+          
+          let toolOutputText = '';
+
+          if (functionCalls) {
+              for (const call of functionCalls) {
+                  if (call.name === 'updateFile') {
+                      const args = call.args as { filename: string, code: string };
+                      // Find the node by filename
+                      const targetNode = state.nodes.find(n => n.type === 'CODE' && n.title === args.filename);
+                      
+                      if (targetNode) {
+                          dispatch({ type: 'UPDATE_NODE_CONTENT', payload: { id: targetNode.id, content: args.code } });
+                          toolOutputText += `\n[Updated ${args.filename}]`;
+                      } else {
+                          toolOutputText += `\n[Error: Could not find file ${args.filename}]`;
+                      }
+                  }
+              }
+          }
+
+          const finalMessage = (textResponse || '') + (toolOutputText ? `\n${toolOutputText}` : '');
+          
+          dispatch({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: finalMessage.trim() || 'Done.' } } });
+
+      } catch (error: any) {
+          console.error(error);
+          dispatch({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: `Error: ${error.message}` } } });
+      }
+  };
 
   const handlePortDown = (e: React.PointerEvent, portId: string, nodeId: string, isInput: boolean) => {
     e.stopPropagation();
@@ -301,11 +491,15 @@ export default function App() {
 
   const handleBgPointerDown = (e: React.PointerEvent) => {
       e.preventDefault(); 
+      // Do not capture pointer if pinching, though usually pointer events are discrete per finger
+      if (isPinching.current) return;
       e.currentTarget.setPointerCapture(e.pointerId);
       setIsPanning(true);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
+    if (isPinching.current) return;
+
     if (dragWire && containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
         const x = (e.clientX - rect.left - state.pan.x) / state.zoom;
@@ -355,13 +549,65 @@ export default function App() {
     setDragWire(null);
   };
 
+  // --- Touch Gestures (Zoom) ---
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+      if (e.touches.length === 2) {
+          isPinching.current = true;
+          setIsPanning(false); // Stop single-finger panning
+          const t1 = e.touches[0];
+          const t2 = e.touches[1];
+          lastTouchDist.current = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+      }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+      if (e.touches.length === 2 && lastTouchDist.current !== null && containerRef.current) {
+          e.preventDefault(); // Stop browser zoom/scroll
+
+          const t1 = e.touches[0];
+          const t2 = e.touches[1];
+          const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+          
+          if (dist > 0 && lastTouchDist.current > 0) {
+              const scale = dist / lastTouchDist.current;
+              // Calculate midpoint
+              const rect = containerRef.current.getBoundingClientRect();
+              const centerX = (t1.clientX + t2.clientX) / 2 - rect.left;
+              const centerY = (t1.clientY + t2.clientY) / 2 - rect.top;
+
+              // World coordinate of center before zoom
+              const worldX = (centerX - state.pan.x) / state.zoom;
+              const worldY = (centerY - state.pan.y) / state.zoom;
+
+              const newZoom = Math.min(Math.max(0.1, state.zoom * scale), 3);
+              
+              // New pan to keep world point under center
+              const newPanX = centerX - worldX * newZoom;
+              const newPanY = centerY - worldY * newZoom;
+
+              dispatch({ type: 'ZOOM', payload: { zoom: newZoom } });
+              dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
+          }
+          lastTouchDist.current = dist;
+      }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+      if (e.touches.length < 2) {
+          isPinching.current = false;
+          lastTouchDist.current = null;
+      }
+  };
+
+
   const isConnected = (portId: string) => {
       return state.connections.some(c => c.sourcePortId === portId || c.targetPortId === portId);
   };
 
   return (
     <div 
-      className="w-screen h-screen bg-canvas overflow-hidden flex flex-col text-zinc-100 font-sans select-none"
+      className="w-screen h-screen bg-canvas overflow-hidden flex flex-col text-zinc-100 font-sans select-none touch-none"
       onContextMenu={(e) => e.preventDefault()}
     >
       <div className="absolute top-4 left-4 z-50 pointer-events-none select-none">
@@ -391,6 +637,12 @@ export default function App() {
         nodes={state.nodes} 
         onNodeClick={handleHighlightNode} 
         onClose={() => setIsSidebarOpen(false)}
+        selectionMode={state.selectionMode?.isActive ? {
+            isActive: true,
+            selectedIds: state.selectionMode.selectedIds,
+            onToggle: handleToggleSelection,
+            onConfirm: handleConfirmSelection
+        } : undefined}
       />
 
       <div 
@@ -402,10 +654,14 @@ export default function App() {
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onWheel={handleWheel}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
         style={{
             backgroundImage: 'radial-gradient(#3f3f46 2px, transparent 2px)',
             backgroundSize: `${Math.max(20 * state.zoom, 10)}px ${Math.max(20 * state.zoom, 10)}px`,
             backgroundPosition: `${state.pan.x}px ${state.pan.y}px`,
+            touchAction: 'none' // Crucial for custom touch handling
         }}
       >
         <div 
@@ -448,9 +704,12 @@ export default function App() {
                                 onResize={(id, size) => dispatch({ type: 'UPDATE_NODE_SIZE', payload: { id, size } })}
                                 onDelete={(id) => dispatch({ type: 'DELETE_NODE', payload: id })}
                                 onToggleRun={handleToggleRun}
+                                onRefresh={handleRefresh}
                                 onPortDown={handlePortDown}
                                 onPortContextMenu={handlePortContextMenu}
                                 onUpdateTitle={(id, title) => dispatch({ type: 'UPDATE_NODE_TITLE', payload: { id, title } })}
+                                onSendMessage={handleSendMessage}
+                                onStartContextSelection={handleStartContextSelection}
                                 logs={logs}
                             >
                                 {(node.type === 'CODE') && (

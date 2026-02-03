@@ -80,7 +80,8 @@ const collectDependencies = (
 export const compilePreview = (
   previewNodeId: string,
   nodes: NodeData[],
-  connections: Connection[]
+  connections: Connection[],
+  forceReload: boolean = false
 ): string => {
   // 1. Find the main entry point connected to PREVIEW
   const rootNode = getConnectedSource(previewNodeId, 'dom', nodes, connections);
@@ -193,6 +194,7 @@ export const compilePreview = (
         ${errorInjections}
       })();
     </script>
+    ${forceReload ? `<!-- Force Reload: ${Date.now()} -->` : ''}
   `;
 
   return `

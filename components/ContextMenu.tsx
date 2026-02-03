@@ -1,5 +1,5 @@
 import React from 'react';
-import { Code2, Monitor, TerminalSquare, Trash2, Copy, Unplug } from 'lucide-react';
+import { Code2, Monitor, TerminalSquare, Trash2, Copy, Unplug, Bot } from 'lucide-react';
 import { NodeType, Position } from '../types';
 
 interface ContextMenuProps {
@@ -77,6 +77,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     { label: 'Code Canvas', type: 'CODE', icon: <Code2 size={16} /> },
     { label: 'Preview Canvas', type: 'PREVIEW', icon: <Monitor size={16} /> },
     { label: 'Terminal', type: 'TERMINAL', icon: <TerminalSquare size={16} /> },
+    { label: 'AI Assistant', type: 'AI_CHAT', icon: <Bot size={16} /> },
   ] as const;
 
   return (

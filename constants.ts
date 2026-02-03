@@ -4,6 +4,7 @@ export const NODE_DEFAULTS = {
   CODE: { width: 400, height: 150, title: 'script.js', content: '// Write HTML, CSS, or JS here', autoHeight: true },
   PREVIEW: { width: 500, height: 400, title: 'Preview Output', content: '' },
   TERMINAL: { width: 400, height: 200, title: 'Terminal', content: '' },
+  AI_CHAT: { width: 350, height: 500, title: 'Gemini Assistant', content: '', messages: [] },
 };
 
 export const getPortsForNode = (nodeId: string, type: NodeType): Port[] => {
@@ -22,6 +23,8 @@ export const getPortsForNode = (nodeId: string, type: NodeType): Port[] => {
       return [
         { id: `${nodeId}-in-logs`, nodeId, type: 'input', label: 'Source', accepts: ['PREVIEW'] },
       ];
+    case 'AI_CHAT':
+        return []; // AI Chat communicates via API, no physical wires needed for now
     default:
       return [];
   }
