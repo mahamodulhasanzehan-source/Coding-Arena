@@ -155,9 +155,27 @@ export default function App() {
 
   const handleWheel = (e: React.WheelEvent) => {
     if ((e.target as HTMLElement).closest('.custom-scrollbar')) return;
+    
+    // Zoom toward cursor
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    // Convert mouse to world space before zoom
+    const worldX = (mouseX - state.pan.x) / state.zoom;
+    const worldY = (mouseY - state.pan.y) / state.zoom;
+
     const zoomIntensity = 0.001;
     const newZoom = Math.min(Math.max(0.1, state.zoom - e.deltaY * zoomIntensity), 3);
+
+    // Calculate new pan to keep world point under mouse
+    const newPanX = mouseX - worldX * newZoom;
+    const newPanY = mouseY - worldY * newZoom;
+
     dispatch({ type: 'ZOOM', payload: { zoom: newZoom } });
+    dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
   };
 
   const handleAddNode = (type: NodeType) => {
@@ -223,7 +241,9 @@ export default function App() {
         isInput
     });
     
-    (containerRef.current as Element).setPointerCapture(e.pointerId);
+    // CRITICAL FIX: Capture on the port element itself, not the container.
+    // This ensures pointer events are tracked even if moved quickly over other elements.
+    e.currentTarget.setPointerCapture(e.pointerId);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -240,6 +260,7 @@ export default function App() {
   const handlePointerUp = (e: React.PointerEvent) => {
     if (!dragWire) return;
     
+    // Need to find what is under the cursor
     const targetEl = document.elementFromPoint(e.clientX, e.clientY);
     const portEl = targetEl?.closest('[data-port-id]');
     
@@ -266,7 +287,8 @@ export default function App() {
     }
 
     setDragWire(null);
-    if (containerRef.current) containerRef.current.releasePointerCapture(e.pointerId);
+    // Release capture implicitly happens on pointerup, but good to be safe if manual release is needed.
+    // Note: Since we captured on the target, standard behavior releases it.
   };
 
   const isConnected = (portId: string) => {
@@ -367,7 +389,7 @@ export default function App() {
                     );
                 })}
 
-                {/* Dragging Wire - Top Layer (z-50 equivalent but inside SVG at end of list for paint order) */}
+                {/* Dragging Wire - Top Layer */}
                 {dragWire && (
                     <svg className="absolute top-0 left-0 w-full h-full overflow-visible pointer-events-none" style={{ zIndex: 999 }}>
                         <Wire x1={dragWire.x1} y1={dragWire.y1} x2={dragWire.x2} y2={dragWire.y2} active />
