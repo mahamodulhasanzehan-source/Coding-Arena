@@ -7,13 +7,13 @@ interface NodeProps {
   data: NodeData;
   isSelected: boolean;
   isHighlighted?: boolean; // New prop for highlighting
+  isRunning?: boolean;     // New prop derived from global state
   scale: number;
   isConnected: (portId: string) => boolean;
   onMove: (id: string, pos: Position) => void;
   onResize: (id: string, size: Size) => void;
   onDelete: (id: string) => void;
-  onRun: (id: string) => void;
-  onStop?: (id: string) => void;
+  onToggleRun: (id: string) => void; // Combined toggle handler
   onPortDown: (e: React.PointerEvent, portId: string, nodeId: string, isInput: boolean) => void;
   onPortContextMenu: (e: React.MouseEvent, portId: string) => void;
   onUpdateTitle: (id: string, title: string) => void;
@@ -25,13 +25,13 @@ export const Node: React.FC<NodeProps> = ({
   data,
   isSelected,
   isHighlighted,
+  isRunning = false,
   scale,
   isConnected,
   onMove,
   onResize,
   onDelete,
-  onRun,
-  onStop,
+  onToggleRun,
   onPortDown,
   onPortContextMenu,
   onUpdateTitle,
@@ -49,7 +49,6 @@ export const Node: React.FC<NodeProps> = ({
   const [isResizing, setIsResizing] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [tempTitle, setTempTitle] = useState(data.title);
-  const [isRunning, setIsRunning] = useState(false);
 
   const dragStartRef = useRef<{ x: number, y: number } | null>(null);
   const initialPosRef = useRef<Position>({ x: 0, y: 0 });
@@ -123,13 +122,7 @@ export const Node: React.FC<NodeProps> = ({
 
   const handleRunClick = (e: React.MouseEvent) => {
       e.stopPropagation();
-      const newState = !isRunning;
-      setIsRunning(newState);
-      if (newState) {
-          onRun(data.id);
-      } else {
-          onStop && onStop(data.id);
-      }
+      onToggleRun(data.id);
   };
 
   const lineCount = data.content.split('\n').length;
@@ -137,9 +130,6 @@ export const Node: React.FC<NodeProps> = ({
   const isCode = data.type === 'CODE';
 
   // Highlight Styles
-  // transition-none when turning ON (isHighlighted=true) so it snaps
-  // duration-1000 when turning OFF (isHighlighted=false) so it fades
-  // Use inline style for transitionProperty to avoid animating 'transform' which causes drag lag
   const highlightStyle = isHighlighted
     ? 'border-yellow-500 shadow-[0_0_30px_rgba(234,179,8,0.6)]'
     : (isSelected ? 'border-accent shadow-accent/20' : 'border-panelBorder');

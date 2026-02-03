@@ -107,6 +107,8 @@ export const compilePreview = (
       .filter(n => n.id !== rootNode.id); 
 
   let finalContent = rootNode.content;
+  const connectedFilenames = new Set(uniqueDeps.map(d => d.title));
+  const missingDependencies: string[] = [];
 
   // Wrap content if root is not HTML
   const lowerTitle = rootNode.title.toLowerCase();
@@ -117,24 +119,37 @@ export const compilePreview = (
   }
 
   // 3. Inject Dependencies based on Filenames
-  uniqueDeps.forEach(depNode => {
-    const filename = depNode.title;
-    const content = depNode.content;
-
-    // CSS Injection: <link href="style.css"> -> <style>...</style>
-    const cssRegex = new RegExp(`<link[^>]+href=["']${filename}["'][^>]*>`, 'gi');
-    if (cssRegex.test(finalContent)) {
-        finalContent = finalContent.replace(cssRegex, `<style>\n${content}\n</style>`);
-    }
-
-    // JS Injection: <script src="script.js"></script> -> <script>...</script>
-    const jsRegex = new RegExp(`<script[^>]+src=["']${filename}["'][^>]*><\/script>`, 'gi');
-    if (jsRegex.test(finalContent)) {
-        finalContent = finalContent.replace(jsRegex, `<script>\n${content}\n</script>`);
+  // Also Check for Missing Dependencies
+  
+  // Check CSS imports <link href="style.css">
+  finalContent = finalContent.replace(/<link[^>]+href=["']([^"']+)["'][^>]*>/gi, (match, filename) => {
+    const depNode = uniqueDeps.find(d => d.title === filename);
+    if (depNode) {
+        return `<style>\n/* Source: ${filename} */\n${depNode.content}\n</style>`;
+    } else {
+        missingDependencies.push(filename);
+        return match; // Leave it as is, it will likely fail in browser, but we report error below
     }
   });
 
+  // Check JS imports <script src="script.js">
+  finalContent = finalContent.replace(/<script[^>]+src=["']([^"']+)["'][^>]*><\/script>/gi, (match, filename) => {
+    const depNode = uniqueDeps.find(d => d.title === filename);
+    if (depNode) {
+        return `<script>\n/* Source: ${filename} */\n${depNode.content}\n</script>`;
+    } else {
+        missingDependencies.push(filename);
+        return match; 
+    }
+  });
+
+
   // 4. Inject Console Interceptor & Force Reload Timestamp
+  // We also inject scripts to log errors for missing files
+  const errorInjections = missingDependencies.map(file => 
+    `console.error('Dependency Error: "${file}" is referenced in code but not connected via wires.');`
+  ).join('\n');
+
   const interceptor = `
     <script>
       (function() {
@@ -173,6 +188,9 @@ export const compilePreview = (
            send('error', [msg + ' (Line ' + line + ')']);
            return false;
         };
+
+        // Report Missing Dependencies immediately
+        ${errorInjections}
       })();
     </script>
     <!-- Force Reload Timestamp: ${Date.now()} -->

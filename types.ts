@@ -1,3 +1,4 @@
+
 export type NodeType = 'CODE' | 'PREVIEW' | 'TERMINAL';
 
 export interface Position {
@@ -48,6 +49,7 @@ export interface GraphState {
   pan: Position;
   zoom: number;
   logs: Record<string, LogEntry[]>; // Maps Preview Node ID to logs
+  runningPreviewIds: string[]; // Track which previews are active for live updates
 }
 
 export type Action =
@@ -63,4 +65,5 @@ export type Action =
   | { type: 'ZOOM'; payload: { zoom: number; center?: Position } }
   | { type: 'ADD_LOG'; payload: { nodeId: string; log: LogEntry } }
   | { type: 'CLEAR_LOGS'; payload: { nodeId: string } }
+  | { type: 'TOGGLE_PREVIEW'; payload: { nodeId: string; isRunning: boolean } }
   | { type: 'LOAD_STATE'; payload: Partial<GraphState> };

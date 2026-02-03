@@ -18,6 +18,7 @@ const initialState: GraphState = {
   pan: { x: 0, y: 0 },
   zoom: 1,
   logs: {},
+  runningPreviewIds: [],
 };
 
 function graphReducer(state: GraphState, action: Action): GraphState {
@@ -29,7 +30,8 @@ function graphReducer(state: GraphState, action: Action): GraphState {
         ...state,
         nodes: state.nodes.filter(n => n.id !== action.payload),
         connections: state.connections.filter(c => c.sourceNodeId !== action.payload && c.targetNodeId !== action.payload),
-        logs: { ...state.logs, [action.payload]: [] }
+        logs: { ...state.logs, [action.payload]: [] },
+        runningPreviewIds: state.runningPreviewIds.filter(id => id !== action.payload)
       };
     case 'UPDATE_NODE_POSITION':
       return {
@@ -91,8 +93,16 @@ function graphReducer(state: GraphState, action: Action): GraphState {
         ...state,
         logs: { ...state.logs, [action.payload.nodeId]: [] }
       };
+    case 'TOGGLE_PREVIEW':
+        const { nodeId, isRunning } = action.payload;
+        return {
+            ...state,
+            runningPreviewIds: isRunning 
+                ? [...state.runningPreviewIds, nodeId] 
+                : state.runningPreviewIds.filter(id => id !== nodeId)
+        };
     case 'LOAD_STATE':
-        return { ...initialState, ...action.payload, logs: {} };
+        return { ...initialState, ...action.payload, logs: {}, runningPreviewIds: [] };
     default:
       return state;
   }
@@ -133,10 +143,34 @@ export default function App() {
   useEffect(() => {
     if (!initialized.current) return;
     const timer = setTimeout(() => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ nodes: state.nodes, connections: state.connections, pan: state.pan, zoom: state.zoom }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ 
+          nodes: state.nodes, 
+          connections: state.connections, 
+          pan: state.pan, 
+          zoom: state.zoom 
+      }));
     }, 1000);
     return () => clearTimeout(timer);
   }, [state.nodes, state.connections, state.pan, state.zoom]);
+
+  // LIVE UPDATE LOOP
+  useEffect(() => {
+      // For every active preview, re-compile and update the iframe if nodes/connections change
+      state.runningPreviewIds.forEach(previewId => {
+          const iframe = document.getElementById(`preview-iframe-${previewId}`) as HTMLIFrameElement;
+          if (iframe) {
+               const compiled = compilePreview(previewId, state.nodes, state.connections);
+               // We only update if content is different to avoid flickering (though srcdoc usually handles this okay)
+               // But here we just update it. The timestamp in compilePreview forces reload.
+               if (iframe.srcdoc !== compiled) {
+                  // To avoid clearing logs on every keystroke, we do NOT dispatch CLEAR_LOGS here
+                  // We just update the iframe.
+                  iframe.srcdoc = compiled;
+               }
+          }
+      });
+  }, [state.nodes, state.connections, state.runningPreviewIds]);
+
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
@@ -212,49 +246,25 @@ export default function App() {
       }, 2000);
   };
 
-  const triggerPreviewUpdate = (targetId: string, clear: boolean = false) => {
-      const iframe = document.getElementById(`preview-iframe-${targetId}`) as HTMLIFrameElement;
-      if (iframe) {
-           if (clear) {
+  const handleToggleRun = (id: string) => {
+      const isRunning = state.runningPreviewIds.includes(id);
+      const shouldRun = !isRunning;
+      
+      const iframe = document.getElementById(`preview-iframe-${id}`) as HTMLIFrameElement;
+      
+      if (shouldRun) {
+           dispatch({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: true } });
+           dispatch({ type: 'CLEAR_LOGS', payload: { nodeId: id } });
+           // Logic for starting/updating is handled in the useEffect for runningPreviewIds
+      } else {
+           dispatch({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: false } });
+           dispatch({ type: 'CLEAR_LOGS', payload: { nodeId: id } });
+           if (iframe) {
                iframe.srcdoc = '<body style="background-color: #000; color: #555; height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; font-family: sans-serif;">STOPPED</body>';
-               dispatch({ type: 'CLEAR_LOGS', payload: { nodeId: targetId } });
-           } else {
-               const compiled = compilePreview(targetId, state.nodes, state.connections);
-               dispatch({ type: 'CLEAR_LOGS', payload: { nodeId: targetId } });
-               iframe.srcdoc = compiled;
            }
       }
   };
 
-  const handleRun = (id: string) => {
-    const node = state.nodes.find(n => n.id === id);
-    if (!node) return;
-    
-    if (node.type === 'PREVIEW') {
-      triggerPreviewUpdate(node.id);
-    } else {
-      const downstreamConnections = state.connections.filter(c => c.sourceNodeId === id);
-      downstreamConnections.forEach(c => {
-         const target = state.nodes.find(n => n.id === c.targetNodeId);
-         if (target?.type === 'PREVIEW') triggerPreviewUpdate(target.id);
-      });
-    }
-  };
-
-  const handleStop = (id: string) => {
-      const node = state.nodes.find(n => n.id === id);
-      if (!node) return;
-
-      if (node.type === 'PREVIEW') {
-          triggerPreviewUpdate(node.id, true);
-      } else {
-          const downstreamConnections = state.connections.filter(c => c.sourceNodeId === id);
-          downstreamConnections.forEach(c => {
-            const target = state.nodes.find(n => n.id === c.targetNodeId);
-            if (target?.type === 'PREVIEW') triggerPreviewUpdate(target.id, true);
-         });
-      }
-  };
 
   const handlePortDown = (e: React.PointerEvent, portId: string, nodeId: string, isInput: boolean) => {
     e.stopPropagation();
@@ -420,13 +430,13 @@ export default function App() {
                                 data={node}
                                 isSelected={false}
                                 isHighlighted={node.id === highlightedNodeId}
+                                isRunning={state.runningPreviewIds.includes(node.id)}
                                 scale={state.zoom}
                                 isConnected={isConnected}
                                 onMove={(id, pos) => dispatch({ type: 'UPDATE_NODE_POSITION', payload: { id, position: pos } })}
                                 onResize={(id, size) => dispatch({ type: 'UPDATE_NODE_SIZE', payload: { id, size } })}
                                 onDelete={(id) => dispatch({ type: 'DELETE_NODE', payload: id })}
-                                onRun={handleRun}
-                                onStop={handleStop}
+                                onToggleRun={handleToggleRun}
                                 onPortDown={handlePortDown}
                                 onPortContextMenu={handlePortContextMenu}
                                 onUpdateTitle={(id, title) => dispatch({ type: 'UPDATE_NODE_TITLE', payload: { id, title } })}
