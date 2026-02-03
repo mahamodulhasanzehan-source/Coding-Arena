@@ -19,6 +19,7 @@ export interface NodeData {
   size: Size;
   content: string; // Code content or internal state
   lastOutput?: any; // For terminals or previews to store runtime state if needed
+  autoHeight?: boolean; // For CODE nodes to grow automatically
 }
 
 export interface Port {

@@ -128,6 +128,7 @@ export const Node: React.FC<NodeProps> = ({
   const lineCount = data.content.split('\n').length;
   const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1).join('\n');
   const isCode = data.type === 'CODE';
+  const isAutoHeight = isCode && (data.autoHeight !== false);
 
   // Highlight Styles
   const highlightStyle = isHighlighted
@@ -141,8 +142,8 @@ export const Node: React.FC<NodeProps> = ({
       style={{
         transform: `translate(${data.position.x}px, ${data.position.y}px)`,
         width: data.size.width,
-        height: data.size.height, // Fixed height for all nodes (including CODE) to enable scrolling
-        minHeight: 150,
+        height: isAutoHeight ? 'auto' : data.size.height,
+        minHeight: isCode ? 150 : data.size.height,
         transitionProperty: 'box-shadow, border-color', 
         transitionDuration: isHighlighted ? '0s' : '1s',
         transitionTimingFunction: 'ease-out'
@@ -198,7 +199,7 @@ export const Node: React.FC<NodeProps> = ({
       </div>
 
       {/* Content Area */}
-      <div className={`flex-1 relative group nodrag flex flex-col min-h-0 overflow-hidden`}>
+      <div className={`flex-1 relative group nodrag flex flex-col min-h-0 ${isAutoHeight ? 'overflow-visible' : 'overflow-hidden'}`}>
         {data.type === 'PREVIEW' || data.type === 'TERMINAL' ? (
              data.type === 'TERMINAL' ? (
                  <div 
@@ -232,19 +233,17 @@ export const Node: React.FC<NodeProps> = ({
              )
         ) : (
             <div 
-                className="w-full h-full bg-[#0f0f11] flex rounded-b-lg nodrag overflow-auto custom-scrollbar"
+                className={`w-full bg-[#0f0f11] flex rounded-b-lg nodrag ${isAutoHeight ? '' : 'h-full overflow-auto custom-scrollbar'}`}
                 onPointerDown={(e) => e.stopPropagation()}
             >
                <div 
-                  className="bg-[#0f0f11] text-zinc-600 text-right pr-3 pl-2 select-none border-r border-zinc-800 sticky left-0 z-10"
+                  className="bg-[#0f0f11] text-zinc-600 text-right pr-3 pl-2 select-none border-r border-zinc-800 shrink-0 sticky left-0 z-10 min-h-full h-full"
                   style={{ 
                     fontFamily: '"JetBrains Mono", monospace', 
                     fontSize: 13,
                     lineHeight: '1.5',
                     paddingTop: 12,
                     paddingBottom: 12,
-                    minHeight: '100%',
-                    height: 'max-content'
                   }}
                >
                  <pre className="m-0 font-inherit">{lineNumbers}</pre>

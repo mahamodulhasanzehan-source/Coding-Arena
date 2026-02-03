@@ -1,7 +1,7 @@
 import { NodeType, Port } from './types';
 
 export const NODE_DEFAULTS = {
-  CODE: { width: 400, height: 150, title: 'script.js', content: '// Write HTML, CSS, or JS here' },
+  CODE: { width: 400, height: 150, title: 'script.js', content: '// Write HTML, CSS, or JS here', autoHeight: true },
   PREVIEW: { width: 500, height: 400, title: 'Preview Output', content: '' },
   TERMINAL: { width: 400, height: 200, title: 'Terminal', content: '' },
 };

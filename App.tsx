@@ -41,7 +41,7 @@ function graphReducer(state: GraphState, action: Action): GraphState {
     case 'UPDATE_NODE_SIZE':
       return {
         ...state,
-        nodes: state.nodes.map(n => n.id === action.payload.id ? { ...n, size: action.payload.size } : n)
+        nodes: state.nodes.map(n => n.id === action.payload.id ? { ...n, size: action.payload.size, autoHeight: false } : n)
       };
     case 'UPDATE_NODE_CONTENT':
       return {
@@ -109,9 +109,19 @@ function graphReducer(state: GraphState, action: Action): GraphState {
 }
 
 const getHighlightLanguage = (filename: string) => {
-    if (filename.endsWith('.css')) return Prism.languages.css || Prism.languages.plain;
-    if (filename.endsWith('.js') || filename.endsWith('.jsx') || filename.endsWith('.ts') || filename.endsWith('.tsx')) return Prism.languages.javascript || Prism.languages.plain;
-    return Prism.languages.markup || Prism.languages.plain; 
+    // Provide robust fallback to avoid crashes if Prism language isn't loaded
+    const ext = filename.split('.').pop()?.toLowerCase();
+    
+    if (ext === 'css') {
+        return Prism.languages.css || Prism.languages.plain;
+    }
+    if (['js', 'jsx', 'ts', 'tsx'].includes(ext || '')) {
+        return Prism.languages.javascript || Prism.languages.plain;
+    }
+    if (['html', 'xml', 'svg'].includes(ext || '')) {
+        return Prism.languages.markup || Prism.languages.plain;
+    }
+    return Prism.languages.markup || Prism.languages.plain;
 };
 
 export default function App() {
@@ -133,8 +143,8 @@ export default function App() {
         const codeDefaults = NODE_DEFAULTS.CODE;
         const previewDefaults = NODE_DEFAULTS.PREVIEW;
 
-        dispatch({ type: 'ADD_NODE', payload: { id: 'node-1', type: 'CODE', position: { x: 100, y: 100 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'index.html', content: '<h1>Hello World</h1>\n<link href="style.css" rel="stylesheet">\n<script src="app.js"></script>' } });
-        dispatch({ type: 'ADD_NODE', payload: { id: 'node-2', type: 'CODE', position: { x: 100, y: 300 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'style.css', content: 'body { background: #222; color: #fff; }' } });
+        dispatch({ type: 'ADD_NODE', payload: { id: 'node-1', type: 'CODE', position: { x: 100, y: 100 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'index.html', content: '<h1>Hello World</h1>\n<link href="style.css" rel="stylesheet">\n<script src="app.js"></script>', autoHeight: true } });
+        dispatch({ type: 'ADD_NODE', payload: { id: 'node-2', type: 'CODE', position: { x: 100, y: 300 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'style.css', content: 'body { background: #222; color: #fff; }', autoHeight: true } });
         dispatch({ type: 'ADD_NODE', payload: { id: 'node-3', type: 'PREVIEW', position: { x: 600, y: 100 }, size: { width: previewDefaults.width, height: previewDefaults.height }, title: previewDefaults.title, content: previewDefaults.content } });
     }
     initialized.current = true;
@@ -234,6 +244,7 @@ export default function App() {
       content: defaults.content,
       position: { x, y },
       size: { width: defaults.width, height: defaults.height },
+      autoHeight: type === 'CODE' ? true : undefined,
     };
     dispatch({ type: 'ADD_NODE', payload: newNode });
     setContextMenu(null);
