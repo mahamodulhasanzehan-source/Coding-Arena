@@ -6,13 +6,14 @@ import { Play, GripVertical, Pencil, Pause } from 'lucide-react';
 interface NodeProps {
   data: NodeData;
   isSelected: boolean;
+  isHighlighted?: boolean; // New prop for highlighting
   scale: number;
   isConnected: (portId: string) => boolean;
   onMove: (id: string, pos: Position) => void;
   onResize: (id: string, size: Size) => void;
   onDelete: (id: string) => void;
   onRun: (id: string) => void;
-  onStop?: (id: string) => void; // New prop for stopping
+  onStop?: (id: string) => void;
   onPortDown: (e: React.PointerEvent, portId: string, nodeId: string, isInput: boolean) => void;
   onPortContextMenu: (e: React.MouseEvent, portId: string) => void;
   onUpdateTitle: (id: string, title: string) => void;
@@ -23,6 +24,7 @@ interface NodeProps {
 export const Node: React.FC<NodeProps> = ({
   data,
   isSelected,
+  isHighlighted,
   scale,
   isConnected,
   onMove,
@@ -134,17 +136,26 @@ export const Node: React.FC<NodeProps> = ({
   const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1).join('\n');
   const isCode = data.type === 'CODE';
 
+  // Highlight Styles
+  // transition-none when turning ON (isHighlighted=true) so it snaps
+  // duration-1000 when turning OFF (isHighlighted=false) so it fades
+  // Use inline style for transitionProperty to avoid animating 'transform' which causes drag lag
+  const highlightStyle = isHighlighted
+    ? 'border-yellow-500 shadow-[0_0_30px_rgba(234,179,8,0.6)]'
+    : (isSelected ? 'border-accent shadow-accent/20' : 'border-panelBorder');
+
   return (
     <div
       ref={nodeRef}
-      className={`absolute flex flex-col bg-panel border rounded-lg shadow-2xl transition-shadow animate-in fade-in zoom-in-95 duration-300 pointer-events-auto ${
-        isSelected ? 'border-accent shadow-accent/20' : 'border-panelBorder'
-      }`}
+      className={`absolute flex flex-col bg-panel border rounded-lg shadow-2xl animate-in fade-in zoom-in-95 pointer-events-auto ${highlightStyle}`}
       style={{
         transform: `translate(${data.position.x}px, ${data.position.y}px)`,
         width: data.size.width,
         height: isCode ? 'auto' : data.size.height,
         minHeight: data.size.height,
+        transitionProperty: 'box-shadow, border-color', 
+        transitionDuration: isHighlighted ? '0s' : '1s',
+        transitionTimingFunction: 'ease-out'
       }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -180,16 +191,19 @@ export const Node: React.FC<NodeProps> = ({
           )}
         </div>
         <div className="flex items-center gap-1">
-          <button 
-            onClick={handleRunClick}
-            onPointerDown={(e) => e.stopPropagation()}
-            className={`nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 ${
-                isRunning ? 'text-yellow-500 hover:bg-yellow-500/20' : 'text-green-500 hover:bg-green-500/20'
-            }`}
-            title={isRunning ? "Stop" : "Run"}
-          >
-            {isRunning ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
-          </button>
+          {/* Only show Run/Stop button for PREVIEW nodes */}
+          {data.type === 'PREVIEW' && (
+              <button 
+                onClick={handleRunClick}
+                onPointerDown={(e) => e.stopPropagation()}
+                className={`nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 ${
+                    isRunning ? 'text-yellow-500 hover:bg-yellow-500/20' : 'text-green-500 hover:bg-green-500/20'
+                }`}
+                title={isRunning ? "Stop" : "Run"}
+            >
+                {isRunning ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
+            </button>
+          )}
         </div>
       </div>
 

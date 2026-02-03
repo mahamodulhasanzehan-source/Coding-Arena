@@ -2,10 +2,11 @@ import React, { useReducer, useState, useRef, useEffect } from 'react';
 import { Node } from './components/Node';
 import { Wire } from './components/Wire';
 import { ContextMenu } from './components/ContextMenu';
+import { Sidebar } from './components/Sidebar';
 import { GraphState, Action, NodeData, NodeType, LogEntry } from './types';
 import { NODE_DEFAULTS } from './constants';
 import { compilePreview, calculatePortPosition } from './utils/graphUtils';
-import { Trash2 } from 'lucide-react';
+import { Trash2, Menu } from 'lucide-react';
 import Editor from 'react-simple-code-editor';
 import Prism from 'prismjs';
 
@@ -108,7 +109,9 @@ export default function App() {
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, targetNodeId?: string, targetPortId?: string } | null>(null);
   const [isPanning, setIsPanning] = useState(false);
   const [dragWire, setDragWire] = useState<{ x1: number, y1: number, x2: number, y2: number, startPortId: string, startNodeId: string, isInput: boolean } | null>(null);
-  
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [highlightedNodeId, setHighlightedNodeId] = useState<string | null>(null);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const initialized = useRef(false);
 
@@ -200,6 +203,13 @@ export default function App() {
     };
     dispatch({ type: 'ADD_NODE', payload: newNode });
     setContextMenu(null);
+  };
+
+  const handleHighlightNode = (id: string) => {
+      setHighlightedNodeId(id);
+      setTimeout(() => {
+          setHighlightedNodeId(null);
+      }, 2000);
   };
 
   const triggerPreviewUpdate = (targetId: string, clear: boolean = false) => {
@@ -338,7 +348,7 @@ export default function App() {
         <p className="text-xs text-zinc-500">Drag ports to connect. Right-click connected ports to disconnect.</p>
       </div>
 
-      <div className="absolute top-4 right-4 z-50">
+      <div className="absolute top-4 right-4 z-50 flex flex-col gap-2 items-end">
         <button 
             onClick={() => { if(confirm('Reset?')) { localStorage.removeItem(STORAGE_KEY); window.location.reload(); } }}
             className="px-3 py-1.5 bg-zinc-900/80 hover:bg-red-900/50 text-xs text-zinc-400 border border-zinc-800 rounded flex items-center gap-2 transition-colors pointer-events-auto cursor-pointer"
@@ -346,7 +356,21 @@ export default function App() {
         >
             <Trash2 size={12} /> Reset
         </button>
+        <button 
+            onClick={() => setIsSidebarOpen(true)}
+            className="px-3 py-2 bg-zinc-900/80 hover:bg-zinc-800 text-xs text-zinc-400 border border-zinc-800 rounded flex items-center justify-center transition-colors pointer-events-auto cursor-pointer"
+            onPointerDown={(e) => e.stopPropagation()}
+        >
+            <Menu size={16} />
+        </button>
       </div>
+
+      <Sidebar 
+        isOpen={isSidebarOpen} 
+        nodes={state.nodes} 
+        onNodeClick={handleHighlightNode} 
+        onClose={() => setIsSidebarOpen(false)}
+      />
 
       <div 
         ref={containerRef}
@@ -395,6 +419,7 @@ export default function App() {
                             <Node
                                 data={node}
                                 isSelected={false}
+                                isHighlighted={node.id === highlightedNodeId}
                                 scale={state.zoom}
                                 isConnected={isConnected}
                                 onMove={(id, pos) => dispatch({ type: 'UPDATE_NODE_POSITION', payload: { id, position: pos } })}
