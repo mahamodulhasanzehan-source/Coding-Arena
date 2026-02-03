@@ -1,25 +1,49 @@
 import React from 'react';
-import { Plus, Code2, Monitor, TerminalSquare, FileCode, Trash2, Copy } from 'lucide-react';
+import { Code2, Monitor, TerminalSquare, Trash2, Copy, Unplug } from 'lucide-react';
 import { NodeType, Position } from '../types';
 
 interface ContextMenuProps {
   position: Position;
-  targetNodeId?: string; // If present, we are acting on a node
+  targetNodeId?: string;
+  targetPortId?: string; // New: Supports port actions
   onAdd: (type: NodeType) => void;
   onDeleteNode: (id: string) => void;
   onDuplicateNode: (id: string) => void;
+  onDisconnect: (portId: string) => void;
   onClose: () => void;
 }
 
 export const ContextMenu: React.FC<ContextMenuProps> = ({ 
   position, 
   targetNodeId, 
+  targetPortId,
   onAdd, 
   onDeleteNode,
   onDuplicateNode,
+  onDisconnect,
   onClose 
 }) => {
   
+  // Port Context Menu
+  if (targetPortId) {
+    return (
+      <div 
+        className="fixed z-50 bg-panel border border-panelBorder rounded-lg shadow-2xl overflow-hidden min-w-[160px] animate-in fade-in zoom-in-95 duration-100"
+        style={{ left: position.x, top: position.y }}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+         <button
+          onClick={() => onDisconnect(targetPortId)}
+          className="w-full text-left px-4 py-2 text-sm text-yellow-500 hover:bg-zinc-800 transition-colors flex items-center gap-2"
+        >
+          <Unplug size={14} />
+          Disconnect
+        </button>
+      </div>
+    );
+  }
+
+  // Node Context Menu
   if (targetNodeId) {
     return (
       <div 
@@ -48,10 +72,9 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     );
   }
 
+  // Canvas Context Menu
   const items = [
-    { label: 'HTML Canvas', type: 'HTML', icon: <Code2 size={16} /> },
-    { label: 'CSS Canvas', type: 'CSS', icon: <FileCode size={16} /> },
-    { label: 'JS Canvas', type: 'JS', icon: <FileCode size={16} /> },
+    { label: 'Code Canvas', type: 'CODE', icon: <Code2 size={16} /> },
     { label: 'Preview Canvas', type: 'PREVIEW', icon: <Monitor size={16} /> },
     { label: 'Terminal', type: 'TERMINAL', icon: <TerminalSquare size={16} /> },
   ] as const;

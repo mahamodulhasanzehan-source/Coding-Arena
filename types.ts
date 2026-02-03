@@ -1,4 +1,4 @@
-export type NodeType = 'HTML' | 'CSS' | 'JS' | 'PREVIEW' | 'TERMINAL';
+export type NodeType = 'CODE' | 'PREVIEW' | 'TERMINAL';
 
 export interface Position {
   x: number;
@@ -56,6 +56,7 @@ export type Action =
   | { type: 'UPDATE_NODE_POSITION'; payload: { id: string; position: Position } }
   | { type: 'UPDATE_NODE_SIZE'; payload: { id: string; size: Size } }
   | { type: 'UPDATE_NODE_CONTENT'; payload: { id: string; content: string } }
+  | { type: 'UPDATE_NODE_TITLE'; payload: { id: string; title: string } }
   | { type: 'CONNECT'; payload: Connection }
   | { type: 'DISCONNECT'; payload: string } // Connection ID
   | { type: 'PAN'; payload: Position }

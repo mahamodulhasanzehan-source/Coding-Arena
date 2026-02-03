@@ -2,22 +2,10 @@ import { Connection, NodeData, NodeType, Port } from '../types';
 import { getPortsForNode } from '../constants';
 
 // ---- Port Calculation Math ----
-// These must match the CSS in Node.tsx exactly
-const HEADER_HEIGHT = 40; // h-10
-const PORT_START_Y = 52;  // top-[52px]
-// The gap in CSS is gap-[28px]. Plus the height of the port itself (h-3 = 12px).
-// So the stride is 12px + 28px = 40px. 
-// Wait, CSS flex gap puts space BETWEEN items.
-// Item height = 12px. Gap = 28px.
-// 1st item at 0 (relative to container).
-// 2nd item at 12 + 28 = 40.
-// 3rd item at 40 + 40 = 80.
+const HEADER_HEIGHT = 40; 
+const PORT_START_Y = 52;  
 const PORT_STRIDE = 40; 
-const PORT_OFFSET_X = 12; // -left-3 and -right-3 is -12px. Center of 12px dot is 6px. 
-// Actually, visually we want the wire to start from the center of the dot.
-// The dot is w-3 (12px). 
-// Left inputs: left: -12px. Center x = -12 + 6 = -6. relative to node 0.
-// Right outputs: right: -12px. Center x = Width + 12 - 6 = Width + 6.
+const PORT_OFFSET_X = 12; 
 
 export const calculatePortPosition = (
   node: NodeData,
@@ -30,14 +18,9 @@ export const calculatePortPosition = (
 
   if (portIndex === -1) return { x: node.position.x, y: node.position.y };
 
-  // Calculate Y
-  // The container starts at PORT_START_Y inside the node
-  // Each port is centered vertically in its "slot" effectively, but the CSS is flex-col with gap.
-  // Center of the first dot (12px high) is at 6px.
   const yRelative = PORT_START_Y + 6 + (portIndex * PORT_STRIDE);
   const y = node.position.y + yRelative;
 
-  // Calculate X
   const x = type === 'input' 
     ? node.position.x - 6 
     : node.position.x + node.size.width + 6;
@@ -54,7 +37,6 @@ export const getConnectedSource = (
   connections: Connection[]
 ): NodeData | undefined => {
   const connection = connections.find(c => {
-    // Check if target matches and if the port ID string contains the label (e.g., "in-dom" contains "dom")
     return c.targetNodeId === targetNodeId && c.targetPortId.toLowerCase().includes(targetPortLabel.toLowerCase());
   });
 
@@ -79,40 +61,45 @@ export const compilePreview = (
   nodes: NodeData[],
   connections: Connection[]
 ): string => {
-  // 1. Find the connected HTML node
-  const htmlNode = getConnectedSource(previewNodeId, 'dom', nodes, connections);
+  // 1. Find the main entry point connected to PREVIEW
+  const rootNode = getConnectedSource(previewNodeId, 'dom', nodes, connections);
   
-  if (!htmlNode) {
+  if (!rootNode) {
     return `
       <!DOCTYPE html>
       <html>
         <body style="background-color: #0f0f11; color: #71717a; font-family: sans-serif; height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0;">
           <div style="text-align: center;">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 16px; opacity: 0.5;">
-              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-              <line x1="8" y1="21" x2="16" y2="21"></line>
-              <line x1="12" y1="17" x2="12" y2="21"></line>
-            </svg>
-            <p>Connect an <strong>HTML Canvas</strong> to the DOM port to see output.</p>
+            <p>Connect a <strong>CODE Canvas</strong> to the DOM port.</p>
           </div>
         </body>
       </html>
     `;
   }
 
-  // 2. Find CSS connected to that HTML node
-  const cssNodes = getAllConnectedSources(htmlNode.id, 'css', nodes, connections);
-  const cssContent = cssNodes.map(n => n.content).join('\n');
+  // 2. Resolve Dependencies (Wired nodes only)
+  // Find all nodes connected to the root node's input
+  const dependencyNodes = getAllConnectedSources(rootNode.id, 'file', nodes, connections);
+  
+  let finalContent = rootNode.content;
 
-  // 3. Find JS connected to that HTML node
-  const jsNodes = getAllConnectedSources(htmlNode.id, 'js', nodes, connections);
-  const jsContent = jsNodes.map(n => `
-    try {
-      ${n.content}
-    } catch(err) {
-      console.error(err);
+  // 3. Inject Dependencies based on Filenames (Node Titles)
+  dependencyNodes.forEach(depNode => {
+    const filename = depNode.title;
+    const content = depNode.content;
+
+    // CSS Injection: <link href="style.css"> -> <style>...</style>
+    const cssRegex = new RegExp(`<link[^>]+href=["']${filename}["'][^>]*>`, 'gi');
+    if (cssRegex.test(finalContent)) {
+        finalContent = finalContent.replace(cssRegex, `<style>\n${content}\n</style>`);
     }
-  `).join('\n');
+
+    // JS Injection: <script src="script.js"></script> -> <script>...</script>
+    const jsRegex = new RegExp(`<script[^>]+src=["']${filename}["'][^>]*><\/script>`, 'gi');
+    if (jsRegex.test(finalContent)) {
+        finalContent = finalContent.replace(jsRegex, `<script>\n${content}\n</script>`);
+    }
+  });
 
   // 4. Inject Console Interceptor
   const interceptor = `
@@ -140,13 +127,7 @@ export const compilePreview = (
               timestamp: Date.now()
             }, '*');
           } catch (e) {
-            window.parent.postMessage({
-              source: 'preview-iframe',
-              nodeId: '${previewNodeId}',
-              type: 'error',
-              message: 'Log Serialization Error: ' + e.message,
-              timestamp: Date.now()
-            }, '*');
+             // Ignore serialization errors
           }
         }
 
@@ -169,15 +150,9 @@ export const compilePreview = (
       <head>
         <meta charset="utf-8">
         ${interceptor}
-        <style>
-          /* Basic reset for preview */
-          body { margin: 0; padding: 0; }
-          ${cssContent}
-        </style>
       </head>
       <body>
-        ${htmlNode.content}
-        <script>${jsContent}</script>
+        ${finalContent}
       </body>
     </html>
   `;
