@@ -3,7 +3,6 @@ import { NodeData, Port, Position, Size } from '../types';
 import { getPortsForNode } from '../constants';
 import { X, Play, GripVertical } from 'lucide-react';
 import Editor from 'react-simple-code-editor';
-// Prism imports handled in index.tsx global style import or we can map here if needed for TS type safety
 import Prism from 'prismjs';
 
 interface NodeProps {
@@ -14,10 +13,9 @@ interface NodeProps {
   onResize: (id: string, size: Size) => void;
   onDelete: (id: string) => void;
   onRun: (id: string) => void;
-  onPortDown: (e: React.PointerEvent, portId: string, isInput: boolean) => void;
-  onPortUp: (e: React.PointerEvent, portId: string, isInput: boolean) => void;
+  onPortClick: (e: React.MouseEvent, portId: string, isInput: boolean) => void;
   logs?: any[]; // Passed only for Terminals
-  children?: React.ReactNode; // Optional now that we handle editor internally
+  children?: React.ReactNode;
 }
 
 export const Node: React.FC<NodeProps> = ({
@@ -28,8 +26,7 @@ export const Node: React.FC<NodeProps> = ({
   onResize,
   onDelete,
   onRun,
-  onPortDown,
-  onPortUp,
+  onPortClick,
   logs,
   children
 }) => {
@@ -88,7 +85,7 @@ export const Node: React.FC<NodeProps> = ({
       const dy = (e.clientY - dragStartRef.current.y) / scale;
       onResize(data.id, {
         width: Math.max(250, initialSizeRef.current.width + dx),
-        height: Math.max(150, initialSizeRef.current.height + dy),
+        height: Math.max(100, initialSizeRef.current.height + dy),
       });
     }
   };
@@ -99,6 +96,10 @@ export const Node: React.FC<NodeProps> = ({
     dragStartRef.current = null;
     e.currentTarget.releasePointerCapture(e.pointerId);
   };
+
+  // Generate Line Numbers
+  const lineCount = data.content.split('\n').length;
+  const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1).join('\n');
 
   return (
     <div
@@ -172,9 +173,26 @@ export const Node: React.FC<NodeProps> = ({
              )
         ) : (
              /* Code Editor container - editor injected as child */
-            <div className="w-full h-full bg-[#0f0f11] overflow-y-auto custom-scrollbar">
-               {/* Children will fill this */}
-               {React.Children.map(children, child => child)}
+            <div className="w-full h-full bg-[#0f0f11] overflow-auto custom-scrollbar flex">
+               {/* Line Numbers */}
+               <div 
+                  className="bg-[#0f0f11] text-zinc-600 text-right pr-3 pl-2 select-none border-r border-zinc-800"
+                  style={{ 
+                    fontFamily: '"JetBrains Mono", monospace', 
+                    fontSize: 13,
+                    lineHeight: '1.5', // Must match Editor
+                    minHeight: '100%',
+                    paddingTop: 12,
+                    paddingBottom: 12
+                  }}
+               >
+                 <pre className="m-0 font-inherit">{lineNumbers}</pre>
+               </div>
+               
+               {/* Editor */}
+               <div className="flex-1 min-w-0">
+                  {React.Children.map(children, child => child)}
+               </div>
             </div>
         )}
       </div>
@@ -188,9 +206,8 @@ export const Node: React.FC<NodeProps> = ({
             title={port.label}
           >
             <div 
-              className="w-3 h-3 bg-zinc-600 border border-zinc-900 rounded-full hover:bg-accent hover:scale-125 transition-all cursor-crosshair nodrag"
-              onPointerDown={(e) => onPortDown(e, port.id, true)}
-              onPointerUp={(e) => onPortUp(e, port.id, true)}
+              className="w-3 h-3 bg-zinc-600 border border-zinc-900 rounded-full hover:bg-accent hover:scale-125 transition-all cursor-pointer nodrag"
+              onClick={(e) => onPortClick(e, port.id, true)}
               data-port-id={port.id}
             />
             <span className="absolute left-4 text-[10px] text-zinc-500 uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity bg-black/80 px-1 rounded pointer-events-none whitespace-nowrap z-50">
@@ -212,9 +229,8 @@ export const Node: React.FC<NodeProps> = ({
               {port.label}
             </span>
             <div 
-              className="w-3 h-3 bg-zinc-600 border border-zinc-900 rounded-full hover:bg-accent hover:scale-125 transition-all cursor-crosshair nodrag"
-              onPointerDown={(e) => onPortDown(e, port.id, false)}
-              onPointerUp={(e) => onPortUp(e, port.id, false)}
+              className="w-3 h-3 bg-zinc-600 border border-zinc-900 rounded-full hover:bg-accent hover:scale-125 transition-all cursor-pointer nodrag"
+              onClick={(e) => onPortClick(e, port.id, false)}
               data-port-id={port.id}
             />
           </div>

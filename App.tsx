@@ -85,7 +85,10 @@ function graphReducer(state: GraphState, action: Action): GraphState {
 export default function App() {
   const [state, dispatch] = useReducer(graphReducer, initialState);
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, targetNodeId?: string } | null>(null);
+  
+  // Wiring State: Now tracks explicit start point for Click-to-Connect
   const [tempWire, setTempWire] = useState<{ x1: number, y1: number, x2: number, y2: number, sourcePortId: string, sourceNodeId: string } | null>(null);
+  
   const containerRef = useRef<HTMLDivElement>(null);
   const initialized = useRef(false);
 
@@ -101,7 +104,7 @@ export default function App() {
       }
     } else {
       // Default initial state
-      dispatch({ type: 'ADD_NODE', payload: { ...NODE_DEFAULTS.HTML, id: 'node-1', type: 'HTML', position: { x: 100, y: 100 }, size: { width: 450, height: 350 } } as NodeData });
+      dispatch({ type: 'ADD_NODE', payload: { ...NODE_DEFAULTS.HTML, id: 'node-1', type: 'HTML', position: { x: 100, y: 100 }, size: { width: 450, height: 250 } } as NodeData });
       dispatch({ type: 'ADD_NODE', payload: { ...NODE_DEFAULTS.PREVIEW, id: 'node-2', type: 'PREVIEW', position: { x: 650, y: 100 }, size: { width: 500, height: 400 } } as NodeData });
     }
     initialized.current = true;
@@ -112,7 +115,6 @@ export default function App() {
     if (!initialized.current) return;
     const { nodes, connections, pan, zoom } = state;
     const toSave = { nodes, connections, pan, zoom };
-    // Debounce slightly to avoid hammering disk
     const timer = setTimeout(() => {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
     }, 1000);
@@ -144,6 +146,24 @@ export default function App() {
         y: e.clientY,
         targetNodeId: nodeId
     });
+  };
+
+  // Zooming Logic
+  const handleWheel = (e: React.WheelEvent) => {
+    // Only zoom if scrolling on background or explicitly not on a scrollable node content
+    const target = e.target as HTMLElement;
+    const isInsideScrollable = target.closest('.custom-scrollbar');
+    
+    if (isInsideScrollable) {
+      // Let it scroll naturally
+      return;
+    }
+    
+    // Zoom
+    const zoomIntensity = 0.001;
+    const newZoom = Math.min(Math.max(0.1, state.zoom - e.deltaY * zoomIntensity), 3);
+    
+    dispatch({ type: 'ZOOM', payload: { zoom: newZoom } });
   };
 
   const handleAddNode = (type: NodeType) => {
@@ -209,65 +229,86 @@ export default function App() {
     }
   };
 
-  const handlePortDown = (e: React.PointerEvent, portId: string, isInput: boolean) => {
-    if (isInput) return;
+  // ------------------------------------
+  // CLICK-TO-CONNECT WIRING SYSTEM
+  // ------------------------------------
+
+  const handlePortClick = (e: React.MouseEvent, portId: string, isInput: boolean) => {
+    e.stopPropagation(); // Stop background click handler
     
-    const nodeEl = (e.target as HTMLElement).closest('[data-port-id]');
-    const sourceNodeId = nodeEl?.getAttribute('data-port-id')?.split('-')[0] || '';
-    
-    const sourceNode = state.nodes.find(n => n.id === sourceNodeId);
-    if (!sourceNode) return;
-    
-    const pos = calculatePortPosition(sourceNode, portId, 'output');
-    
-    setTempWire({
-      x1: pos.x,
-      y1: pos.y,
-      x2: pos.x,
-      y2: pos.y,
-      sourcePortId: portId,
-      sourceNodeId: sourceNodeId
-    });
-    
-    (e.target as Element).setPointerCapture(e.pointerId);
+    // 1. If no tempWire, start wiring (must be output usually, but we can allow input->output or output->input)
+    if (!tempWire) {
+        const nodeEl = (e.target as HTMLElement).closest('[data-port-id]');
+        const sourceNodeId = nodeEl?.getAttribute('data-port-id')?.split('-')[0] || '';
+        const sourceNode = state.nodes.find(n => n.id === sourceNodeId);
+        if (!sourceNode) return;
+        
+        // Only start from Output ports to keep logic simple, or allow starting from inputs?
+        // Let's enforce: Can only start dragging from an OUTPUT (source).
+        // Actually, users might want to drag input to output. 
+        // For simplicity: Start from Output (right side) -> Connect to Input (left side).
+        if (isInput) return; 
+
+        const pos = calculatePortPosition(sourceNode, portId, 'output');
+        setTempWire({
+            x1: pos.x,
+            y1: pos.y,
+            x2: pos.x,
+            y2: pos.y,
+            sourcePortId: portId,
+            sourceNodeId: sourceNodeId
+        });
+    } 
+    // 2. If tempWire exists, complete connection (must be input)
+    else {
+        // Prevent connecting to self or another output
+        if (!isInput) {
+            // If they clicked another output, maybe they want to restart wiring from there?
+            // For now, cancel.
+            setTempWire(null);
+            return;
+        }
+        
+        const targetNodeId = portId.split('-')[0];
+        if (targetNodeId === tempWire.sourceNodeId) {
+            // Self-connection check
+            return;
+        }
+
+        dispatch({
+            type: 'CONNECT',
+            payload: {
+                id: `conn-${Date.now()}`,
+                sourceNodeId: tempWire.sourceNodeId,
+                sourcePortId: tempWire.sourcePortId,
+                targetNodeId: targetNodeId,
+                targetPortId: portId
+            }
+        });
+        setTempWire(null);
+    }
+  };
+
+  const handleBackgroundClick = () => {
+    if (tempWire) {
+        // Cancel wiring if clicked on background
+        setTempWire(null);
+    }
   };
 
   const handleMouseMove = (e: React.PointerEvent) => {
+    // Always track mouse for tempWire if it exists, regardless of button state
     if (tempWire && containerRef.current) {
       const rect = containerRef.current.getBoundingClientRect();
       const x = (e.clientX - rect.left - state.pan.x) / state.zoom;
       const y = (e.clientY - rect.top - state.pan.y) / state.zoom;
-      setTempWire({ ...tempWire, x2: x, y2: y });
+      setTempWire(prev => prev ? { ...prev, x2: x, y2: y } : null);
     }
     
-    if (e.buttons === 1 && !tempWire && (e.target as HTMLElement).id === 'canvas-bg') {
+    // Handle Panning (Standard drag)
+    if (e.buttons === 1 && (e.target as HTMLElement).id === 'canvas-bg') {
         dispatch({ type: 'PAN', payload: { x: state.pan.x + e.movementX, y: state.pan.y + e.movementY } });
     }
-  };
-
-  const handlePortUp = (e: React.PointerEvent, portId: string, isInput: boolean) => {
-    if (!tempWire || !isInput) {
-        setTempWire(null);
-        return;
-    }
-    
-    const targetNodeId = portId.split('-')[0];
-    if (targetNodeId === tempWire.sourceNodeId) {
-        setTempWire(null);
-        return;
-    }
-
-    dispatch({
-      type: 'CONNECT',
-      payload: {
-        id: `conn-${Date.now()}`,
-        sourceNodeId: tempWire.sourceNodeId,
-        sourcePortId: tempWire.sourcePortId,
-        targetNodeId: targetNodeId,
-        targetPortId: portId
-      }
-    });
-    setTempWire(null);
   };
 
   const handleReset = () => {
@@ -286,7 +327,7 @@ export default function App() {
       <div className="absolute top-4 left-4 z-50 pointer-events-none select-none flex flex-col gap-2">
         <div>
             <h1 className="text-xl font-bold tracking-tight text-white drop-shadow-md">NodeCode Studio</h1>
-            <p className="text-xs text-zinc-500">Right-click canvas to add. Right-click node to edit.</p>
+            <p className="text-xs text-zinc-500">Scroll to Zoom. Click ports to connect.</p>
         </div>
       </div>
       
@@ -303,10 +344,11 @@ export default function App() {
       <div 
         ref={containerRef}
         id="canvas-bg"
-        className="flex-1 relative cursor-grab active:cursor-grabbing"
+        className={`flex-1 relative cursor-grab active:cursor-grabbing ${tempWire ? 'cursor-crosshair' : ''}`}
         onContextMenu={(e) => handleContextMenu(e)}
         onPointerMove={handleMouseMove}
-        onPointerUp={() => setTempWire(null)}
+        onWheel={handleWheel}
+        onPointerDown={handleBackgroundClick} // Using PointerDown to capture click immediately to cancel wire
         style={{
             backgroundImage: 'radial-gradient(#27272a 1px, transparent 1px)',
             backgroundSize: `${20 * state.zoom}px ${20 * state.zoom}px`,
@@ -362,31 +404,28 @@ export default function App() {
                                 onResize={(id, size) => dispatch({ type: 'UPDATE_NODE_SIZE', payload: { id, size } })}
                                 onDelete={(id) => dispatch({ type: 'DELETE_NODE', payload: id })}
                                 onRun={handleRun}
-                                onPortDown={handlePortDown}
-                                onPortUp={handlePortUp}
+                                onPortClick={handlePortClick}
                                 logs={logs}
                             >
                                 {(node.type === 'HTML' || node.type === 'CSS' || node.type === 'JS') && (
-                                    <div className="w-full h-full bg-[#0f0f11] overflow-auto custom-scrollbar nodrag">
-                                        <Editor
-                                            value={node.content}
-                                            onValueChange={code => dispatch({ type: 'UPDATE_NODE_CONTENT', payload: { id: node.id, content: code } })}
-                                            highlight={code => Prism.highlight(
-                                                code, 
-                                                node.type === 'HTML' ? Prism.languages.markup : 
-                                                node.type === 'CSS' ? Prism.languages.css : Prism.languages.javascript, 
-                                                node.type === 'HTML' ? 'markup' : node.type.toLowerCase()
-                                            )}
-                                            padding={12}
-                                            style={{
-                                                fontFamily: '"JetBrains Mono", monospace',
-                                                fontSize: 13,
-                                                minHeight: '100%',
-                                            }}
-                                            className="min-h-full"
-                                            textareaClassName="focus:outline-none"
-                                        />
-                                    </div>
+                                    <Editor
+                                        value={node.content}
+                                        onValueChange={code => dispatch({ type: 'UPDATE_NODE_CONTENT', payload: { id: node.id, content: code } })}
+                                        highlight={code => Prism.highlight(
+                                            code, 
+                                            node.type === 'HTML' ? Prism.languages.markup : 
+                                            node.type === 'CSS' ? Prism.languages.css : Prism.languages.javascript, 
+                                            node.type === 'HTML' ? 'markup' : node.type.toLowerCase()
+                                        )}
+                                        padding={12}
+                                        style={{
+                                            fontFamily: '"JetBrains Mono", monospace',
+                                            fontSize: 13,
+                                            lineHeight: '1.5', // Enforce consistent line height for alignment with numbers
+                                        }}
+                                        className="min-h-full"
+                                        textareaClassName="focus:outline-none whitespace-pre" // Enforce no-wrap
+                                    />
                                 )}
                             </Node>
                         </div>

@@ -1,9 +1,10 @@
 import { NodeType, Port } from './types';
 
 export const NODE_DEFAULTS = {
-  HTML: { width: 400, height: 300, title: 'index.html', content: '<h1>Hello World</h1>\n<div id="app"></div>' },
-  CSS: { width: 350, height: 250, title: 'style.css', content: 'body {\n  background: #111;\n  color: #eee;\n  font-family: sans-serif;\n}' },
-  JS: { width: 350, height: 250, title: 'script.js', content: 'console.log("Script loaded");' },
+  // Height reduced from 300/250 to 150 for compact start
+  HTML: { width: 400, height: 150, title: 'index.html', content: '<h1>Hello World</h1>\n<div id="app"></div>' },
+  CSS: { width: 350, height: 150, title: 'style.css', content: 'body {\n  background: #111;\n  color: #eee;\n  font-family: sans-serif;\n}' },
+  JS: { width: 350, height: 150, title: 'script.js', content: 'console.log("Script loaded");' },
   PREVIEW: { width: 500, height: 400, title: 'Preview Output', content: '' },
   TERMINAL: { width: 400, height: 200, title: 'Terminal', content: '' },
 };
