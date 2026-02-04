@@ -1,3 +1,4 @@
+
 import React from 'react';
 
 interface WireProps {
@@ -22,15 +23,15 @@ export const Wire: React.FC<WireProps> = ({ x1, y1, x2, y2, active }) => {
             <path
                 d={path}
                 fill="none"
-                stroke="#71717a" // Zinc-500 (Lighter Grey for visibility)
-                strokeWidth={3}
+                stroke="#71717a" // Zinc-500
+                strokeWidth={6} // Doubled from 3
             />
-            {/* The "Dot" being dragged: Matches Port Design but Larger */}
+            {/* The "Dot" being dragged */}
             <circle 
                 cx={x2} 
                 cy={y2} 
                 r={6} 
-                fill="#fbbf24" // Amber-400 (Yellow)
+                fill="#fbbf24" // Amber-400
                 stroke="#18181b" 
                 strokeWidth={2}
             />
@@ -44,7 +45,7 @@ export const Wire: React.FC<WireProps> = ({ x1, y1, x2, y2, active }) => {
         d={path}
         fill="none"
         stroke="#52525b" // Zinc-600
-        strokeWidth={2}
+        strokeWidth={4} // Doubled from 2
         className="transition-colors duration-200"
       />
     </g>
