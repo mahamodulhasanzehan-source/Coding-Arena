@@ -153,8 +153,13 @@ function graphReducer(state: GraphState, action: Action): GraphState {
 }
 
 const getHighlightLanguage = (filename: string) => {
-    // Provide robust fallback to avoid crashes if Prism language isn't loaded
+    // STRICT EXTENSION CHECKING
     const ext = filename.split('.').pop()?.toLowerCase();
+    
+    // If there is no extension (e.g. "index"), treat as plain text
+    if (!filename.includes('.')) {
+        return Prism.languages.plain;
+    }
     
     if (ext === 'css') {
         return Prism.languages.css || Prism.languages.plain;
@@ -165,7 +170,9 @@ const getHighlightLanguage = (filename: string) => {
     if (['html', 'xml', 'svg'].includes(ext || '')) {
         return Prism.languages.markup || Prism.languages.plain;
     }
-    return Prism.languages.markup || Prism.languages.plain;
+    
+    // Unknown extensions -> Plain Text
+    return Prism.languages.plain;
 };
 
 // --- Gemini Tool Definition ---
@@ -209,7 +216,7 @@ export default function App() {
 
   // --- Persistence Logic (Firebase) ---
 
-  // 1. Initial Load
+  // 1. Initial Load from Firestore
   useEffect(() => {
     const init = async () => {
       try {
@@ -246,7 +253,7 @@ export default function App() {
     init();
   }, []);
 
-  // 2. Debounced Save
+  // 2. Debounced Save to Firestore
   useEffect(() => {
     if (!initialized.current || !userUid) return;
 
@@ -483,7 +490,7 @@ export default function App() {
 
           for await (const chunk of result) {
               // Accumulate text
-              const chunkText = chunk.text; // Fixed: Removed () as text is a property
+              const chunkText = chunk.text;
               if (chunkText) {
                   fullText += chunkText;
                   dispatch({ type: 'UPDATE_LAST_MESSAGE', payload: { id: nodeId, text: fullText } });
