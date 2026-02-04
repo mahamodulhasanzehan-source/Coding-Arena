@@ -426,12 +426,25 @@ export default function App() {
             // Store it in ref first to prevent immediate echo back
             lastSentStateRef.current[data.nodeId] = data.payload;
             dispatchLocal({ type: 'UPDATE_NODE_SHARED_STATE', payload: { nodeId: data.nodeId, state: data.payload } });
+        } else if (data.type === 'IFRAME_READY') {
+            // New user/iframe loaded -> Force send current state down
+            const node = state.nodes.find(n => n.id === data.nodeId);
+            if (node && node.sharedState) {
+                const iframe = document.getElementById(`preview-iframe-${data.nodeId}`) as HTMLIFrameElement;
+                if (iframe?.contentWindow) {
+                    iframe.contentWindow.postMessage({
+                        type: 'STATE_UPDATE',
+                        payload: node.sharedState
+                    }, '*');
+                    lastSentStateRef.current[data.nodeId] = node.sharedState;
+                }
+            }
         }
       }
     };
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, []);
+  }, [state.nodes]); // Add dependency on nodes to access latest state for IFRAME_READY
 
   const handleContextMenu = (e: React.MouseEvent, nodeId?: string) => {
     e.preventDefault();

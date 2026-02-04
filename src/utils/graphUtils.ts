@@ -227,6 +227,16 @@ export const compilePreview = (
           });
         };
 
+        // Notify parent that iframe is ready to receive state
+        window.addEventListener('load', () => {
+            window.parent.postMessage({
+                source: 'preview-iframe',
+                nodeId: '${previewNodeId}',
+                type: 'IFRAME_READY',
+                timestamp: Date.now()
+            }, '*');
+        });
+
         // Report Missing Dependencies immediately
         ${errorInjections}
       })();
