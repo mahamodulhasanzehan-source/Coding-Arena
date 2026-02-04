@@ -6,7 +6,7 @@ import { ContextMenu } from './components/ContextMenu';
 import { Sidebar } from './components/Sidebar';
 import { CollaboratorCursor } from './components/CollaboratorCursor';
 import { GraphState, Action, NodeData, NodeType, LogEntry, UserPresence } from './types';
-import { NODE_DEFAULTS } from './constants';
+import { NODE_DEFAULTS, getPortsForNode } from './constants';
 import { compilePreview, calculatePortPosition, getRelatedNodes } from './utils/graphUtils';
 import { Trash2, Menu, Cloud, CloudOff, UploadCloud, Users } from 'lucide-react';
 import Prism from 'prismjs';
@@ -1046,29 +1046,62 @@ export default function App() {
 
     if (!dragWire) return;
     
-    const targetEl = document.elementFromPoint(e.clientX, e.clientY);
-    const portEl = targetEl?.closest('[data-port-id]');
-    
-    if (portEl) {
-        const endPortId = portEl.getAttribute('data-port-id');
-        const endNodeId = portEl.getAttribute('data-node-id');
+    // Snapping Logic
+    let targetPortId = null;
+    let targetNodeId = null;
+    let minDistance = 40; // Snapping radius (40px)
 
-        if (endPortId && endNodeId && endPortId !== dragWire.startPortId) {
-            const isStartInput = dragWire.isInput;
-            const isTargetInput = endPortId.includes('-in-');
-            
-            if (isStartInput !== isTargetInput && dragWire.startNodeId !== endNodeId) {
-                dispatchLocal({
-                    type: 'CONNECT',
-                    payload: {
-                        id: `conn-${Date.now()}`,
-                        sourceNodeId: isStartInput ? endNodeId : dragWire.startNodeId,
-                        sourcePortId: isStartInput ? endPortId : dragWire.startPortId,
-                        targetNodeId: isStartInput ? dragWire.startNodeId : endNodeId,
-                        targetPortId: isStartInput ? dragWire.startPortId : endPortId
+    if (containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        const mouseX = (e.clientX - rect.left - state.pan.x) / state.zoom;
+        const mouseY = (e.clientY - rect.top - state.pan.y) / state.zoom;
+
+        // 1. Check for precise hit first (original logic)
+        const targetEl = document.elementFromPoint(e.clientX, e.clientY);
+        const portEl = targetEl?.closest('[data-port-id]');
+        if (portEl) {
+            targetPortId = portEl.getAttribute('data-port-id');
+            targetNodeId = portEl.getAttribute('data-node-id');
+        } else {
+            // 2. Proximity check
+            state.nodes.forEach(node => {
+                // Don't snap to self
+                if (node.id === dragWire.startNodeId) return;
+
+                const ports = getPortsForNode(node.id, node.type);
+                ports.forEach(port => {
+                    const isTargetInput = port.type === 'input';
+                    // Cannot connect input to input or output to output
+                    if (dragWire.isInput === isTargetInput) return;
+
+                    const pos = calculatePortPosition(node, port.id, port.type);
+                    const dist = Math.hypot(pos.x - mouseX, pos.y - mouseY);
+
+                    if (dist < minDistance) {
+                        minDistance = dist;
+                        targetPortId = port.id;
+                        targetNodeId = node.id;
                     }
                 });
-            }
+            });
+        }
+    }
+
+    if (targetPortId && targetNodeId && targetPortId !== dragWire.startPortId) {
+        const isStartInput = dragWire.isInput;
+        const isTargetInput = targetPortId.includes('-in-');
+        
+        if (isStartInput !== isTargetInput && dragWire.startNodeId !== targetNodeId) {
+            dispatchLocal({
+                type: 'CONNECT',
+                payload: {
+                    id: `conn-${Date.now()}`,
+                    sourceNodeId: isStartInput ? targetNodeId : dragWire.startNodeId,
+                    sourcePortId: isStartInput ? targetPortId : dragWire.startPortId,
+                    targetNodeId: isStartInput ? dragWire.startNodeId : targetNodeId,
+                    targetPortId: isStartInput ? dragWire.startPortId : targetPortId
+                }
+            });
         }
     }
 
@@ -1206,12 +1239,14 @@ export default function App() {
                 {syncStatus === 'synced' ? 'Live' : syncStatus === 'saving' ? 'Syncing...' : 'Offline'}
             </span>
         </div>
-        {state.collaborators.length > 0 && (
-             <div className="flex items-center gap-1.5 px-3 py-1 bg-zinc-900/80 border border-zinc-800 rounded-full backdrop-blur-sm">
-                 <Users size={14} className="text-indigo-400" />
-                 <span className="text-[10px] font-bold text-zinc-400">{state.collaborators.length} active</span>
-             </div>
-        )}
+        {/* User Presence Badge */}
+        <div className="flex items-center gap-1.5 px-3 py-1 bg-zinc-900/80 border border-zinc-800 rounded-full backdrop-blur-sm">
+             <Users size={14} className="text-indigo-400" />
+             {/* Show total users online (collaborators + self) */}
+             <span className="text-[10px] font-bold text-zinc-400">
+                 {state.collaborators.length + 1} Online
+             </span>
+        </div>
       </div>
 
       <div className="absolute top-4 right-4 z-50 flex flex-col gap-2 items-end">
