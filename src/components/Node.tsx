@@ -70,6 +70,12 @@ export const Node: React.FC<NodeProps> = ({
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
   const editorRef = useRef<any>(null);
   
+  // Track data in ref to avoid stale closures in callbacks (like Editor onDidContentSizeChange)
+  const nodeDataRef = useRef(data);
+  useEffect(() => {
+      nodeDataRef.current = data;
+  }, [data]);
+
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -172,11 +178,6 @@ export const Node: React.FC<NodeProps> = ({
       const newWidth = Math.max(250, initialSizeRef.current.width + dx);
       let newHeight = Math.max(150, initialSizeRef.current.height + dy);
 
-      // Lock height for Code nodes as it is controlled by content
-      if (data.type === 'CODE') {
-          newHeight = data.size.height;
-      }
-
       onResize(data.id, {
         width: newWidth,
         height: newHeight,
@@ -273,13 +274,19 @@ export const Node: React.FC<NodeProps> = ({
       // Auto-Size Logic for Code Nodes
       if (data.type === 'CODE') {
           editor.onDidContentSizeChange((e: any) => {
-              const HEADER_HEIGHT = 40;
-              const MIN_HEIGHT = 150;
-              // +5 padding to avoid internal scrollbar flashing
-              const targetHeight = Math.max(MIN_HEIGHT, e.contentHeight + HEADER_HEIGHT + 5); 
+              // Use Ref to get the latest data state without closure staleness
+              const currentNode = nodeDataRef.current;
               
-              if (Math.abs(targetHeight - data.size.height) > 3) {
-                  onResize(data.id, { width: data.size.width, height: targetHeight });
+              // Only auto-resize if enabled (defaults to true until manually resized)
+              if (currentNode.autoHeight) {
+                  const HEADER_HEIGHT = 40;
+                  const MIN_HEIGHT = 150;
+                  const targetHeight = Math.max(MIN_HEIGHT, e.contentHeight + HEADER_HEIGHT + 5); 
+                  
+                  // Use width from ref to avoid snapping back if width changed
+                  if (Math.abs(targetHeight - currentNode.size.height) > 3) {
+                      onResize(currentNode.id, { width: currentNode.size.width, height: targetHeight });
+                  }
               }
           });
       }
@@ -562,7 +569,6 @@ export const Node: React.FC<NodeProps> = ({
 
       {/* Content Area */}
       <div className={`flex-1 relative group nodrag flex flex-col min-h-0 overflow-hidden ${data.isLoading ? 'pointer-events-none opacity-80' : ''}`}>
-        {/* ... (Existing CODE, IMAGE, NPM, AI_CHAT cases remain the same) ... */}
         {data.type === 'CODE' ? (
             <div className="w-full h-full bg-[#1e1e1e]" onPointerDown={(e) => e.stopPropagation()}>
                  <Editor
@@ -585,8 +591,9 @@ export const Node: React.FC<NodeProps> = ({
                         padding: { top: 10, bottom: 10 },
                         readOnly: data.isLoading,
                         scrollbar: {
-                            vertical: 'hidden',
-                            handleMouseWheel: false,
+                            vertical: 'auto',
+                            horizontal: 'auto',
+                            handleMouseWheel: true,
                         },
                         overviewRulerLanes: 0,
                         hideCursorInOverviewRuler: true,
@@ -836,7 +843,7 @@ export const Node: React.FC<NodeProps> = ({
         })}
       </div>
       <div 
-        className={`absolute bottom-0 right-0 w-4 h-4 flex items-center justify-center opacity-50 hover:opacity-100 nodrag z-20 ${data.type === 'CODE' ? 'cursor-ew-resize' : 'cursor-se-resize'}`}
+        className={`absolute bottom-0 right-0 w-4 h-4 flex items-center justify-center opacity-50 hover:opacity-100 nodrag z-20 cursor-se-resize`}
         onPointerDown={handleResizePointerDown}
       >
         <div className="w-1.5 h-1.5 bg-zinc-500 rounded-full" />
