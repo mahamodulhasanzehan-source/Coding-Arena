@@ -7,7 +7,7 @@ import { Sidebar } from './components/Sidebar';
 import { CollaboratorCursor } from './components/CollaboratorCursor';
 import { GraphState, Action, NodeData, NodeType, LogEntry, UserPresence } from './types';
 import { NODE_DEFAULTS, getPortsForNode } from './constants';
-import { compilePreview, calculatePortPosition, getRelatedNodes } from './utils/graphUtils';
+import { compilePreview, calculatePortPosition, getRelatedNodes, getAllConnectedSources, getConnectedSource } from './utils/graphUtils';
 import { Trash2, Menu, Cloud, CloudOff, UploadCloud, Users } from 'lucide-react';
 import Prism from 'prismjs';
 import { GoogleGenAI, FunctionDeclaration, Type } from "@google/genai";
@@ -795,6 +795,36 @@ export default function App() {
       }
   };
 
+  const handleFixError = async (terminalNodeId: string, errorText: string) => {
+      // 1. Find connected Preview
+      // Terminals receive logs FROM previews (Preview out-logs -> Terminal in-logs)
+      // So we look for connections where target is Terminal and source is Preview
+      const previewNode = getConnectedSource(terminalNodeId, 'logs', state.nodes, state.connections);
+      
+      if (!previewNode) {
+          alert("This terminal isn't connected to a Preview.");
+          return;
+      }
+
+      // 2. Find Code nodes connected to that Preview
+      // Preview in-dom <- Code out-dom
+      const connectedCodeNodes = getAllConnectedSources(previewNode.id, 'dom', state.nodes, state.connections);
+      
+      if (connectedCodeNodes.length === 0) {
+          alert("No code connected to the preview to fix.");
+          return;
+      }
+
+      // 3. Trigger AI Generation on the first code node (to anchor the loading state)
+      // We pass the prompt to fix the error.
+      const anchorNode = connectedCodeNodes[0];
+      const prompt = `Fix the following runtime error: "${errorText}". 
+      
+      Review the connected code files and apply the necessary fix using 'updateFile'.`;
+      
+      handleAiGenerate(anchorNode.id, 'prompt', prompt);
+  };
+
   const handleAiGenerate = async (nodeId: string, action: 'optimize' | 'prompt', promptText?: string) => {
       const node = state.nodes.find(n => n.id === nodeId);
       if (!node || node.type !== 'CODE') return;
@@ -920,32 +950,65 @@ export default function App() {
                       const sourceId = createdNodesMap.get(args.sourceTitle);
                       let targetId = createdNodesMap.get(args.targetTitle);
 
-                      if (sourceId && targetId) {
-                          const isSourceScriptOrStyle = args.sourceTitle.endsWith('.js') || args.sourceTitle.endsWith('.css');
-                          const isTargetPreview = args.targetTitle.toLowerCase().includes('preview');
-
-                          if (isSourceScriptOrStyle && isTargetPreview) {
-                              const htmlNodeEntry = Array.from(createdNodesMap.entries()).find(([title]) => title.endsWith('.html'));
-                              if (htmlNodeEntry) targetId = htmlNodeEntry[1];
-                              else {
-                                  const existingHtml = state.nodes.find(n => n.title.endsWith('.html'));
-                                  if (existingHtml) targetId = existingHtml.id;
-                                  else return;
-                              }
+                      if (sourceId) {
+                          // Try to resolve target by title if ID not found directly
+                          if (!targetId) {
+                              const existingTarget = state.nodes.find(n => n.title === args.targetTitle);
+                              if (existingTarget) targetId = existingTarget.id;
                           }
 
+                          // If target is missing, check if it's a generic "Preview" request
+                          let isGenericPreview = false;
+                          if (!targetId && args.targetTitle.toLowerCase().includes('preview')) {
+                              isGenericPreview = true;
+                              // Try to find ANY preview
+                              const anyPreview = state.nodes.find(n => n.type === 'PREVIEW');
+                              if (anyPreview) targetId = anyPreview.id;
+                          }
+
+                          // --- WIRING FIX: Prefer connecting JS/CSS to HTML instead of Preview directly ---
+                          if (targetId) {
+                              const targetNode = state.nodes.find(n => n.id === targetId) || (isGenericPreview ? { type: 'PREVIEW', id: targetId } as NodeData : null);
+                              const isSourceScriptOrStyle = args.sourceTitle.endsWith('.js') || args.sourceTitle.endsWith('.css');
+                              
+                              if (targetNode && targetNode.type === 'PREVIEW' && isSourceScriptOrStyle) {
+                                  // The AI is trying to wire JS/CSS -> Preview.
+                                  // We should redirect this to JS/CSS -> HTML.
+                                  
+                                  // 1. Check for HTML created in this session
+                                  let htmlId = Array.from(createdNodesMap.entries()).find(([t]) => t.endsWith('.html'))?.[1];
+                                  
+                                  // 2. Check for HTML already connected to this Preview
+                                  if (!htmlId) {
+                                      const connectedHtml = getAllConnectedSources(targetId, 'dom', state.nodes, state.connections).find(n => n.title.endsWith('.html'));
+                                      if (connectedHtml) htmlId = connectedHtml.id;
+                                  }
+
+                                  // 3. Check for ANY HTML
+                                  if (!htmlId) {
+                                      htmlId = state.nodes.find(n => n.title.endsWith('.html'))?.id;
+                                  }
+
+                                  // If we found an HTML node, redirect the target to it
+                                  if (htmlId) {
+                                      targetId = htmlId;
+                                  }
+                              }
+                          }
+                      }
+
+                      if (sourceId && targetId) {
                           let sourcePort = 'out-dom'; 
                           let targetPort = 'in-file'; 
+                          
                           if (args.sourceTitle.endsWith('.html')) sourcePort = 'out-dom';
                           if (args.sourceTitle.endsWith('.js') || args.sourceTitle.endsWith('.css')) sourcePort = 'out-dom'; 
                           
-                          const targetNode = state.nodes.find(n => n.id === targetId) || state.nodes.find(n => n.title === args.targetTitle);
+                          const targetNode = state.nodes.find(n => n.id === targetId);
                           
                           if (targetNode) {
                               if (targetNode.type === 'PREVIEW') targetPort = 'in-dom';
                               else if (targetNode.type === 'CODE') targetPort = 'in-file';
-                          } else if (args.targetTitle.includes('Preview')) {
-                              targetPort = 'in-dom';
                           }
 
                           const fullSourcePortId = `${sourceId}-${sourcePort}`;
@@ -1371,6 +1434,7 @@ export default function App() {
                                 onAiAction={handleAiGenerate}
                                 onCancelAi={handleCancelAi}
                                 onInjectImport={handleInjectImport}
+                                onFixError={handleFixError}
                                 onInteraction={(id, type) => dispatch({ type: 'SET_NODE_INTERACTION', payload: { nodeId: id, type } })}
                                 collaboratorInfo={collabInfo}
                                 logs={logs}

@@ -2,7 +2,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { NodeData, Position, Size } from '../types';
 import { getPortsForNode } from '../constants';
-import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles, X, Image as ImageIcon, Square } from 'lucide-react';
+import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles, X, Image as ImageIcon, Square, Wrench } from 'lucide-react';
 import Editor, { useMonaco } from '@monaco-editor/react';
 
 interface NodeProps {
@@ -24,8 +24,9 @@ interface NodeProps {
   onSendMessage?: (id: string, text: string) => void; // For AI Chat
   onStartContextSelection?: (id: string) => void; // For AI Chat
   onAiAction?: (nodeId: string, action: 'optimize' | 'prompt', prompt?: string) => void;
-  onCancelAi?: (nodeId: string) => void; // New: Cancel AI action
+  onCancelAi?: (nodeId: string) => void; 
   onInjectImport?: (sourceNodeId: string, packageName: string) => void; // For NPM
+  onFixError?: (nodeId: string, error: string) => void; // For Terminal AI Fix
   onInteraction?: (nodeId: string, type: 'drag' | 'edit' | null) => void;
   collaboratorInfo?: { name: string; color: string; action: 'dragging' | 'editing' };
   logs?: any[]; 
@@ -53,6 +54,7 @@ export const Node: React.FC<NodeProps> = ({
   onAiAction,
   onCancelAi,
   onInjectImport,
+  onFixError,
   onInteraction,
   collaboratorInfo,
   logs,
@@ -558,11 +560,9 @@ export const Node: React.FC<NodeProps> = ({
           </div>
       )}
 
-      {/* Content Area - ... (Rest of component same as before) ... */}
-      {/* Shortened for brevity as only header changed, but XML requires full content. 
-          I will include the rest of the component unchanged to ensure it works properly.
-      */}
+      {/* Content Area */}
       <div className={`flex-1 relative group nodrag flex flex-col min-h-0 overflow-hidden ${data.isLoading ? 'pointer-events-none opacity-80' : ''}`}>
+        {/* ... (Existing CODE, IMAGE, NPM, AI_CHAT cases remain the same) ... */}
         {data.type === 'CODE' ? (
             <div className="w-full h-full bg-[#1e1e1e]" onPointerDown={(e) => e.stopPropagation()}>
                  <Editor
@@ -669,18 +669,31 @@ export const Node: React.FC<NodeProps> = ({
                 className="w-full h-full bg-black p-2 font-mono text-xs overflow-y-auto custom-scrollbar select-text nodrag"
                 onPointerDown={(e) => e.stopPropagation()} 
              >
-                {/* ... Terminal Content ... */}
                 {(!logs || logs.length === 0) ? (
                     <span className="text-zinc-600 italic">Waiting for logs...</span>
                 ) : (
                     logs.map((log, i) => (
-                        <div key={i} className={`mb-1 border-b border-zinc-900 pb-0.5 animate-in fade-in slide-in-from-left-1 ${
+                        <div key={i} className={`group flex items-start justify-between mb-1 border-b border-zinc-900 pb-0.5 animate-in fade-in slide-in-from-left-1 ${
                             log.type === 'error' ? 'text-red-400' : 
                             log.type === 'warn' ? 'text-yellow-400' : 
                             'text-zinc-300'
                         }`}>
-                            <span className="text-zinc-600 mr-2">[{new Date(log.timestamp).toLocaleTimeString()}]</span>
-                            {log.message}
+                            <div className="break-all">
+                                <span className="text-zinc-600 mr-2">[{new Date(log.timestamp).toLocaleTimeString()}]</span>
+                                {log.message}
+                            </div>
+                            {/* AI Fix Button for Errors */}
+                            {log.type === 'error' && onFixError && (
+                                <button
+                                    onClick={() => onFixError(data.id, log.message)}
+                                    className="opacity-0 group-hover:opacity-100 p-1 bg-zinc-800 hover:bg-blue-600 text-zinc-400 hover:text-white rounded ml-2 transition-all flex items-center gap-1 shrink-0"
+                                    title="Fix with AI"
+                                    onPointerDown={(e) => e.stopPropagation()}
+                                >
+                                    <Sparkles size={12} />
+                                    <span className="text-[10px] font-bold">Fix</span>
+                                </button>
+                            )}
                         </div>
                     ))
                 )}
