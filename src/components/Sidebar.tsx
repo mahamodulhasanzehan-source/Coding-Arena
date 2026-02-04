@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { NodeData } from '../types';
-import { X, FileCode, Monitor, TerminalSquare, Package } from 'lucide-react';
+import { X, FileCode, Monitor, TerminalSquare, Package, Image as ImageIcon } from 'lucide-react';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -21,6 +21,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, nodes, onNodeClick, on
   const previewNodes = nodes.filter(n => n.type === 'PREVIEW');
   const terminalNodes = nodes.filter(n => n.type === 'TERMINAL');
   const npmNodes = nodes.filter(n => n.type === 'NPM');
+  const imageNodes = nodes.filter(n => n.type === 'IMAGE');
 
   return (
     <div 
@@ -61,6 +62,25 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, nodes, onNodeClick, on
                     </button>
                 ))}
                 {codeNodes.length === 0 && <span className="text-zinc-700 text-xs px-3 py-2 italic">No code modules</span>}
+            </div>
+        </div>
+
+        {/* IMAGE SECTION (Purple) */}
+        <div className="flex-1 flex flex-col border-b border-panelBorder min-h-0">
+            <div className="bg-purple-500/10 border-b border-purple-500/20 px-4 py-2 flex items-center gap-2 text-purple-500 font-medium text-xs uppercase tracking-wider shrink-0">
+                <ImageIcon size={14} /> Images
+            </div>
+            <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+                {imageNodes.map(node => (
+                    <button
+                        key={node.id}
+                        onClick={() => onNodeClick(node.id)}
+                        className="w-full text-left px-3 py-2 rounded text-zinc-400 hover:text-purple-400 hover:bg-purple-500/10 text-sm transition-colors truncate"
+                    >
+                        {node.title}
+                    </button>
+                ))}
+                {imageNodes.length === 0 && <span className="text-zinc-700 text-xs px-3 py-2 italic">No image modules</span>}
             </div>
         </div>
 

@@ -58,6 +58,11 @@ function graphReducer(state: GraphState, action: Action): GraphState {
         ...state,
         nodes: state.nodes.map(n => n.id === action.payload.id ? { ...n, title: action.payload.title } : n)
       };
+    case 'UPDATE_NODE_TYPE':
+        return {
+            ...state,
+            nodes: state.nodes.map(n => n.id === action.payload.id ? { ...n, type: action.payload.type } : n)
+        };
     case 'ADD_MESSAGE':
        return {
            ...state,
@@ -190,8 +195,7 @@ function graphReducer(state: GraphState, action: Action): GraphState {
   }
 }
 
-// ... (Gemini Tool Definitions and Helper Functions - No changes needed here) ...
-// (Omitting strictly for brevity in this response, assuming standard merging)
+// ... (Gemini Tool Definitions and Helper Functions are unchanged) ...
 const updateCodeFunction: FunctionDeclaration = {
     name: 'updateFile',
     description: 'Update the code content of a specific file. Use this for CHAT responses or simple edits.',
@@ -260,7 +264,6 @@ const cleanAiOutput = (text: string): string => {
     return text.trim();
 };
 
-// --- Helper: Find Non-Overlapping Position (Spiral Search) ---
 const findSafePosition = (
     origin: { x: number, y: number }, 
     existingNodes: NodeData[], 
@@ -270,13 +273,10 @@ const findSafePosition = (
     let r = 50; // Start offset
     let angle = 0;
     
-    // Safety break after ~100 attempts
     for (let i = 0; i < 100; i++) {
         const x = origin.x + r * Math.cos(angle);
         const y = origin.y + r * Math.sin(angle);
         
-        // Check collision with all existing nodes
-        // Using a 20px padding
         const collision = existingNodes.some(n => 
             x < n.position.x + n.size.width + 30 &&
             x + width + 30 > n.position.x &&
@@ -286,12 +286,10 @@ const findSafePosition = (
 
         if (!collision) return { x, y };
         
-        // Spiral out
         angle += 1; // ~57 degrees
         r += 10;
     }
     
-    // Fallback
     return { x: origin.x + 50, y: origin.y + 50 };
 };
 
@@ -315,15 +313,12 @@ export default function App() {
   const throttleRef = useRef(0);
   const lastSentStateRef = useRef<Record<string, any>>({});
 
-  // Long Press Logic for Mobile
   const longPressTimer = useRef<any>(null);
   const touchStartPos = useRef<{ x: number, y: number } | null>(null);
 
-  // Cancellation & Request Tracking
   const activeAiOperations = useRef<Record<string, { id: string }>>({});
 
   const dispatchLocal = (action: Action) => {
-      // Mark these actions as needing a sync save
       if ([
           'ADD_NODE', 
           'DELETE_NODE', 
@@ -331,6 +326,7 @@ export default function App() {
           'UPDATE_NODE_SIZE', 
           'UPDATE_NODE_CONTENT', 
           'UPDATE_NODE_TITLE', 
+          'UPDATE_NODE_TYPE', // Tracking type updates too
           'CONNECT', 
           'DISCONNECT',
           'TOGGLE_PREVIEW',
@@ -393,7 +389,6 @@ export default function App() {
             setSyncStatus('error');
         });
 
-        // ... (Presence logic omitted for brevity, identical to previous) ...
         const presenceRef = collection(db, 'nodecode_projects', 'global_project_room', 'presence');
         const unsubscribePresence = onSnapshot(presenceRef, (snapshot: QuerySnapshot<DocumentData>) => {
             const activeUsers: UserPresence[] = [];
@@ -422,8 +417,6 @@ export default function App() {
     init();
   }, [sessionId]);
 
-  // ... (Save Logic, Live Update, Handle Message, etc. - Identical) ...
-  // 2. Debounced Save - Only runs if isLocalChange is true
   useEffect(() => {
     if (!userUid) return;
     
@@ -455,20 +448,17 @@ export default function App() {
     }
   }, [state.nodes, state.connections, state.runningPreviewIds, userUid]); 
 
-  // LIVE UPDATE LOOP & SHARED STATE SYNC
   useEffect(() => {
       state.runningPreviewIds.forEach(previewId => {
           const iframe = document.getElementById(`preview-iframe-${previewId}`) as HTMLIFrameElement;
           const node = state.nodes.find(n => n.id === previewId);
 
           if (iframe && node) {
-               // 1. Compile Code Update
                const compiled = compilePreview(previewId, state.nodes, state.connections, false);
                if (iframe.srcdoc !== compiled) {
                   iframe.srcdoc = compiled;
                }
 
-               // 2. Sync Shared State DOWN to iframe
                const lastSent = lastSentStateRef.current[previewId];
                if (JSON.stringify(node.sharedState) !== JSON.stringify(lastSent)) {
                    if (iframe.contentWindow) {
@@ -514,7 +504,36 @@ export default function App() {
     return () => window.removeEventListener('message', handleMessage);
   }, [state.nodes]);
 
-  // ... (Other handlers unchanged) ...
+  const handleUpdateTitle = (id: string, newTitle: string) => {
+      const node = state.nodes.find(n => n.id === id);
+      if (!node) return;
+
+      const ext = newTitle.split('.').pop()?.toLowerCase();
+      
+      const codeExts = ['html', 'htm', 'js', 'jsx', 'ts', 'tsx', 'css', 'json', 'txt', 'md'];
+      const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'];
+
+      let newType = node.type;
+
+      if (codeExts.includes(ext || '')) {
+          newType = 'CODE';
+      } else if (imageExts.includes(ext || '')) {
+          newType = 'IMAGE';
+      } else if (node.type === 'IMAGE' || node.type === 'CODE') {
+          // If extension exists but is invalid for these types, reject the rename
+          if (newTitle.includes('.') && !codeExts.includes(ext || '') && !imageExts.includes(ext || '')) {
+               alert(`.${ext} is not a supported file type for this module.`);
+               return; 
+          }
+      }
+
+      dispatchLocal({ type: 'UPDATE_NODE_TITLE', payload: { id, title: newTitle } });
+      if (newType !== node.type) {
+          dispatchLocal({ type: 'UPDATE_NODE_TYPE', payload: { id, type: newType } });
+      }
+  };
+
+  // ... (Other Handlers remain similar but using dispatchLocal) ...
   const handleContextMenu = (e: React.MouseEvent, nodeId?: string) => {
     e.preventDefault();
     const node = nodeId ? state.nodes.find(n => n.id === nodeId) : undefined;
@@ -567,13 +586,12 @@ export default function App() {
       content: defaults.content,
       position: { x, y },
       size: { width: defaults.width, height: defaults.height },
-      autoHeight: type === 'CODE' ? true : undefined, // Default to true, disabled on resize
+      autoHeight: type === 'CODE' ? true : undefined, 
     };
     dispatchLocal({ type: 'ADD_NODE', payload: newNode });
     setContextMenu(null);
   };
 
-  // ... (Rest of component unchanged) ...
   const handleClearImage = (id: string) => {
       dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id, content: '' } });
       setContextMenu(null);
@@ -636,7 +654,6 @@ export default function App() {
       }
   };
 
-  // ... (AI Chat Logic & Handlers - identical) ...
   const handleStartContextSelection = (nodeId: string) => {
       const node = state.nodes.find(n => n.id === nodeId);
       dispatch({ 
@@ -774,7 +791,7 @@ export default function App() {
           }
 
       } catch (error: any) {
-          if (error.message === "Cancelled") return; 
+          if (error.message === "Cancelled") return; // Silent exit
 
           let errorMessage = error.message;
           if (error.message.includes('429')) errorMessage = "Rate Limit Exceeded. Please try again later.";
@@ -790,28 +807,20 @@ export default function App() {
 
   const handleFixError = async (terminalNodeId: string, errorText: string) => {
       const previewNode = getConnectedSource(terminalNodeId, 'logs', state.nodes, state.connections);
-      
       if (!previewNode) {
           alert("This terminal isn't connected to a Preview.");
           return;
       }
-
       const connectedCodeNodes = getAllConnectedSources(previewNode.id, 'dom', state.nodes, state.connections);
-      
       if (connectedCodeNodes.length === 0) {
           alert("No code connected to the preview to fix.");
           return;
       }
-
       const anchorNode = connectedCodeNodes[0];
-      const prompt = `Fix the following runtime error: "${errorText}". 
-      
-      Review the connected code files and apply the necessary fix using 'updateFile'.`;
-      
+      const prompt = `Fix the following runtime error: "${errorText}". \n\nReview the connected code files and apply the necessary fix using 'updateFile'.`;
       handleAiGenerate(anchorNode.id, 'prompt', prompt);
   };
 
-  // ... (handleAiGenerate and other logic is same as previous, just need to render the App) ...
   const handleAiGenerate = async (nodeId: string, action: 'optimize' | 'prompt', promptText?: string) => {
       const node = state.nodes.find(n => n.id === nodeId);
       if (!node || node.type !== 'CODE') return;
@@ -867,15 +876,12 @@ export default function App() {
               ${connectedCodeNodes.map(n => n.title).join(', ')}
 
               Capabilities:
-              1. **updateFile(filename, code)**: Use this to update ANY file in the connected graph. 
-                 - CRITICAL: If the user asks for a change that affects multiple files (e.g. "change button color" affects CSS, "add button click" affects JS), you MUST call updateFile for EACH file that needs changing.
-                 - CRITICAL: PREFER updating existing files over creating new ones if a file with a similar purpose exists.
-              2. **createFile(filename, content)**: Use this ONLY if the user asks for a completely NEW feature that requires a NEW file (e.g., "add a login page" -> create login.html).
+              1. **updateFile(filename, code)**: Use this to update ANY file in the connected graph.
+              2. **createFile(filename, content)**: Use this ONLY if the user asks for a completely NEW feature that requires a NEW file.
               3. **connectNodes(sourceTitle, targetTitle)**: Use this to wire files together. 
                  
               Guidelines:
               - Always write complete, working code.
-              - Do not duplicate files. If 'style.css' exists and user asks to change style, update 'style.css'.
               `;
               
               userPrompt = `Project Context:\n${projectContext}\n\nUser Request regarding "${node.title}": ${promptText}`;
@@ -936,30 +942,22 @@ export default function App() {
                               const existingTarget = state.nodes.find(n => n.title === args.targetTitle);
                               if (existingTarget) targetId = existingTarget.id;
                           }
-
-                          let isGenericPreview = false;
+                          // Generic Preview check
                           if (!targetId && args.targetTitle.toLowerCase().includes('preview')) {
-                              isGenericPreview = true;
                               const anyPreview = state.nodes.find(n => n.type === 'PREVIEW');
                               if (anyPreview) targetId = anyPreview.id;
                           }
-
+                          
+                          // Fix for JS/CSS -> Preview connection
                           if (targetId) {
-                              const targetNode = state.nodes.find(n => n.id === targetId) || (isGenericPreview ? { type: 'PREVIEW', id: targetId } as NodeData : null);
+                              const targetNode = state.nodes.find(n => n.id === targetId);
                               const isSourceScriptOrStyle = args.sourceTitle.endsWith('.js') || args.sourceTitle.endsWith('.css');
-                              
                               if (targetNode && targetNode.type === 'PREVIEW' && isSourceScriptOrStyle) {
                                   let htmlId = Array.from(createdNodesMap.entries()).find(([t]) => t.endsWith('.html'))?.[1];
                                   if (!htmlId) {
-                                      const connectedHtml = getAllConnectedSources(targetId, 'dom', state.nodes, state.connections).find(n => n.title.endsWith('.html'));
-                                      if (connectedHtml) htmlId = connectedHtml.id;
-                                  }
-                                  if (!htmlId) {
                                       htmlId = state.nodes.find(n => n.title.endsWith('.html'))?.id;
                                   }
-                                  if (htmlId) {
-                                      targetId = htmlId;
-                                  }
+                                  if (htmlId) targetId = htmlId;
                               }
                           }
                       }
@@ -977,17 +975,14 @@ export default function App() {
                               else if (targetNode.type === 'CODE') targetPort = 'in-file';
                           }
 
-                          const fullSourcePortId = `${sourceId}-${sourcePort}`;
-                          const fullTargetPortId = `${targetId}-${targetPort}`;
-
                           dispatchLocal({
                               type: 'CONNECT',
                               payload: {
                                   id: `conn-${Date.now()}-${Math.random()}`,
                                   sourceNodeId: sourceId,
-                                  sourcePortId: fullSourcePortId,
+                                  sourcePortId: `${sourceId}-${sourcePort}`,
                                   targetNodeId: targetId,
-                                  targetPortId: fullTargetPortId
+                                  targetPortId: `${targetId}-${targetPort}`
                               }
                           });
                       }
@@ -1151,6 +1146,7 @@ export default function App() {
       if (e.touches.length === 1) {
           const touch = e.touches[0];
           const target = e.target as HTMLElement;
+          
           const isNode = target.closest('[data-node-id]');
           const isPort = target.closest('[data-port-id]');
           
@@ -1236,7 +1232,6 @@ export default function App() {
     });
   }, [state.nodes, state.collaborators, sessionId]);
 
-  // ... (Return render identical to last turn) ...
   return (
     <div 
       className="w-screen h-screen bg-canvas overflow-hidden flex flex-col text-zinc-100 font-sans select-none touch-none"
@@ -1379,7 +1374,7 @@ export default function App() {
                                 onRefresh={handleRefresh}
                                 onPortDown={handlePortDown}
                                 onPortContextMenu={handlePortContextMenu}
-                                onUpdateTitle={(id, title) => dispatchLocal({ type: 'UPDATE_NODE_TITLE', payload: { id, title } })}
+                                onUpdateTitle={handleUpdateTitle}
                                 onUpdateContent={(id, content) => dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id, content } })}
                                 onSendMessage={handleSendMessage}
                                 onStartContextSelection={handleStartContextSelection}

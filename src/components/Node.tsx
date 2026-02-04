@@ -368,7 +368,10 @@ export const Node: React.FC<NodeProps> = ({
                   
                   // Compress
                   const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+                  
+                  // Update Content AND Title
                   onUpdateContent(data.id, dataUrl);
+                  onUpdateTitle(data.id, file.name); // Updates title with extension
               };
               if (typeof event.target?.result === 'string') {
                   img.src = event.target.result;

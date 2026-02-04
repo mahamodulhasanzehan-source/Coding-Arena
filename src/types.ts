@@ -87,6 +87,7 @@ export type Action =
   | { type: 'UPDATE_NODE_SIZE'; payload: { id: string; size: Size } }
   | { type: 'UPDATE_NODE_CONTENT'; payload: { id: string; content: string } }
   | { type: 'UPDATE_NODE_TITLE'; payload: { id: string; title: string } }
+  | { type: 'UPDATE_NODE_TYPE'; payload: { id: string; type: NodeType } }
   | { type: 'ADD_MESSAGE'; payload: { id: string; message: ChatMessage } }
   | { type: 'UPDATE_LAST_MESSAGE'; payload: { id: string; text: string } }
   | { type: 'SET_NODE_LOADING'; payload: { id: string; isLoading: boolean } }
