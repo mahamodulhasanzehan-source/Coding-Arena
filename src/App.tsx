@@ -7,8 +7,6 @@ import { GraphState, Action, NodeData, NodeType, LogEntry, ChatMessage } from '.
 import { NODE_DEFAULTS } from './constants';
 import { compilePreview, calculatePortPosition } from './utils/graphUtils';
 import { Trash2, Menu, Cloud, CloudOff, CloudUpload } from 'lucide-react';
-import Editor from 'react-simple-code-editor';
-import Prism from 'prismjs';
 import { GoogleGenAI, FunctionDeclaration, Type, GenerateContentResponse } from "@google/genai";
 import { signIn, db } from './firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
@@ -152,29 +150,6 @@ function graphReducer(state: GraphState, action: Action): GraphState {
   }
 }
 
-const getHighlightLanguage = (filename: string) => {
-    // STRICT EXTENSION CHECKING
-    const ext = filename.split('.').pop()?.toLowerCase();
-    
-    // If there is no extension (e.g. "index"), treat as plain text
-    if (!filename.includes('.')) {
-        return Prism.languages.plain;
-    }
-    
-    if (ext === 'css') {
-        return Prism.languages.css || Prism.languages.plain;
-    }
-    if (['js', 'jsx', 'ts', 'tsx'].includes(ext || '')) {
-        return Prism.languages.javascript || Prism.languages.plain;
-    }
-    if (['html', 'xml', 'svg'].includes(ext || '')) {
-        return Prism.languages.markup || Prism.languages.plain;
-    }
-    
-    // Unknown extensions -> Plain Text
-    return Prism.languages.plain;
-};
-
 // --- Gemini Tool Definition ---
 const updateCodeFunction: FunctionDeclaration = {
     name: 'updateFile',
@@ -238,8 +213,8 @@ export default function App() {
              // Load defaults if no cloud save exists
              const codeDefaults = NODE_DEFAULTS.CODE;
              const previewDefaults = NODE_DEFAULTS.PREVIEW;
-             dispatch({ type: 'ADD_NODE', payload: { id: 'node-1', type: 'CODE', position: { x: 100, y: 100 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'index.html', content: '<h1>Hello World</h1>\n<link href="style.css" rel="stylesheet">\n<script src="app.js"></script>', autoHeight: true } });
-             dispatch({ type: 'ADD_NODE', payload: { id: 'node-2', type: 'CODE', position: { x: 100, y: 300 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'style.css', content: 'body { background: #222; color: #fff; }', autoHeight: true } });
+             dispatch({ type: 'ADD_NODE', payload: { id: 'node-1', type: 'CODE', position: { x: 100, y: 100 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'index.html', content: '<h1>Hello World</h1>\n<link href="style.css" rel="stylesheet">\n<script src="app.js"></script>', autoHeight: false } });
+             dispatch({ type: 'ADD_NODE', payload: { id: 'node-2', type: 'CODE', position: { x: 100, y: 450 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'style.css', content: 'body { background: #222; color: #fff; font-family: sans-serif; }', autoHeight: false } });
              dispatch({ type: 'ADD_NODE', payload: { id: 'node-3', type: 'PREVIEW', position: { x: 600, y: 100 }, size: { width: previewDefaults.width, height: previewDefaults.height }, title: previewDefaults.title, content: previewDefaults.content } });
         }
         setSyncStatus('synced');
@@ -320,7 +295,7 @@ export default function App() {
   };
 
   const handleWheel = (e: React.WheelEvent) => {
-    if ((e.target as HTMLElement).closest('.custom-scrollbar')) return;
+    if ((e.target as HTMLElement).closest('.custom-scrollbar') || (e.target as HTMLElement).closest('.monaco-editor')) return;
     
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -357,7 +332,7 @@ export default function App() {
       content: defaults.content,
       position: { x, y },
       size: { width: defaults.width, height: defaults.height },
-      autoHeight: type === 'CODE' ? true : undefined,
+      autoHeight: type === 'CODE' ? false : undefined, // Monaco handles scrolling
     };
     dispatch({ type: 'ADD_NODE', payload: newNode });
     setContextMenu(null);
@@ -394,6 +369,36 @@ export default function App() {
           const compiled = compilePreview(id, state.nodes, state.connections, true);
           iframe.srcdoc = compiled;
      }
+  };
+
+  // --- NPM Import Injection ---
+  const handleInjectImport = (sourceNodeId: string, packageName: string) => {
+      // Find connections from this NPM node
+      const connections = state.connections.filter(c => c.sourceNodeId === sourceNodeId);
+      let injectedCount = 0;
+
+      connections.forEach(conn => {
+          const targetNode = state.nodes.find(n => n.id === conn.targetNodeId);
+          if (targetNode && targetNode.type === 'CODE') {
+              // Prepend import
+              const importStatement = `import * as ${packageName.replace(/[^a-zA-Z0-9]/g, '_')} from 'https://esm.sh/${packageName}';\n`;
+              if (!targetNode.content.includes(`https://esm.sh/${packageName}`)) {
+                  dispatch({ 
+                      type: 'UPDATE_NODE_CONTENT', 
+                      payload: { 
+                          id: targetNode.id, 
+                          content: importStatement + targetNode.content 
+                      } 
+                  });
+                  injectedCount++;
+                  handleHighlightNode(targetNode.id);
+              }
+          }
+      });
+
+      if (injectedCount === 0) {
+          alert('Connect this NPM node to a Code node first!');
+      }
   };
 
   // --- AI Chat Logic ---
@@ -505,8 +510,6 @@ export default function App() {
           // Handle Function Calls (Tool Execution)
           let toolOutputText = '';
           if (functionCalls.length > 0) {
-              // For robustness, sometimes the model duplicates tool calls in stream, 
-              // but usually the SDK handles this. We will execute unique calls.
               for (const call of functionCalls) {
                   if (call.name === 'updateFile') {
                       const args = call.args as { filename: string, code: string };
@@ -532,6 +535,67 @@ export default function App() {
       } catch (error: any) {
           console.error(error);
           dispatch({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: `Error: ${error.message}` } } });
+      } finally {
+          dispatch({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } });
+      }
+  };
+
+  // --- Inline Code Generation (Optimize/Prompt) ---
+  const handleAiGenerate = async (nodeId: string, action: 'optimize' | 'prompt', promptText?: string) => {
+      const node = state.nodes.find(n => n.id === nodeId);
+      if (!node || node.type !== 'CODE') return;
+
+      dispatch({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: true } });
+
+      try {
+          const apiKey = process.env.API_KEY; 
+          if (!apiKey) {
+              alert('API Key not found.');
+              dispatch({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } });
+              return;
+          }
+
+          const ai = new GoogleGenAI({ apiKey });
+
+          let systemInstruction = '';
+          let userPrompt = '';
+
+          if (action === 'optimize') {
+              systemInstruction = `You are an expert developer. 
+              Your task is to OPTIMIZE the provided code for performance, readability, and best practices. 
+              RULES:
+              1. Remove pointless or redundant code.
+              2. Do NOT minify the code.
+              3. Do NOT reduce code size just for the sake of it; only remove dead logic.
+              4. Maintain all existing functionality.
+              5. Return ONLY the full optimized code as plain text.`;
+              userPrompt = `Please optimize the following code:\n\n${node.content}`;
+          } else {
+              systemInstruction = `You are an expert developer.
+              Your task is to MODIFY the provided code based on the user's request.
+              RULES:
+              1. Return ONLY the full modified code as plain text.
+              2. Maintain existing functionality unless asked to change it.`;
+              userPrompt = `User Request: ${promptText}\n\nCurrent Code:\n${node.content}`;
+          }
+
+          const response = await ai.models.generateContent({
+              model: 'gemini-3-flash-preview',
+              contents: userPrompt,
+              config: { systemInstruction }
+          });
+
+          const rawText = response.text;
+          
+          if (rawText) {
+              const cleanCode = rawText.replace(/^```[\w]*\n/, '').replace(/\n```$/, '');
+              dispatch({ type: 'UPDATE_NODE_CONTENT', payload: { id: nodeId, content: cleanCode } });
+              handleHighlightNode(nodeId); 
+          }
+
+      } catch (error: any) {
+          console.error("AI Generation Error:", error);
+          alert(`AI Error: ${error.message}`);
       } finally {
           dispatch({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } });
       }
@@ -767,23 +831,13 @@ export default function App() {
                                 onPortDown={handlePortDown}
                                 onPortContextMenu={handlePortContextMenu}
                                 onUpdateTitle={(id, title) => dispatch({ type: 'UPDATE_NODE_TITLE', payload: { id, title } })}
+                                onUpdateContent={(id, content) => dispatch({ type: 'UPDATE_NODE_CONTENT', payload: { id, content } })}
                                 onSendMessage={handleSendMessage}
                                 onStartContextSelection={handleStartContextSelection}
+                                onAiAction={handleAiGenerate}
+                                onInjectImport={handleInjectImport}
                                 logs={logs}
                             >
-                                {(node.type === 'CODE') && (
-                                    <div className="pointer-events-auto cursor-text select-text h-full">
-                                        <Editor
-                                            value={node.content}
-                                            onValueChange={code => dispatch({ type: 'UPDATE_NODE_CONTENT', payload: { id: node.id, content: code } })}
-                                            highlight={code => Prism.highlight(code, getHighlightLanguage(node.title), 'javascript')}
-                                            padding={12}
-                                            style={{ fontFamily: '"JetBrains Mono", monospace', fontSize: 13, lineHeight: '1.5', minHeight: '100%' }}
-                                            className="min-h-full"
-                                            textareaClassName="focus:outline-none whitespace-pre"
-                                        />
-                                    </div>
-                                )}
                             </Node>
                         </div>
                     );

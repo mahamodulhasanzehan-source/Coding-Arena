@@ -1,5 +1,6 @@
 
 import { initializeApp } from "firebase/app";
+// @ts-ignore
 import { getAuth, signInAnonymously } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 

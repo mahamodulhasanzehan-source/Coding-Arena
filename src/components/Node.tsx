@@ -1,7 +1,9 @@
-import React, { useRef, useEffect, useState } from 'react';
-import { NodeData, Port, Position, Size } from '../types';
+
+import React, { useRef, useEffect, useState, useCallback } from 'react';
+import { NodeData, Position, Size } from '../types';
 import { getPortsForNode } from '../constants';
-import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2 } from 'lucide-react';
+import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles } from 'lucide-react';
+import Editor, { useMonaco } from '@monaco-editor/react';
 
 interface NodeProps {
   data: NodeData;
@@ -18,8 +20,11 @@ interface NodeProps {
   onPortDown: (e: React.PointerEvent, portId: string, nodeId: string, isInput: boolean) => void;
   onPortContextMenu: (e: React.MouseEvent, portId: string) => void;
   onUpdateTitle: (id: string, title: string) => void;
+  onUpdateContent?: (id: string, content: string) => void;
   onSendMessage?: (id: string, text: string) => void; // For AI Chat
   onStartContextSelection?: (id: string) => void; // For AI Chat
+  onAiAction?: (nodeId: string, action: 'optimize' | 'prompt', prompt?: string) => void;
+  onInjectImport?: (sourceNodeId: string, packageName: string) => void; // For NPM
   logs?: any[]; 
   children?: React.ReactNode;
 }
@@ -39,8 +44,11 @@ export const Node: React.FC<NodeProps> = ({
   onPortDown,
   onPortContextMenu,
   onUpdateTitle,
+  onUpdateContent,
   onSendMessage,
   onStartContextSelection,
+  onAiAction,
+  onInjectImport,
   logs,
   children
 }) => {
@@ -51,12 +59,25 @@ export const Node: React.FC<NodeProps> = ({
   const nodeRef = useRef<HTMLDivElement>(null);
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
+  const promptInputRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<any>(null);
+  const monaco = useMonaco();
   
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [tempTitle, setTempTitle] = useState(data.title);
   const [chatInput, setChatInput] = useState('');
+  
+  // AI Menu States
+  const [isAiMenuOpen, setIsAiMenuOpen] = useState(false);
+  const [isPromptOpen, setIsPromptOpen] = useState(false);
+  const [promptText, setPromptText] = useState('');
+
+  // NPM States
+  const [npmQuery, setNpmQuery] = useState(data.type === 'NPM' ? data.content : '');
+  const [npmResults, setNpmResults] = useState<any[]>([]);
+  const [isSearchingNpm, setIsSearchingNpm] = useState(false);
 
   const dragStartRef = useRef<{ x: number, y: number } | null>(null);
   const initialPosRef = useRef<Position>({ x: 0, y: 0 });
@@ -77,6 +98,22 @@ export const Node: React.FC<NodeProps> = ({
       }
   }, [data.messages, data.type, data.isLoading]);
 
+  useEffect(() => {
+    if (isPromptOpen && promptInputRef.current) {
+        promptInputRef.current.focus();
+    }
+  }, [isPromptOpen]);
+
+  // Handle NPM Search Debounce/Content Update
+  useEffect(() => {
+      if (data.type === 'NPM') {
+          // If content changes externally (loading state), sync query
+          if (data.content !== npmQuery) {
+              setNpmQuery(data.content);
+          }
+      }
+  }, [data.content, data.type]);
+
   const handlePointerDown = (e: React.PointerEvent) => {
     // Check if the target is part of a nodrag element (inputs, buttons, editors)
     if ((e.target as HTMLElement).closest('.nodrag')) {
@@ -88,6 +125,10 @@ export const Node: React.FC<NodeProps> = ({
     setIsDragging(true);
     dragStartRef.current = { x: e.clientX, y: e.clientY };
     initialPosRef.current = { ...data.position };
+
+    // Close menus
+    setIsAiMenuOpen(false);
+    if (!isPromptOpen) setIsPromptOpen(false);
   };
 
   const handleResizePointerDown = (e: React.PointerEvent) => {
@@ -115,7 +156,7 @@ export const Node: React.FC<NodeProps> = ({
       const dy = (e.clientY - dragStartRef.current.y) / scale;
       onResize(data.id, {
         width: Math.max(250, initialSizeRef.current.width + dx),
-        height: Math.max(100, initialSizeRef.current.height + dy),
+        height: Math.max(150, initialSizeRef.current.height + dy),
       });
     }
   };
@@ -153,10 +194,88 @@ export const Node: React.FC<NodeProps> = ({
       }
   };
 
-  const lineCount = data.content.split('\n').length;
-  const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1).join('\n');
-  const isCode = data.type === 'CODE';
-  const isAutoHeight = isCode && (data.autoHeight !== false);
+  // AI Actions
+  const handleAiMenuToggle = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      setIsAiMenuOpen(!isAiMenuOpen);
+      setIsPromptOpen(false);
+  };
+
+  const handleOptimize = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      setIsAiMenuOpen(false);
+      onAiAction?.(data.id, 'optimize');
+  };
+
+  const handlePromptMode = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      setIsAiMenuOpen(false);
+      setIsPromptOpen(true);
+      setPromptText('');
+  };
+
+  const submitPrompt = () => {
+      if (promptText.trim()) {
+          onAiAction?.(data.id, 'prompt', promptText);
+          setIsPromptOpen(false);
+          setPromptText('');
+      }
+  };
+
+  const handlePromptKeyDown = (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          submitPrompt();
+      }
+      if (e.key === 'Escape') {
+          setIsPromptOpen(false);
+      }
+  };
+
+  // Editor Actions
+  const handleFormatCode = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (editorRef.current) {
+          editorRef.current.getAction('editor.action.formatDocument').run();
+      }
+  };
+
+  const handleEditorMount = (editor: any) => {
+      editorRef.current = editor;
+  };
+
+  const getLanguage = (filename: string) => {
+      if (filename.endsWith('.css')) return 'css';
+      if (filename.endsWith('.html')) return 'html';
+      if (filename.endsWith('.json')) return 'json';
+      return 'javascript';
+  };
+
+  // NPM Logic
+  const searchNpm = async () => {
+      if (!npmQuery.trim()) return;
+      setIsSearchingNpm(true);
+      if (onUpdateContent) onUpdateContent(data.id, npmQuery); // Persist query
+      try {
+          const res = await fetch(`https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(npmQuery)}&size=5`);
+          const json = await res.json();
+          setNpmResults(json.objects || []);
+      } catch (e) {
+          console.error(e);
+      } finally {
+          setIsSearchingNpm(false);
+      }
+  };
+
+  const handleNpmSearchKeyDown = (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter') searchNpm();
+  };
+
+  const handleInjectPackage = (pkgName: string) => {
+      if (onInjectImport) {
+          onInjectImport(data.id, pkgName);
+      }
+  };
 
   // Highlight Styles
   const highlightStyle = isHighlighted
@@ -170,8 +289,7 @@ export const Node: React.FC<NodeProps> = ({
       style={{
         transform: `translate(${data.position.x}px, ${data.position.y}px)`,
         width: data.size.width,
-        height: isAutoHeight ? 'auto' : data.size.height,
-        minHeight: isCode ? 150 : data.size.height,
+        height: data.size.height,
         transitionProperty: 'box-shadow, border-color', 
         transitionDuration: isHighlighted ? '0s' : '1s',
         transitionTimingFunction: 'ease-out'
@@ -182,9 +300,9 @@ export const Node: React.FC<NodeProps> = ({
       onContextMenu={(e) => e.preventDefault()}
     >
       {/* Header */}
-      <div className="h-10 flex items-center justify-between px-3 border-b border-panelBorder bg-zinc-900/50 rounded-t-lg select-none shrink-0">
-        <div className="flex items-center gap-2 text-zinc-400 font-medium text-sm flex-1">
-          <GripVertical size={14} className="opacity-50" />
+      <div className="h-10 flex items-center justify-between px-3 border-b border-panelBorder bg-zinc-900/50 rounded-t-lg select-none shrink-0 relative">
+        <div className="flex items-center gap-2 text-zinc-400 font-medium text-sm flex-1 min-w-0">
+          <GripVertical size={14} className="opacity-50 shrink-0" />
           {isEditingTitle ? (
             <input 
               type="text" 
@@ -197,22 +315,58 @@ export const Node: React.FC<NodeProps> = ({
               autoFocus
             />
           ) : (
-             <div className="flex items-center gap-2 group/title">
+             <div className="flex items-center gap-2 group/title truncate">
                 {data.type === 'AI_CHAT' && <Bot size={14} className="text-indigo-400" />}
-                <span>{data.title}</span>
+                {data.type === 'NPM' && <Package size={14} className="text-red-500" />}
+                <span className="truncate">{data.title}</span>
                 <button 
                     onClick={(e) => { e.stopPropagation(); setIsEditingTitle(true); }}
                     onPointerDown={(e) => e.stopPropagation()}
-                    className="opacity-0 group-hover/title:opacity-100 p-1 hover:bg-zinc-800 rounded text-zinc-500 hover:text-zinc-300 transition-all nodrag"
+                    className="opacity-0 group-hover/title:opacity-100 p-1 hover:bg-zinc-800 rounded text-zinc-500 hover:text-zinc-300 transition-all nodrag shrink-0"
                 >
                     <Pencil size={12} />
                 </button>
              </div>
           )}
         </div>
-        <div className="flex items-center gap-1">
-          {/* Only show Run/Stop button for PREVIEW nodes */}
-          {data.type === 'PREVIEW' && (
+        
+        <div className="flex items-center gap-1 shrink-0">
+           {/* Code Node Actions */}
+           {data.type === 'CODE' && (
+              <div className="flex items-center gap-1">
+                 <button
+                    onClick={handleFormatCode}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className="nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 text-zinc-400 hover:text-white hover:bg-zinc-800"
+                    title="Format Code"
+                 >
+                     <Wand2 size={14} />
+                 </button>
+
+                 <div className="relative">
+                     <button
+                        onClick={handleAiMenuToggle}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        className={`nodrag p-1.5 rounded transition-all cursor-pointer relative z-10 flex items-center gap-1 ${
+                            isAiMenuOpen || isPromptOpen || data.isLoading ? 'bg-blue-500/20 text-blue-400' : 'text-zinc-400 hover:text-blue-400 hover:bg-zinc-800'
+                        }`}
+                        title="AI Assistant"
+                        disabled={data.isLoading}
+                     >
+                        {data.isLoading ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} fill={isAiMenuOpen ? "currentColor" : "none"} />}
+                     </button>
+                     {isAiMenuOpen && (
+                         <div className="absolute top-full right-0 mt-1 w-32 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-100 flex flex-col nodrag">
+                             <button onClick={handleOptimize} className="text-left px-3 py-2 text-xs text-zinc-300 hover:bg-blue-600 hover:text-white transition-colors">Optimize</button>
+                             <button onClick={handlePromptMode} className="text-left px-3 py-2 text-xs text-zinc-300 hover:bg-blue-600 hover:text-white transition-colors">Prompt...</button>
+                         </div>
+                     )}
+                 </div>
+              </div>
+           )}
+
+           {/* Preview Actions */}
+           {data.type === 'PREVIEW' && (
              <div className="flex items-center gap-1">
                <button 
                   onClick={handleRefreshClick}
@@ -237,39 +391,125 @@ export const Node: React.FC<NodeProps> = ({
         </div>
       </div>
 
-      {/* Content Area */}
-      <div className={`flex-1 relative group nodrag flex flex-col min-h-0 ${isAutoHeight ? 'overflow-visible' : 'overflow-hidden'}`}>
-        {data.type === 'PREVIEW' || data.type === 'TERMINAL' ? (
-             data.type === 'TERMINAL' ? (
-                 <div 
-                    ref={terminalContainerRef}
-                    className="w-full h-full bg-black p-2 font-mono text-xs overflow-y-auto custom-scrollbar select-text nodrag"
-                    onPointerDown={(e) => e.stopPropagation()} 
-                 >
-                    {(!logs || logs.length === 0) ? (
-                        <span className="text-zinc-600 italic">Waiting for logs...</span>
-                    ) : (
-                        logs.map((log, i) => (
-                            <div key={i} className={`mb-1 border-b border-zinc-900 pb-0.5 animate-in fade-in slide-in-from-left-1 ${
-                                log.type === 'error' ? 'text-red-400' : 
-                                log.type === 'warn' ? 'text-yellow-400' : 
-                                'text-zinc-300'
-                            }`}>
-                                <span className="text-zinc-600 mr-2">[{new Date(log.timestamp).toLocaleTimeString()}]</span>
-                                {log.message}
-                            </div>
-                        ))
-                    )}
-                 </div>
-             ) : (
-                 <iframe
-                    id={`preview-iframe-${data.id}`}
-                    title="preview"
-                    className="w-full h-full bg-white nodrag"
-                    sandbox="allow-scripts allow-same-origin allow-modals"
+       {/* Floating Prompt Input */}
+       {isPromptOpen && (
+          <div className="px-2 pt-2 pb-1 bg-zinc-900/90 backdrop-blur border-b border-panelBorder animate-in slide-in-from-top-2 duration-200 z-30 nodrag">
+              <div className="relative">
+                  <textarea
+                    ref={promptInputRef}
+                    value={promptText}
+                    onChange={(e) => setPromptText(e.target.value)}
+                    onKeyDown={handlePromptKeyDown}
+                    placeholder="Type instructions... (Shift+Enter for new line)"
+                    className="w-full bg-zinc-950 border border-blue-500/30 rounded-md p-2 text-xs text-zinc-200 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none custom-scrollbar"
+                    style={{ minHeight: '60px' }}
                     onPointerDown={(e) => e.stopPropagation()}
-                />
-             )
+                  />
+                  <button 
+                    onClick={submitPrompt}
+                    className="absolute bottom-2 right-2 p-1 bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors"
+                    title="Generate"
+                  >
+                      <ArrowRight size={12} />
+                  </button>
+              </div>
+          </div>
+      )}
+
+      {/* Content Area */}
+      <div className={`flex-1 relative group nodrag flex flex-col min-h-0 overflow-hidden`}>
+        {data.type === 'CODE' ? (
+            <div className="w-full h-full bg-[#1e1e1e]" onPointerDown={(e) => e.stopPropagation()}>
+                 <Editor
+                    height="100%"
+                    defaultLanguage={getLanguage(data.title)}
+                    language={getLanguage(data.title)}
+                    value={data.content}
+                    theme="vs-dark"
+                    onChange={(value) => onUpdateContent?.(data.id, value || '')}
+                    onMount={handleEditorMount}
+                    options={{
+                        minimap: { enabled: true, scale: 0.5 },
+                        fontSize: 13,
+                        fontFamily: '"JetBrains Mono", monospace',
+                        lineNumbers: 'on',
+                        scrollBeyondLastLine: false,
+                        automaticLayout: true,
+                        tabSize: 2,
+                        wordWrap: 'on',
+                        padding: { top: 10, bottom: 10 },
+                    }}
+                 />
+            </div>
+        ) : data.type === 'NPM' ? (
+             <div className="flex flex-col h-full bg-zinc-900/50">
+                 <div className="p-3 border-b border-panelBorder flex gap-2">
+                     <div className="relative flex-1">
+                        <Search size={14} className="absolute left-2.5 top-2.5 text-zinc-500" />
+                        <input 
+                            type="text" 
+                            className="w-full bg-zinc-950 border border-zinc-700 rounded pl-8 pr-2 py-2 text-xs text-white focus:outline-none focus:border-red-500"
+                            placeholder="Search npm..."
+                            value={npmQuery}
+                            onChange={(e) => setNpmQuery(e.target.value)}
+                            onKeyDown={handleNpmSearchKeyDown}
+                            onPointerDown={(e) => e.stopPropagation()}
+                        />
+                     </div>
+                     <button 
+                        onClick={searchNpm} 
+                        className="bg-red-600 hover:bg-red-500 text-white p-2 rounded transition-colors"
+                        disabled={isSearchingNpm}
+                        onPointerDown={(e) => e.stopPropagation()}
+                     >
+                         {isSearchingNpm ? <Loader2 size={14} className="animate-spin" /> : <ArrowRight size={14} />}
+                     </button>
+                 </div>
+                 <div className="flex-1 overflow-y-auto p-2 space-y-2 custom-scrollbar">
+                     {npmResults.map((pkg: any) => (
+                         <div key={pkg.package.name} className="bg-zinc-800 p-2 rounded border border-zinc-700 hover:border-zinc-500 transition-colors flex justify-between items-start group">
+                             <div>
+                                 <div className="font-bold text-zinc-200 text-xs">{pkg.package.name}</div>
+                                 <div className="text-[10px] text-zinc-500 truncate max-w-[160px]">{pkg.package.description}</div>
+                             </div>
+                             <button 
+                                onClick={() => handleInjectPackage(pkg.package.name)}
+                                className="p-1.5 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded transition-colors"
+                                title="Inject Import into connected Code"
+                                onPointerDown={(e) => e.stopPropagation()}
+                             >
+                                 <Download size={14} />
+                             </button>
+                         </div>
+                     ))}
+                     {npmResults.length === 0 && !isSearchingNpm && (
+                         <div className="text-center text-zinc-600 text-xs mt-10 italic">
+                             Search for packages to add imports.
+                         </div>
+                     )}
+                 </div>
+             </div>
+        ) : data.type === 'TERMINAL' ? (
+             <div 
+                ref={terminalContainerRef}
+                className="w-full h-full bg-black p-2 font-mono text-xs overflow-y-auto custom-scrollbar select-text nodrag"
+                onPointerDown={(e) => e.stopPropagation()} 
+             >
+                {(!logs || logs.length === 0) ? (
+                    <span className="text-zinc-600 italic">Waiting for logs...</span>
+                ) : (
+                    logs.map((log, i) => (
+                        <div key={i} className={`mb-1 border-b border-zinc-900 pb-0.5 animate-in fade-in slide-in-from-left-1 ${
+                            log.type === 'error' ? 'text-red-400' : 
+                            log.type === 'warn' ? 'text-yellow-400' : 
+                            'text-zinc-300'
+                        }`}>
+                            <span className="text-zinc-600 mr-2">[{new Date(log.timestamp).toLocaleTimeString()}]</span>
+                            {log.message}
+                        </div>
+                    ))
+                )}
+             </div>
         ) : data.type === 'AI_CHAT' ? (
              <div className="flex flex-col h-full bg-zinc-950">
                  {/* Chat History */}
@@ -314,7 +554,6 @@ export const Node: React.FC<NodeProps> = ({
                  
                  {/* Input Area */}
                  <div className="p-2 border-t border-zinc-800 bg-zinc-900/50">
-                     {/* Context Chips */}
                      {(data.contextNodeIds?.length || 0) > 0 && (
                          <div className="flex flex-wrap gap-1 mb-2 px-1">
                              {data.contextNodeIds!.map(nodeId => (
@@ -360,26 +599,13 @@ export const Node: React.FC<NodeProps> = ({
                  </div>
              </div>
         ) : (
-            <div 
-                className={`w-full bg-[#0f0f11] flex rounded-b-lg nodrag ${isAutoHeight ? '' : 'h-full overflow-auto custom-scrollbar'}`}
+             <iframe
+                id={`preview-iframe-${data.id}`}
+                title="preview"
+                className="w-full h-full bg-white nodrag"
+                sandbox="allow-scripts allow-same-origin allow-modals"
                 onPointerDown={(e) => e.stopPropagation()}
-            >
-               <div 
-                  className="bg-[#0f0f11] text-zinc-600 text-right pr-3 pl-2 select-none border-r border-zinc-800 shrink-0 sticky left-0 z-10 min-h-full h-full"
-                  style={{ 
-                    fontFamily: '"JetBrains Mono", monospace', 
-                    fontSize: 13,
-                    lineHeight: '1.5',
-                    paddingTop: 12,
-                    paddingBottom: 12,
-                  }}
-               >
-                 <pre className="m-0 font-inherit">{lineNumbers}</pre>
-               </div>
-               <div className="flex-1 min-w-0 bg-[#0f0f11] cursor-text">
-                  {React.Children.map(children, child => child)}
-               </div>
-            </div>
+            />
         )}
       </div>
 
