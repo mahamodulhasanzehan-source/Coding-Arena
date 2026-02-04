@@ -1,27 +1,31 @@
 
 import React from 'react';
-import { Code2, Monitor, TerminalSquare, Trash2, Copy, Unplug, Package } from 'lucide-react';
+import { Code2, Monitor, TerminalSquare, Trash2, Copy, Unplug, Package, Image as ImageIcon, Eraser } from 'lucide-react';
 import { NodeType, Position } from '../types';
 
 interface ContextMenuProps {
   position: Position;
   targetNodeId?: string;
-  targetPortId?: string; // New: Supports port actions
+  targetNode?: any; // To check if it's an image node
+  targetPortId?: string; 
   onAdd: (type: NodeType) => void;
   onDeleteNode: (id: string) => void;
   onDuplicateNode: (id: string) => void;
   onDisconnect: (portId: string) => void;
+  onClearImage?: (id: string) => void;
   onClose: () => void;
 }
 
 export const ContextMenu: React.FC<ContextMenuProps> = ({ 
   position, 
-  targetNodeId, 
+  targetNodeId,
+  targetNode, 
   targetPortId,
   onAdd, 
   onDeleteNode,
   onDuplicateNode,
   onDisconnect,
+  onClearImage,
   onClose 
 }) => {
   
@@ -55,6 +59,17 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         <div className="px-2 py-1.5 text-xs font-semibold text-zinc-500 uppercase tracking-wider bg-zinc-900/50">
           Node Actions
         </div>
+        
+        {targetNode?.type === 'IMAGE' && onClearImage && (
+             <button
+                onClick={() => onClearImage(targetNodeId)}
+                className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white transition-colors flex items-center gap-2"
+            >
+                <Eraser size={14} />
+                Clear Image
+            </button>
+        )}
+
         <button
           onClick={() => onDuplicateNode(targetNodeId)}
           className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white transition-colors flex items-center gap-2"
@@ -76,6 +91,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   // Canvas Context Menu
   const items = [
     { label: 'Code Canvas', type: 'CODE', icon: <Code2 size={16} /> },
+    { label: 'Image Module', type: 'IMAGE', icon: <ImageIcon size={16} /> },
     { label: 'Preview Canvas', type: 'PREVIEW', icon: <Monitor size={16} /> },
     { label: 'Terminal', type: 'TERMINAL', icon: <TerminalSquare size={16} /> },
     { label: 'NPM Package', type: 'NPM', icon: <Package size={16} /> },

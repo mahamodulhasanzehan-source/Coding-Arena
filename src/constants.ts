@@ -7,6 +7,7 @@ export const NODE_DEFAULTS = {
   TERMINAL: { width: 400, height: 200, title: 'Terminal', content: '' },
   AI_CHAT: { width: 350, height: 450, title: 'AI Assistant', content: '' },
   NPM: { width: 300, height: 350, title: 'NPM Packages', content: '' },
+  IMAGE: { width: 300, height: 300, title: 'Image', content: '' },
 };
 
 export const getPortsForNode = (nodeId: string, type: NodeType): Port[] => {
@@ -31,6 +32,8 @@ export const getPortsForNode = (nodeId: string, type: NodeType): Port[] => {
       ];
     case 'AI_CHAT':
         return [];
+    case 'IMAGE':
+        return []; // Image nodes are purely visual for now
     default:
       return [];
   }

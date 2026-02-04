@@ -57,6 +57,42 @@ export const getAllConnectedSources = (
         .filter((n): n is NodeData => !!n);
 };
 
+// Find all nodes in the connected component of the startNode
+export const getRelatedNodes = (
+  startNodeId: string,
+  nodes: NodeData[],
+  connections: Connection[],
+  typeFilter?: NodeType
+): NodeData[] => {
+  const visited = new Set<string>();
+  const queue = [startNodeId];
+  const related: NodeData[] = [];
+
+  while (queue.length > 0) {
+    const currentId = queue.shift()!;
+    if (visited.has(currentId)) continue;
+    visited.add(currentId);
+
+    const node = nodes.find(n => n.id === currentId);
+    if (node) {
+       if (!typeFilter || node.type === typeFilter) {
+           related.push(node);
+       }
+    }
+
+    // Find all neighbors
+    const neighbors = connections
+      .filter(c => c.sourceNodeId === currentId || c.targetNodeId === currentId)
+      .map(c => c.sourceNodeId === currentId ? c.targetNodeId : c.sourceNodeId);
+    
+    neighbors.forEach(nid => {
+        if (!visited.has(nid)) queue.push(nid);
+    });
+  }
+  
+  return related;
+};
+
 // Helper to recursively collect all code dependencies
 const collectDependencies = (
   rootNode: NodeData,

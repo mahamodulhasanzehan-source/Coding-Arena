@@ -2,7 +2,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { NodeData, Position, Size } from '../types';
 import { getPortsForNode } from '../constants';
-import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles, X } from 'lucide-react';
+import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles, X, Image as ImageIcon } from 'lucide-react';
 import Editor, { useMonaco } from '@monaco-editor/react';
 
 interface NodeProps {
@@ -72,7 +72,7 @@ export const Node: React.FC<NodeProps> = ({
   const [tempTitle, setTempTitle] = useState(data.title);
   const [chatInput, setChatInput] = useState('');
   
-  // AI States - Simplified: No menu, just prompt.
+  // AI States
   const [isPromptOpen, setIsPromptOpen] = useState(false);
   const [promptText, setPromptText] = useState('');
 
@@ -80,6 +80,9 @@ export const Node: React.FC<NodeProps> = ({
   const [npmQuery, setNpmQuery] = useState(data.type === 'NPM' ? data.content : '');
   const [npmResults, setNpmResults] = useState<any[]>([]);
   const [isSearchingNpm, setIsSearchingNpm] = useState(false);
+
+  // Image States
+  const [isDragOver, setIsDragOver] = useState(false);
 
   const dragStartRef = useRef<{ x: number, y: number } | null>(null);
   const initialPosRef = useRef<Position>({ x: 0, y: 0 });
@@ -158,8 +161,8 @@ export const Node: React.FC<NodeProps> = ({
       const dx = (e.clientX - dragStartRef.current.x) / scale;
       const dy = (e.clientY - dragStartRef.current.y) / scale;
       onResize(data.id, {
-        width: Math.max(250, initialSizeRef.current.width + dx),
-        height: Math.max(150, initialSizeRef.current.height + dy),
+        width: Math.max(150, initialSizeRef.current.width + dx),
+        height: Math.max(100, initialSizeRef.current.height + dy),
       });
     }
   };
@@ -275,14 +278,71 @@ export const Node: React.FC<NodeProps> = ({
       }
   };
 
+  // Image Drag & Drop Logic
+  const handleDragOver = (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragOver(true);
+  };
+  const handleDragLeave = (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragOver(false);
+  };
+  const handleDrop = (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragOver(false);
+      
+      const file = e.dataTransfer.files[0];
+      if (file && file.type.startsWith('image/') && onUpdateContent) {
+          const reader = new FileReader();
+          reader.onload = (event) => {
+              const img = new Image();
+              img.onload = () => {
+                  const canvas = document.createElement('canvas');
+                  const MAX_SIZE = 800; // Resize to max 800px to keep firestore happy
+                  let width = img.width;
+                  let height = img.height;
+                  
+                  if (width > height) {
+                      if (width > MAX_SIZE) {
+                          height *= MAX_SIZE / width;
+                          width = MAX_SIZE;
+                      }
+                  } else {
+                      if (height > MAX_SIZE) {
+                          width *= MAX_SIZE / height;
+                          height = MAX_SIZE;
+                      }
+                  }
+                  
+                  canvas.width = width;
+                  canvas.height = height;
+                  const ctx = canvas.getContext('2d');
+                  ctx?.drawImage(img, 0, 0, width, height);
+                  
+                  // Compress
+                  const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+                  onUpdateContent(data.id, dataUrl);
+              };
+              if (typeof event.target?.result === 'string') {
+                  img.src = event.target.result;
+              }
+          };
+          reader.readAsDataURL(file);
+      }
+  };
+
+
   // Styles
   let borderClass = 'border-panelBorder';
   let shadowClass = '';
   
-  // Shimmer effect for AI loading
-  const loadingClass = data.isLoading 
-      ? "after:absolute after:inset-0 after:bg-gradient-to-r after:from-transparent after:via-white/10 after:to-transparent after:animate-shimmer overflow-hidden" 
-      : "";
+  // Shimmer effect for AI loading - Applied to overlay, not main container to allow stacked effects
+  const shimmerOverlay = data.isLoading ? (
+      <div className="absolute inset-0 z-50 pointer-events-none rounded-lg overflow-hidden">
+          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-indigo-500/20 to-transparent animate-shimmer" style={{ width: '200%' }} />
+          <div className="absolute inset-0 ring-2 ring-indigo-500/50 rounded-lg" />
+      </div>
+  ) : null;
 
   if (collaboratorInfo) {
       borderClass = `border-[${collaboratorInfo.color}]`;
@@ -294,8 +354,8 @@ export const Node: React.FC<NodeProps> = ({
       borderClass = 'border-accent';
       shadowClass = 'shadow-accent/20';
   } else if (data.isLoading) {
-      borderClass = 'border-indigo-500';
-      shadowClass = 'shadow-[0_0_20px_rgba(99,102,241,0.3)]';
+      // Logic handled by overlay, but border helps too
+      borderClass = 'border-indigo-500/50';
   }
 
   const dynamicStyle = collaboratorInfo ? {
@@ -306,7 +366,7 @@ export const Node: React.FC<NodeProps> = ({
   return (
     <div
       ref={nodeRef}
-      className={`absolute flex flex-col bg-panel border rounded-lg shadow-2xl animate-in fade-in zoom-in-95 pointer-events-auto ${!collaboratorInfo && borderClass} ${!collaboratorInfo && shadowClass} ${loadingClass}`}
+      className={`absolute flex flex-col bg-panel border rounded-lg shadow-2xl animate-in fade-in zoom-in-95 pointer-events-auto ${!collaboratorInfo && borderClass} ${!collaboratorInfo && shadowClass}`}
       style={{
         transform: `translate(${data.position.x}px, ${data.position.y}px)`,
         width: data.size.width,
@@ -321,6 +381,8 @@ export const Node: React.FC<NodeProps> = ({
       onPointerUp={handlePointerUp}
       onContextMenu={(e) => e.preventDefault()}
     >
+      {shimmerOverlay}
+
       {/* Collaborator Badge */}
       {collaboratorInfo && (
           <div 
@@ -351,6 +413,7 @@ export const Node: React.FC<NodeProps> = ({
              <div className="flex items-center gap-2 group/title truncate">
                 {data.type === 'AI_CHAT' && <Bot size={14} className="text-indigo-400" />}
                 {data.type === 'NPM' && <Package size={14} className="text-red-500" />}
+                {data.type === 'IMAGE' && <ImageIcon size={14} className="text-purple-400" />}
                 <span className="truncate">{data.title}</span>
                 <button 
                     onClick={(e) => { e.stopPropagation(); setIsEditingTitle(true); }}
@@ -451,7 +514,6 @@ export const Node: React.FC<NodeProps> = ({
       )}
 
       {/* Content Area */}
-      {/* If Loading, add a blocking overlay */}
       <div className={`flex-1 relative group nodrag flex flex-col min-h-0 overflow-hidden ${data.isLoading ? 'pointer-events-none opacity-80' : ''}`}>
         {data.type === 'CODE' ? (
             <div className="w-full h-full bg-[#1e1e1e]" onPointerDown={(e) => e.stopPropagation()}>
@@ -477,6 +539,26 @@ export const Node: React.FC<NodeProps> = ({
                     }}
                  />
             </div>
+        ) : data.type === 'IMAGE' ? (
+             <div 
+                className={`w-full h-full bg-[#1e1e1e] flex items-center justify-center relative overflow-hidden transition-colors ${isDragOver ? 'bg-zinc-800 ring-2 ring-indigo-500' : ''}`}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+             >
+                {data.content ? (
+                    <img 
+                        src={data.content} 
+                        alt={data.title} 
+                        className="w-full h-full object-contain pointer-events-none select-none"
+                    />
+                ) : (
+                    <div className="flex flex-col items-center gap-2 text-zinc-600 pointer-events-none">
+                        <ImageIcon size={32} />
+                        <span className="text-xs">Drag image here</span>
+                    </div>
+                )}
+             </div>
         ) : data.type === 'NPM' ? (
              <div className="flex flex-col h-full bg-zinc-900/50">
                  {/* ... NPM Content ... */}

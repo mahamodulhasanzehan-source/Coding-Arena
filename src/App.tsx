@@ -7,7 +7,7 @@ import { Sidebar } from './components/Sidebar';
 import { CollaboratorCursor } from './components/CollaboratorCursor';
 import { GraphState, Action, NodeData, NodeType, LogEntry, UserPresence } from './types';
 import { NODE_DEFAULTS } from './constants';
-import { compilePreview, calculatePortPosition } from './utils/graphUtils';
+import { compilePreview, calculatePortPosition, getRelatedNodes } from './utils/graphUtils';
 import { Trash2, Menu, Cloud, CloudOff, UploadCloud, Users } from 'lucide-react';
 import Prism from 'prismjs';
 import { GoogleGenAI, FunctionDeclaration, Type } from "@google/genai";
@@ -219,7 +219,7 @@ const updateCurrentFileTool: FunctionDeclaration = {
 
 const createFileTool: FunctionDeclaration = {
     name: 'createFile',
-    description: 'Create a new code file (node) on the canvas. Use this when you need to add HTML, CSS, or JS files to build a feature.',
+    description: 'Create a new code file (node) on the canvas. Use this when the user asks for a completely NEW feature that requires a NEW file.',
     parameters: {
         type: Type.OBJECT,
         properties: {
@@ -298,7 +298,7 @@ const findSafePosition = (
 
 export default function App() {
   const [state, dispatch] = useReducer(graphReducer, initialState);
-  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, targetNodeId?: string, targetPortId?: string } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, targetNodeId?: string, targetPortId?: string, targetNode?: NodeData } | null>(null);
   const [isPanning, setIsPanning] = useState(false);
   const [dragWire, setDragWire] = useState<{ x1: number, y1: number, x2: number, y2: number, startPortId: string, startNodeId: string, isInput: boolean } | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -507,7 +507,8 @@ export default function App() {
 
   const handleContextMenu = (e: React.MouseEvent, nodeId?: string) => {
     e.preventDefault();
-    setContextMenu({ x: e.clientX, y: e.clientY, targetNodeId: nodeId });
+    const node = nodeId ? state.nodes.find(n => n.id === nodeId) : undefined;
+    setContextMenu({ x: e.clientX, y: e.clientY, targetNodeId: nodeId, targetNode: node });
   };
 
   const handlePortContextMenu = (e: React.MouseEvent, portId: string) => {
@@ -560,6 +561,11 @@ export default function App() {
     };
     dispatchLocal({ type: 'ADD_NODE', payload: newNode });
     setContextMenu(null);
+  };
+
+  const handleClearImage = (id: string) => {
+      dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id, content: '' } });
+      setContextMenu(null);
   };
 
   const handleHighlightNode = (id: string) => {
@@ -740,7 +746,17 @@ export default function App() {
   const handleAiGenerate = async (nodeId: string, action: 'optimize' | 'prompt', promptText?: string) => {
       const node = state.nodes.find(n => n.id === nodeId);
       if (!node || node.type !== 'CODE') return;
-      dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: true } });
+      
+      // 1. Traverse Graph to find all related CODE nodes
+      const connectedCodeNodes = getRelatedNodes(nodeId, state.nodes, state.connections, 'CODE');
+      // Ensure the current node is included if getRelatedNodes logic excludes self (it shouldn't, but safe to check)
+      if (!connectedCodeNodes.find(n => n.id === nodeId)) connectedCodeNodes.push(node);
+
+      // 2. Set Loading State for ALL connected nodes to show "thinking" visualization
+      connectedCodeNodes.forEach(n => {
+          dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: n.id, isLoading: true } });
+      });
+
       try {
           const apiKey = process.env.API_KEY; 
           const ai = new GoogleGenAI({ apiKey });
@@ -750,7 +766,7 @@ export default function App() {
           let tools: FunctionDeclaration[] = [];
 
           if (action === 'optimize') {
-              // Optimization Mode - Standard Text Return (Pure Code)
+              // ... optimization logic (remains mostly same, but scoped to single file) ...
               systemInstruction = `You are an expert developer.
               CRITICAL: RETURN ONLY PURE CODE. NO MARKDOWN. NO BACKTICKS. NO CONVERSATIONAL TEXT.
               Just the raw code content string.`;
@@ -768,25 +784,33 @@ export default function App() {
               }
 
           } else {
-              // Prompt Mode - Text-to-Graph Generation
-              // We use Tools here to allow creating files and connecting them
+              // Prompt Mode - ENHANCED CONTEXT
+              
+              // Prepare context from ALL connected files
+              const projectContext = connectedCodeNodes.map(n => 
+                  `Filename: "${n.title}"\nContent:\n${n.content}`
+              ).join('\n\n----------------\n\n');
+
               systemInstruction = `You are an expert web developer and architect in NodeCode Studio.
               You have the ability to not just write code, but to BUILD THE GRAPH.
               
+              You are viewing a cluster of connected files. You have access to:
+              ${connectedCodeNodes.map(n => n.title).join(', ')}
+
               Capabilities:
-              1. **updateCurrentFile(code)**: Use this if the user asks to "fix this file" or "change this code".
-              2. **createFile(filename, content)**: Use this if the user asks for a NEW feature that requires new files (e.g., "add a style.css", "create a login page").
+              1. **updateFile(filename, code)**: Use this to update ANY file in the connected graph. 
+                 - CRITICAL: If the user asks for a change that affects multiple files (e.g. "change button color" affects CSS, "add button click" affects JS), you MUST call updateFile for EACH file that needs changing.
+                 - CRITICAL: PREFER updating existing files over creating new ones if a file with a similar purpose exists.
+              2. **createFile(filename, content)**: Use this ONLY if the user asks for a completely NEW feature that requires a NEW file (e.g., "add a login page" -> create login.html).
               3. **connectNodes(sourceTitle, targetTitle)**: Use this to wire files together. 
-                 - ALWAYS connect new CSS/JS files to the HTML file (e.g. style.css -> index.html).
-                 - ALWAYS connect the HTML file to 'Preview Output' if it exists.
                  
               Guidelines:
-              - If the user request implies multiple files (e.g., "Make a Todo App"), create index.html, style.css, app.js AND connect them.
               - Always write complete, working code.
+              - Do not duplicate files. If 'style.css' exists and user asks to change style, update 'style.css'.
               `;
               
-              userPrompt = `Current File (${node.title}):\n${node.content}\n\nUser Request: ${promptText}`;
-              tools = [updateCurrentFileTool, createFileTool, connectNodesTool];
+              userPrompt = `Project Context:\n${projectContext}\n\nUser Request regarding "${node.title}": ${promptText}`;
+              tools = [updateCodeFunction, createFileTool, connectNodesTool];
 
               const response = await ai.models.generateContent({
                   model: 'gemini-3-flash-preview',
@@ -799,87 +823,30 @@ export default function App() {
 
               // Process Tool Calls
               const functionCalls = response.functionCalls;
+              
+              // Handle Connections with local tracking
+              const createdNodesMap = new Map<string, string>(); // Title -> ID
+              // Add existing nodes to map so AI can connect to them
+              state.nodes.forEach(n => createdNodesMap.set(n.title, n.id));
+
               if (functionCalls && functionCalls.length > 0) {
-                  for (const call of functionCalls) {
-                      if (call.name === 'updateCurrentFile') {
-                          const args = call.args as { code: string };
-                          dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: nodeId, content: args.code } });
-                      } 
-                      else if (call.name === 'createFile') {
-                          const args = call.args as { filename: string, content: string };
-                          const defaults = NODE_DEFAULTS.CODE;
-                          
-                          // Smart Placement
-                          const newPos = findSafePosition(node.position, state.nodes, defaults.width, defaults.height);
-                          
-                          const newNode: NodeData = {
-                              id: `node-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-                              type: 'CODE',
-                              title: args.filename,
-                              content: args.content,
-                              position: newPos,
-                              size: { width: defaults.width, height: defaults.height },
-                              autoHeight: false
-                          };
-                          dispatchLocal({ type: 'ADD_NODE', payload: newNode });
-                      }
-                      else if (call.name === 'connectNodes') {
-                          // Allow state update to propagate before trying to connect
-                          // Use setTimeout to push to next tick, allowing ADD_NODE to process
-                          const args = call.args as { sourceTitle: string, targetTitle: string };
-                          setTimeout(() => {
-                              // Re-query nodes from current ref/state is tricky inside effect/callback closure 
-                              // But we can dispatch the connect action and let reducer handle logic if nodes exist
-                              // However, we need IDs. 
-                              // Let's assume we can find them in the next render cycle or use a functional dispatch approach?
-                              // For now, let's try to match existing nodes from 'state' captured in closure + any we just added?
-                              // Actually, 'state' is stale here if we just dispatched ADD_NODE.
-                              // BUT, we can use a "fuzzy connect" action or just iterate.
-                              // A robust way for v1: simple text matching on what we HAVE. 
-                              // Since we can't see the *just added* node in this closure easily without refs,
-                              // we will rely on the AI usually creating files first, then connecting.
-                              // But function calls come in a batch. 
-                              
-                              // Workaround: We will use a special effect or just try to find them in the DOM? No.
-                              // Let's dispatch a custom thunk? No.
-                              // We will find nodes in the 'state' but that won't have the new node yet.
-                              // THE FIX: We need to process these sequentially and update a local "simulated state" or 
-                              // just dispatch actions. The reducer handles CONNECT safely (checks existence).
-                              // BUT we need the ID of the new node.
-                              // We generated the ID above! `newNode.id`.
-                              // We can track created nodes locally in this function scope.
-                          }, 0);
-                      }
-                  }
-
-                  // Handle Connections with local tracking
-                  const createdNodesMap = new Map<string, string>(); // Title -> ID
-                  // Add existing nodes
-                  state.nodes.forEach(n => createdNodesMap.set(n.title, n.id));
-
-                  for (const call of functionCalls) {
-                      if (call.name === 'createFile') {
-                          const args = call.args as { filename: string, content: string };
-                          // Recalculate ID to match the one we dispatched
-                          // Wait, we need to be deterministic or track it.
-                          // Let's refactor the loop to do creation first, then connection.
-                      }
-                  }
-                  
-                  // REFACTOR LOOP: Pass 1 (Creates), Pass 2 (Connects)
+                  // REFACTOR LOOP: Pass 1 (Updates & Creates), Pass 2 (Connects)
                   const creations = functionCalls.filter(c => c.name === 'createFile');
-                  const updates = functionCalls.filter(c => c.name === 'updateCurrentFile');
+                  const updates = functionCalls.filter(c => c.name === 'updateFile');
                   const connections = functionCalls.filter(c => c.name === 'connectNodes');
 
                   updates.forEach(call => {
-                       const args = call.args as { code: string };
-                       dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: nodeId, content: args.code } });
+                       const args = call.args as { filename: string, code: string };
+                       // Find the node by title in the connected set OR the whole state
+                       const targetNode = state.nodes.find(n => n.title === args.filename);
+                       if (targetNode) {
+                            dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: targetNode.id, content: args.code } });
+                       }
                   });
 
                   creations.forEach(call => {
                       const args = call.args as { filename: string, content: string };
                       const defaults = NODE_DEFAULTS.CODE;
-                      // Note: state.nodes is slightly stale for collision but spiral handles it tolerably
                       const newPos = findSafePosition(node.position, state.nodes, defaults.width, defaults.height);
                       const id = `node-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
                       
@@ -894,7 +861,6 @@ export default function App() {
                       };
                       
                       createdNodesMap.set(args.filename, id);
-                      // Add to collision list for subsequent nodes in this batch
                       state.nodes.push(newNode); 
                       dispatchLocal({ type: 'ADD_NODE', payload: newNode });
                   });
@@ -905,21 +871,15 @@ export default function App() {
                       const targetId = createdNodesMap.get(args.targetTitle);
 
                       if (sourceId && targetId) {
-                          // Determine ports based on names/types
-                          // Simple heuristic: 
-                          // If source is .js/.css -> connects to 'in-file' of target (.html)
-                          // If source is .html -> connects to 'in-dom' of target (Preview)
-                          
-                          let sourcePort = 'out-dom'; // Default output
-                          let targetPort = 'in-file'; // Default input
+                          let sourcePort = 'out-dom'; 
+                          let targetPort = 'in-file'; 
                           
                           if (args.sourceTitle.endsWith('.html')) sourcePort = 'out-dom';
-                          if (args.sourceTitle.endsWith('.js') || args.sourceTitle.endsWith('.css')) sourcePort = 'out-dom'; // Actually CODE nodes only have out-dom/out-pkg
+                          if (args.sourceTitle.endsWith('.js') || args.sourceTitle.endsWith('.css')) sourcePort = 'out-dom'; 
                           
                           if (args.targetTitle.includes('Preview')) targetPort = 'in-dom';
                           else if (args.targetTitle.endsWith('.html')) targetPort = 'in-file';
 
-                          // Construct proper IDs
                           const fullSourcePortId = `${sourceId}-${sourcePort}`;
                           const fullTargetPortId = `${targetId}-${targetPort}`;
 
@@ -939,7 +899,12 @@ export default function App() {
           }
 
       } catch(e) { console.error(e); } 
-      finally { dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } }); }
+      finally { 
+          // Stop loading for ALL connected nodes
+          connectedCodeNodes.forEach(n => {
+            dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: n.id, isLoading: false } }); 
+          });
+      }
   };
 
   const handlePortDown = (e: React.PointerEvent, portId: string, nodeId: string, isInput: boolean) => {
@@ -1271,6 +1236,7 @@ export default function App() {
             <ContextMenu 
                 position={contextMenu} 
                 targetNodeId={contextMenu.targetNodeId}
+                targetNode={contextMenu.targetNode}
                 targetPortId={contextMenu.targetPortId}
                 onAdd={handleAddNode} 
                 onDeleteNode={(id) => { dispatchLocal({ type: 'DELETE_NODE', payload: id }); setContextMenu(null); }}
@@ -1289,6 +1255,7 @@ export default function App() {
                     setContextMenu(null); 
                 }}
                 onDisconnect={(id) => { dispatchLocal({ type: 'DISCONNECT', payload: id }); setContextMenu(null); }}
+                onClearImage={handleClearImage}
                 onClose={() => setContextMenu(null)} 
             />
         </>
