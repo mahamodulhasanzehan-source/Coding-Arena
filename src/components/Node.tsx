@@ -467,7 +467,7 @@ export const Node: React.FC<NodeProps> = ({
                  </div>
                  <div className="flex-1 overflow-y-auto p-2 space-y-2 custom-scrollbar">
                      {npmResults.map((pkg: any) => (
-                         <div key={pkg.package.name} className="bg-zinc-800 p-2 rounded border border-zinc-700 hover:border-zinc-500 transition-colors flex justify-between items-start group">
+                         <div key={pkg.package.name} className="bg-zinc-800 p-2 rounded border border-zinc-700 hover:border-zinc-500 transition-colors flex justify-between items-start group animate-in fade-in slide-in-from-top-2 duration-300">
                              <div>
                                  <div className="font-bold text-zinc-200 text-xs">{pkg.package.name}</div>
                                  <div className="text-[10px] text-zinc-500 truncate max-w-[160px]">{pkg.package.description}</div>

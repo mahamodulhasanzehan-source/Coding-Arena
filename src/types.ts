@@ -1,5 +1,5 @@
 
-export type NodeType = 'CODE' | 'PREVIEW' | 'TERMINAL' | 'AI_CHAT';
+export type NodeType = 'CODE' | 'PREVIEW' | 'TERMINAL' | 'AI_CHAT' | 'NPM';
 
 export interface Position {
   x: number;
@@ -22,12 +22,12 @@ export interface NodeData {
   title: string;
   position: Position;
   size: Size;
-  content: string; // Code content or internal state
+  content: string; // Code content, internal state, or NPM search query
   lastOutput?: any; // For terminals or previews to store runtime state if needed
   autoHeight?: boolean; // For CODE nodes to grow automatically
   messages?: ChatMessage[]; // For AI_CHAT nodes
   contextNodeIds?: string[]; // IDs of files selected for AI context
-  isLoading?: boolean; // For AI_CHAT nodes to show thinking state
+  isLoading?: boolean; // For AI loading state
 }
 
 export interface Port {
@@ -35,7 +35,7 @@ export interface Port {
   nodeId: string;
   type: 'input' | 'output';
   label: string;
-  accepts?: NodeType[]; // What kind of nodes can connect here (e.g., Preview accepts HTML)
+  accepts?: NodeType[]; // What kind of nodes can connect here
 }
 
 export interface Connection {
