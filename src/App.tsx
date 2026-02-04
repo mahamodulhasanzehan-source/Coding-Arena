@@ -1,3 +1,4 @@
+
 import React, { useReducer, useState, useRef, useEffect, useMemo } from 'react';
 import { Node } from './components/Node';
 import { Wire } from './components/Wire';
@@ -11,7 +12,7 @@ import { Trash2, Menu, Cloud, CloudOff, UploadCloud, Users } from 'lucide-react'
 import Prism from 'prismjs';
 import { GoogleGenAI, FunctionDeclaration, Type } from "@google/genai";
 import { signIn, db } from './firebase';
-import { doc, getDoc, setDoc, onSnapshot, collection, deleteDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, onSnapshot, collection, deleteDoc, QuerySnapshot, DocumentData } from 'firebase/firestore';
 
 const initialState: GraphState = {
   nodes: [],
@@ -101,7 +102,6 @@ function graphReducer(state: GraphState, action: Action): GraphState {
         };
     case 'CONNECT':
       const { sourceNodeId, sourcePortId, targetNodeId, targetPortId } = action.payload;
-      
       const exists = state.connections.some(c => 
         c.sourceNodeId === sourceNodeId && 
         c.sourcePortId === sourcePortId && 
@@ -114,7 +114,6 @@ function graphReducer(state: GraphState, action: Action): GraphState {
       if (isSingleInputPort && state.connections.some(c => c.targetPortId === targetPortId)) {
         return state;
       }
-      
       return { ...state, connections: [...state.connections, action.payload] };
       
     case 'DISCONNECT':
@@ -149,33 +148,35 @@ function graphReducer(state: GraphState, action: Action): GraphState {
         };
     case 'LOAD_STATE':
         const incomingNodes = action.payload.nodes || [];
-        // Smart Merge: Preserve local nodes that are currently being interacted with
+        
+        // Critical: When loading server state, assume local interactions are TRUTH.
+        // This prevents snapping back when a user is actively dragging or editing.
         const mergedNodes = incomingNodes.map(serverNode => {
-            const interactionType = state.nodeInteractions[serverNode.id];
+            // Find current local state of this node
             const localNode = state.nodes.find(n => n.id === serverNode.id);
-            
+            const interactionType = state.nodeInteractions[serverNode.id];
+
             if (localNode) {
-                // If dragging, ignore server position updates
+                // If we are locally dragging this node, IGNORE server position updates.
                 if (interactionType === 'drag') {
                     return { ...serverNode, position: localNode.position };
                 }
-                // If editing, ignore server content updates
+                // If we are locally editing this node, IGNORE server content updates.
                 if (interactionType === 'edit') {
-                    return { ...serverNode, content: localNode.content };
+                    return { ...serverNode, content: localNode.content, title: localNode.title };
                 }
             }
             return serverNode;
         });
-        
-        // Also keep any new nodes we might have added locally but aren't in server list yet?
-        // Actually, no, server is source of truth for existence.
-        // But if we just added a node and it hasn't synced yet, it might disappear.
-        // For now, assume optimistic UI adds are fast enough or we accept the blip.
-        // The main issue was snapping back of existing nodes.
+
+        // Retain nodes that exist locally but not yet on server (optimistic creation)
+        const serverNodeIds = new Set(incomingNodes.map(n => n.id));
+        const localNewNodes = state.nodes.filter(n => !serverNodeIds.has(n.id));
+        const finalNodes = [...mergedNodes, ...localNewNodes];
 
         return { 
           ...state, 
-          nodes: mergedNodes.length > 0 ? mergedNodes : state.nodes, // Fallback if empty load?
+          nodes: finalNodes.length > 0 ? finalNodes : state.nodes, 
           connections: action.payload.connections || state.connections,
         };
     case 'UPDATE_COLLABORATORS':
@@ -237,13 +238,24 @@ export default function App() {
   const [userColor] = useState(getRandomColor());
   const [userName] = useState(getRandomName());
 
+  // Use refs to track if a change is local, preventing the sync loop
+  const isLocalChange = useRef(false);
+
   // Mobile Pinch Zoom Logic
   const lastTouchDist = useRef<number | null>(null);
   const isPinching = useRef(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const initialized = useRef(false);
   const throttleRef = useRef(0);
+
+  // Helper to dispatch and mark as local change
+  const dispatchLocal = (action: Action) => {
+      // Actions that modify the graph structure/content need to be marked
+      if (['ADD_NODE', 'DELETE_NODE', 'UPDATE_NODE_POSITION', 'UPDATE_NODE_SIZE', 'UPDATE_NODE_CONTENT', 'UPDATE_NODE_TITLE', 'CONNECT', 'DISCONNECT'].includes(action.type)) {
+          isLocalChange.current = true;
+      }
+      dispatch(action);
+  };
 
   // --- Persistence Logic (Firebase) ---
 
@@ -259,12 +271,15 @@ export default function App() {
         const docRef = doc(db, 'nodecode_projects', 'global_project_room'); 
         
         const unsubscribeProject = onSnapshot(docRef, (docSnap) => {
+             // If we have pending writes, it means *we* caused this snapshot.
+             // We can ignore it to prevent jitter, but Firestore handles this mostly.
              if (docSnap.metadata.hasPendingWrites) return;
 
              if (docSnap.exists()) {
-                const data = docSnap.data();
+                const data = docSnap.data() as { state: string } | undefined;
                 if (data && data.state) {
                     const loadedState = JSON.parse(data.state);
+                    // This load will merge with local state respecting locks
                     dispatch({ 
                         type: 'LOAD_STATE', 
                         payload: { 
@@ -274,7 +289,6 @@ export default function App() {
                     });
                 }
              } else {
-                 // Create default
                  const codeDefaults = NODE_DEFAULTS.CODE;
                  const previewDefaults = NODE_DEFAULTS.PREVIEW;
                  const defaultNodes: NodeData[] = [
@@ -300,9 +314,8 @@ export default function App() {
             setSyncStatus('error');
         });
 
-        // --- REALTIME PRESENCE LISTENER ---
         const presenceRef = collection(db, 'nodecode_projects', 'global_project_room', 'presence');
-        const unsubscribePresence = onSnapshot(presenceRef, (snapshot) => {
+        const unsubscribePresence = onSnapshot(presenceRef, (snapshot: QuerySnapshot<DocumentData>) => {
             const activeUsers: UserPresence[] = [];
             const now = Date.now();
             snapshot.forEach(doc => {
@@ -331,33 +344,37 @@ export default function App() {
     init();
   }, []);
 
-  // 2. Debounced Save
+  // 2. Debounced Save - Only runs if isLocalChange is true
   useEffect(() => {
     if (!userUid) return;
+    
+    // Check if there was a local change before scheduling save
+    if (isLocalChange.current) {
+        setSyncStatus('saving');
+        const saveData = setTimeout(async () => {
+          try {
+             const docRef = doc(db, 'nodecode_projects', 'global_project_room');
+             const stateToSave = {
+                nodes: state.nodes.map(n => ({...n, isLoading: false})), 
+                connections: state.connections,
+                pan: {x:0, y:0}, 
+                zoom: 1
+             };
+             await setDoc(docRef, { 
+                 state: JSON.stringify(stateToSave),
+                 updatedAt: new Date().toISOString()
+             });
+             setSyncStatus('synced');
+             isLocalChange.current = false; // Reset flag after successful save
+          } catch (e) {
+              console.error("Save failed", e);
+              setSyncStatus('error');
+          }
+        }, 800); 
 
-    setSyncStatus('saving');
-    const saveData = setTimeout(async () => {
-      try {
-         const docRef = doc(db, 'nodecode_projects', 'global_project_room');
-         const stateToSave = {
-            nodes: state.nodes.map(n => ({...n, isLoading: false})), 
-            connections: state.connections,
-            pan: {x:0, y:0}, 
-            zoom: 1
-         };
-         await setDoc(docRef, { 
-             state: JSON.stringify(stateToSave),
-             updatedAt: new Date().toISOString()
-         });
-         setSyncStatus('synced');
-      } catch (e) {
-          console.error("Save failed", e);
-          setSyncStatus('error');
-      }
-    }, 500); // Reduce debounce to 500ms for faster updates
-
-    return () => clearTimeout(saveData);
-  }, [state.nodes, state.connections, userUid]);
+        return () => clearTimeout(saveData);
+    }
+  }, [state.nodes, state.connections, userUid]); // We still depend on state, but guard with ref
 
   // LIVE UPDATE LOOP
   useEffect(() => {
@@ -437,7 +454,7 @@ export default function App() {
       size: { width: defaults.width, height: defaults.height },
       autoHeight: type === 'CODE' ? false : undefined, 
     };
-    dispatch({ type: 'ADD_NODE', payload: newNode });
+    dispatchLocal({ type: 'ADD_NODE', payload: newNode });
     setContextMenu(null);
   };
 
@@ -481,7 +498,7 @@ export default function App() {
           if (targetNode && targetNode.type === 'CODE') {
               const importStatement = `import * as ${packageName.replace(/[^a-zA-Z0-9]/g, '_')} from 'https://esm.sh/${packageName}';\n`;
               if (!targetNode.content.includes(`https://esm.sh/${packageName}`)) {
-                  dispatch({ 
+                  dispatchLocal({ 
                       type: 'UPDATE_NODE_CONTENT', 
                       payload: { 
                           id: targetNode.id, 
@@ -521,7 +538,7 @@ export default function App() {
 
   const handleConfirmSelection = () => {
       if (!state.selectionMode?.isActive) return;
-      dispatch({ 
+      dispatchLocal({ 
           type: 'UPDATE_CONTEXT_NODES', 
           payload: { 
               id: state.selectionMode.requestingNodeId, 
@@ -585,7 +602,7 @@ export default function App() {
                       const targetNode = state.nodes.find(n => n.type === 'CODE' && n.title === args.filename);
                       
                       if (targetNode) {
-                          dispatch({ type: 'UPDATE_NODE_CONTENT', payload: { id: targetNode.id, content: args.code } });
+                          dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: targetNode.id, content: args.code } });
                           toolOutputText += `\n[Updated ${args.filename}]`;
                           handleHighlightNode(targetNode.id);
                       } else {
@@ -607,12 +624,7 @@ export default function App() {
   };
 
   const handleAiGenerate = async (nodeId: string, action: 'optimize' | 'prompt', promptText?: string) => {
-     // ... (Previous implementation remains same, truncated for brevity)
-     // To keep it simple, calling the previous handler is fine, just ensuring it exists.
-     // For this code block I'll just alert as placeholder if not fully implemented in previous steps, 
-     // but in the real app you'd keep the full function.
-     // Re-implementing essentially for completeness:
-     const node = state.nodes.find(n => n.id === nodeId);
+      const node = state.nodes.find(n => n.id === nodeId);
       if (!node || node.type !== 'CODE') return;
       dispatch({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: true } });
       try {
@@ -627,7 +639,7 @@ export default function App() {
           });
           if (response.text) {
              const cleanCode = response.text.replace(/^```[\w]*\n/, '').replace(/\n```$/, '');
-             dispatch({ type: 'UPDATE_NODE_CONTENT', payload: { id: nodeId, content: cleanCode } });
+             dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: nodeId, content: cleanCode } });
           }
       } catch(e) { console.error(e); } 
       finally { dispatch({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } }); }
@@ -715,7 +727,7 @@ export default function App() {
             const isTargetInput = endPortId.includes('-in-');
             
             if (isStartInput !== isTargetInput && dragWire.startNodeId !== endNodeId) {
-                dispatch({
+                dispatchLocal({
                     type: 'CONNECT',
                     payload: {
                         id: `conn-${Date.now()}`,
@@ -922,7 +934,7 @@ export default function App() {
                     const collabInfo = activeCollaborator ? {
                         name: activeCollaborator.name,
                         color: activeCollaborator.color,
-                        action: activeCollaborator.editingNodeId === node.id ? 'editing' : 'dragging' as const
+                        action: (activeCollaborator.editingNodeId === node.id ? 'editing' : 'dragging') as 'editing' | 'dragging'
                     } : undefined;
 
                     return (
@@ -934,15 +946,15 @@ export default function App() {
                                 isRunning={state.runningPreviewIds.includes(node.id)}
                                 scale={state.zoom}
                                 isConnected={isConnected}
-                                onMove={(id, pos) => dispatch({ type: 'UPDATE_NODE_POSITION', payload: { id, position: pos } })}
-                                onResize={(id, size) => dispatch({ type: 'UPDATE_NODE_SIZE', payload: { id, size } })}
-                                onDelete={(id) => dispatch({ type: 'DELETE_NODE', payload: id })}
+                                onMove={(id, pos) => dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id, position: pos } })}
+                                onResize={(id, size) => dispatchLocal({ type: 'UPDATE_NODE_SIZE', payload: { id, size } })}
+                                onDelete={(id) => dispatchLocal({ type: 'DELETE_NODE', payload: id })}
                                 onToggleRun={handleToggleRun}
                                 onRefresh={handleRefresh}
                                 onPortDown={handlePortDown}
                                 onPortContextMenu={handlePortContextMenu}
-                                onUpdateTitle={(id, title) => dispatch({ type: 'UPDATE_NODE_TITLE', payload: { id, title } })}
-                                onUpdateContent={(id, content) => dispatch({ type: 'UPDATE_NODE_CONTENT', payload: { id, content } })}
+                                onUpdateTitle={(id, title) => dispatchLocal({ type: 'UPDATE_NODE_TITLE', payload: { id, title } })}
+                                onUpdateContent={(id, content) => dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id, content } })}
                                 onSendMessage={handleSendMessage}
                                 onStartContextSelection={handleStartContextSelection}
                                 onAiAction={handleAiGenerate}
@@ -973,7 +985,7 @@ export default function App() {
                 targetNodeId={contextMenu.targetNodeId}
                 targetPortId={contextMenu.targetPortId}
                 onAdd={handleAddNode} 
-                onDeleteNode={(id) => { dispatch({ type: 'DELETE_NODE', payload: id }); setContextMenu(null); }}
+                onDeleteNode={(id) => { dispatchLocal({ type: 'DELETE_NODE', payload: id }); setContextMenu(null); }}
                 onDuplicateNode={(id) => { 
                     const node = state.nodes.find(n => n.id === id);
                     if (node) {
@@ -984,11 +996,11 @@ export default function App() {
                             position: { x: node.position.x + offset, y: node.position.y + offset },
                             title: `${node.title} (Copy)`
                         };
-                        dispatch({ type: 'ADD_NODE', payload: newNode });
+                        dispatchLocal({ type: 'ADD_NODE', payload: newNode });
                     }
                     setContextMenu(null); 
                 }}
-                onDisconnect={(id) => { dispatch({ type: 'DISCONNECT', payload: id }); setContextMenu(null); }}
+                onDisconnect={(id) => { dispatchLocal({ type: 'DISCONNECT', payload: id }); setContextMenu(null); }}
                 onClose={() => setContextMenu(null)} 
             />
         </>

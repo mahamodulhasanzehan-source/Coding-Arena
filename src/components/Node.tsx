@@ -1,8 +1,8 @@
 
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import { NodeData, Position, Size } from '../types';
 import { getPortsForNode } from '../constants';
-import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles } from 'lucide-react';
+import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles, X } from 'lucide-react';
 import Editor, { useMonaco } from '@monaco-editor/react';
 
 interface NodeProps {
@@ -25,8 +25,8 @@ interface NodeProps {
   onStartContextSelection?: (id: string) => void; // For AI Chat
   onAiAction?: (nodeId: string, action: 'optimize' | 'prompt', prompt?: string) => void;
   onInjectImport?: (sourceNodeId: string, packageName: string) => void; // For NPM
-  onInteraction?: (nodeId: string, type: 'drag' | 'edit' | null) => void; // NEW: Report interaction
-  collaboratorInfo?: { name: string; color: string; action: 'dragging' | 'editing' }; // NEW: Show who is working
+  onInteraction?: (nodeId: string, type: 'drag' | 'edit' | null) => void;
+  collaboratorInfo?: { name: string; color: string; action: 'dragging' | 'editing' };
   logs?: any[]; 
   children?: React.ReactNode;
 }
@@ -65,7 +65,6 @@ export const Node: React.FC<NodeProps> = ({
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
   const editorRef = useRef<any>(null);
-  const monaco = useMonaco();
   
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
@@ -73,8 +72,7 @@ export const Node: React.FC<NodeProps> = ({
   const [tempTitle, setTempTitle] = useState(data.title);
   const [chatInput, setChatInput] = useState('');
   
-  // AI Menu States
-  const [isAiMenuOpen, setIsAiMenuOpen] = useState(false);
+  // AI States - Simplified: No menu, just prompt.
   const [isPromptOpen, setIsPromptOpen] = useState(false);
   const [promptText, setPromptText] = useState('');
 
@@ -119,7 +117,7 @@ export const Node: React.FC<NodeProps> = ({
   }, [data.content, data.type]);
 
   const handlePointerDown = (e: React.PointerEvent) => {
-    // Check if the target is part of a nodrag element (inputs, buttons, editors)
+    if (data.isLoading) return; // Disable interaction during loading
     if ((e.target as HTMLElement).closest('.nodrag')) {
         return;
     }
@@ -127,16 +125,16 @@ export const Node: React.FC<NodeProps> = ({
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     setIsDragging(true);
-    onInteraction?.(data.id, 'drag'); // Notify App
+    onInteraction?.(data.id, 'drag'); 
     dragStartRef.current = { x: e.clientX, y: e.clientY };
     initialPosRef.current = { ...data.position };
 
-    // Close menus
-    setIsAiMenuOpen(false);
+    // Close prompt if dragging starts
     if (!isPromptOpen) setIsPromptOpen(false);
   };
 
   const handleResizePointerDown = (e: React.PointerEvent) => {
+    if (data.isLoading) return;
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     setIsResizing(true);
@@ -168,7 +166,7 @@ export const Node: React.FC<NodeProps> = ({
 
   const handlePointerUp = (e: React.PointerEvent) => {
     if (isDragging) {
-        onInteraction?.(data.id, null); // Notify App End
+        onInteraction?.(data.id, null); 
     }
     setIsDragging(false);
     setIsResizing(false);
@@ -202,23 +200,10 @@ export const Node: React.FC<NodeProps> = ({
       }
   };
 
-  // AI Actions
-  const handleAiMenuToggle = (e: React.MouseEvent) => {
+  // AI Actions - SIMPLIFIED
+  const handleAiClick = (e: React.MouseEvent) => {
       e.stopPropagation();
-      setIsAiMenuOpen(!isAiMenuOpen);
-      setIsPromptOpen(false);
-  };
-
-  const handleOptimize = (e: React.MouseEvent) => {
-      e.stopPropagation();
-      setIsAiMenuOpen(false);
-      onAiAction?.(data.id, 'optimize');
-  };
-
-  const handlePromptMode = (e: React.MouseEvent) => {
-      e.stopPropagation();
-      setIsAiMenuOpen(false);
-      setIsPromptOpen(true);
+      setIsPromptOpen(!isPromptOpen);
       setPromptText('');
   };
 
@@ -240,7 +225,6 @@ export const Node: React.FC<NodeProps> = ({
       }
   };
 
-  // Editor Actions
   const handleFormatCode = (e: React.MouseEvent) => {
       e.stopPropagation();
       if (editorRef.current) {
@@ -269,7 +253,7 @@ export const Node: React.FC<NodeProps> = ({
   const searchNpm = async () => {
       if (!npmQuery.trim()) return;
       setIsSearchingNpm(true);
-      if (onUpdateContent) onUpdateContent(data.id, npmQuery); // Persist query
+      if (onUpdateContent) onUpdateContent(data.id, npmQuery); 
       try {
           const res = await fetch(`https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(npmQuery)}&size=5`);
           const json = await res.json();
@@ -291,9 +275,14 @@ export const Node: React.FC<NodeProps> = ({
       }
   };
 
-  // Highlight Styles
+  // Styles
   let borderClass = 'border-panelBorder';
   let shadowClass = '';
+  
+  // Shimmer effect for AI loading
+  const loadingClass = data.isLoading 
+      ? "after:absolute after:inset-0 after:bg-gradient-to-r after:from-transparent after:via-white/10 after:to-transparent after:animate-shimmer overflow-hidden" 
+      : "";
 
   if (collaboratorInfo) {
       borderClass = `border-[${collaboratorInfo.color}]`;
@@ -304,25 +293,26 @@ export const Node: React.FC<NodeProps> = ({
   } else if (isSelected) {
       borderClass = 'border-accent';
       shadowClass = 'shadow-accent/20';
+  } else if (data.isLoading) {
+      borderClass = 'border-indigo-500';
+      shadowClass = 'shadow-[0_0_20px_rgba(99,102,241,0.3)]';
   }
 
-  // Inject dynamic border color for collaborators if needed
   const dynamicStyle = collaboratorInfo ? {
       borderColor: collaboratorInfo.color,
       boxShadow: `0 0 15px ${collaboratorInfo.color}40`
   } : {};
 
-
   return (
     <div
       ref={nodeRef}
-      className={`absolute flex flex-col bg-panel border rounded-lg shadow-2xl animate-in fade-in zoom-in-95 pointer-events-auto ${!collaboratorInfo && borderClass} ${!collaboratorInfo && shadowClass}`}
+      className={`absolute flex flex-col bg-panel border rounded-lg shadow-2xl animate-in fade-in zoom-in-95 pointer-events-auto ${!collaboratorInfo && borderClass} ${!collaboratorInfo && shadowClass} ${loadingClass}`}
       style={{
         transform: `translate(${data.position.x}px, ${data.position.y}px)`,
         width: data.size.width,
         height: data.size.height,
-        transitionProperty: 'box-shadow, border-color, transform', // Added transform to transition for smoother remote updates
-        transitionDuration: isDragging ? '0s' : '0.1s', // Instant when dragging, smooth when remote update
+        transitionProperty: 'box-shadow, border-color, transform', 
+        transitionDuration: isDragging ? '0s' : '0.1s',
         transitionTimingFunction: 'linear',
         ...dynamicStyle
       }}
@@ -343,7 +333,7 @@ export const Node: React.FC<NodeProps> = ({
       )}
 
       {/* Header */}
-      <div className="h-10 flex items-center justify-between px-3 border-b border-panelBorder bg-zinc-900/50 rounded-t-lg select-none shrink-0 relative">
+      <div className="h-10 flex items-center justify-between px-3 border-b border-panelBorder bg-zinc-900/50 rounded-t-lg select-none shrink-0 relative z-10">
         <div className="flex items-center gap-2 text-zinc-400 font-medium text-sm flex-1 min-w-0">
           <GripVertical size={14} className="opacity-50 shrink-0" />
           {isEditingTitle ? (
@@ -366,6 +356,7 @@ export const Node: React.FC<NodeProps> = ({
                     onClick={(e) => { e.stopPropagation(); setIsEditingTitle(true); }}
                     onPointerDown={(e) => e.stopPropagation()}
                     className="opacity-0 group-hover/title:opacity-100 p-1 hover:bg-zinc-800 rounded text-zinc-500 hover:text-zinc-300 transition-all nodrag shrink-0"
+                    disabled={data.isLoading}
                 >
                     <Pencil size={12} />
                 </button>
@@ -374,7 +365,6 @@ export const Node: React.FC<NodeProps> = ({
         </div>
         
         <div className="flex items-center gap-1 shrink-0">
-           {/* Code Node Actions */}
            {data.type === 'CODE' && (
               <div className="flex items-center gap-1">
                  <button
@@ -382,33 +372,27 @@ export const Node: React.FC<NodeProps> = ({
                     onPointerDown={(e) => e.stopPropagation()}
                     className="nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 text-zinc-400 hover:text-white hover:bg-zinc-800"
                     title="Format Code"
+                    disabled={data.isLoading}
                  >
                      <Wand2 size={14} />
                  </button>
 
                  <div className="relative">
                      <button
-                        onClick={handleAiMenuToggle}
+                        onClick={handleAiClick}
                         onPointerDown={(e) => e.stopPropagation()}
                         className={`nodrag p-1.5 rounded transition-all cursor-pointer relative z-10 flex items-center gap-1 ${
-                            isAiMenuOpen || isPromptOpen || data.isLoading ? 'bg-blue-500/20 text-blue-400' : 'text-zinc-400 hover:text-blue-400 hover:bg-zinc-800'
+                            isPromptOpen || data.isLoading ? 'bg-blue-500/20 text-blue-400' : 'text-zinc-400 hover:text-blue-400 hover:bg-zinc-800'
                         }`}
                         title="AI Assistant"
                         disabled={data.isLoading}
                      >
-                        {data.isLoading ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} fill={isAiMenuOpen ? "currentColor" : "none"} />}
+                        {data.isLoading ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} fill={isPromptOpen ? "currentColor" : "none"} />}
                      </button>
-                     {isAiMenuOpen && (
-                         <div className="absolute top-full right-0 mt-1 w-32 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-100 flex flex-col nodrag">
-                             <button onClick={handleOptimize} className="text-left px-3 py-2 text-xs text-zinc-300 hover:bg-blue-600 hover:text-white transition-colors">Optimize</button>
-                             <button onClick={handlePromptMode} className="text-left px-3 py-2 text-xs text-zinc-300 hover:bg-blue-600 hover:text-white transition-colors">Prompt...</button>
-                         </div>
-                     )}
                  </div>
               </div>
            )}
 
-           {/* Preview Actions */}
            {data.type === 'PREVIEW' && (
              <div className="flex items-center gap-1">
                <button 
@@ -436,14 +420,14 @@ export const Node: React.FC<NodeProps> = ({
 
        {/* Floating Prompt Input */}
        {isPromptOpen && (
-          <div className="px-2 pt-2 pb-1 bg-zinc-900/90 backdrop-blur border-b border-panelBorder animate-in slide-in-from-top-2 duration-200 z-30 nodrag">
+          <div className="px-2 pt-2 pb-1 bg-zinc-900/95 backdrop-blur border-b border-panelBorder animate-in slide-in-from-top-2 duration-200 z-30 nodrag shadow-xl">
               <div className="relative">
                   <textarea
                     ref={promptInputRef}
                     value={promptText}
                     onChange={(e) => setPromptText(e.target.value)}
                     onKeyDown={handlePromptKeyDown}
-                    placeholder="Type instructions... (Shift+Enter for new line)"
+                    placeholder="Describe how to change this code..."
                     className="w-full bg-zinc-950 border border-blue-500/30 rounded-md p-2 text-xs text-zinc-200 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none custom-scrollbar"
                     style={{ minHeight: '60px' }}
                     onPointerDown={(e) => e.stopPropagation()}
@@ -455,12 +439,20 @@ export const Node: React.FC<NodeProps> = ({
                   >
                       <ArrowRight size={12} />
                   </button>
+                  <button
+                    onClick={() => setIsPromptOpen(false)}
+                    className="absolute top-[-2px] right-[-2px] p-1 text-zinc-500 hover:text-zinc-300"
+                    title="Close"
+                  >
+                      <X size={10} />
+                  </button>
               </div>
           </div>
       )}
 
       {/* Content Area */}
-      <div className={`flex-1 relative group nodrag flex flex-col min-h-0 overflow-hidden`}>
+      {/* If Loading, add a blocking overlay */}
+      <div className={`flex-1 relative group nodrag flex flex-col min-h-0 overflow-hidden ${data.isLoading ? 'pointer-events-none opacity-80' : ''}`}>
         {data.type === 'CODE' ? (
             <div className="w-full h-full bg-[#1e1e1e]" onPointerDown={(e) => e.stopPropagation()}>
                  <Editor
@@ -481,11 +473,13 @@ export const Node: React.FC<NodeProps> = ({
                         tabSize: 2,
                         wordWrap: 'on',
                         padding: { top: 10, bottom: 10 },
+                        readOnly: data.isLoading
                     }}
                  />
             </div>
         ) : data.type === 'NPM' ? (
              <div className="flex flex-col h-full bg-zinc-900/50">
+                 {/* ... NPM Content ... */}
                  <div className="p-3 border-b border-panelBorder flex gap-2">
                      <div className="relative flex-1">
                         <Search size={14} className="absolute left-2.5 top-2.5 text-zinc-500" />
@@ -538,6 +532,7 @@ export const Node: React.FC<NodeProps> = ({
                 className="w-full h-full bg-black p-2 font-mono text-xs overflow-y-auto custom-scrollbar select-text nodrag"
                 onPointerDown={(e) => e.stopPropagation()} 
              >
+                {/* ... Terminal Content ... */}
                 {(!logs || logs.length === 0) ? (
                     <span className="text-zinc-600 italic">Waiting for logs...</span>
                 ) : (
@@ -555,7 +550,7 @@ export const Node: React.FC<NodeProps> = ({
              </div>
         ) : data.type === 'AI_CHAT' ? (
              <div className="flex flex-col h-full bg-zinc-950">
-                 {/* Chat History */}
+                 {/* ... AI Chat Content ... */}
                  <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-3 space-y-3 custom-scrollbar">
                      {(!data.messages || data.messages.length === 0) && (
                          <div className="text-center text-zinc-600 text-xs mt-10">
@@ -595,7 +590,6 @@ export const Node: React.FC<NodeProps> = ({
                      )}
                  </div>
                  
-                 {/* Input Area */}
                  <div className="p-2 border-t border-zinc-800 bg-zinc-900/50">
                      {(data.contextNodeIds?.length || 0) > 0 && (
                          <div className="flex flex-wrap gap-1 mb-2 px-1">
@@ -652,20 +646,14 @@ export const Node: React.FC<NodeProps> = ({
         )}
       </div>
 
-      {/* Inputs (Left) */}
+      {/* Inputs/Outputs/Resize ... (Keep existing) */}
       <div className="absolute top-[52px] -left-3 flex flex-col gap-[28px] pointer-events-none">
         {inputs.map((port) => {
             const connected = isConnected(port.id);
             return (
-              <div 
-                key={port.id} 
-                className="relative group flex items-center h-3 pointer-events-auto"
-                title={port.label}
-              >
+              <div key={port.id} className="relative group flex items-center h-3 pointer-events-auto" title={port.label}>
                 <div 
-                  className={`w-3 h-3 border border-zinc-900 rounded-full transition-all cursor-crosshair nodrag ${
-                    connected ? 'bg-yellow-500' : 'bg-zinc-600 hover:bg-zinc-400'
-                  }`}
+                  className={`w-3 h-3 border border-zinc-900 rounded-full transition-all cursor-crosshair nodrag ${connected ? 'bg-yellow-500' : 'bg-zinc-600 hover:bg-zinc-400'}`}
                   onPointerDown={(e) => onPortDown(e, port.id, data.id, true)}
                   onContextMenu={(e) => onPortContextMenu(e, port.id)}
                   data-port-id={port.id}
@@ -678,24 +666,16 @@ export const Node: React.FC<NodeProps> = ({
             );
         })}
       </div>
-
-      {/* Outputs (Right) */}
       <div className="absolute top-[52px] -right-3 flex flex-col gap-[28px] pointer-events-none">
         {outputs.map((port) => {
             const connected = isConnected(port.id);
             return (
-              <div 
-                key={port.id} 
-                className="relative group flex items-center justify-end h-3 pointer-events-auto"
-                title={port.label}
-              >
+              <div key={port.id} className="relative group flex items-center justify-end h-3 pointer-events-auto" title={port.label}>
                  <span className="absolute right-4 text-[10px] text-zinc-500 uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity bg-black/80 px-1 rounded pointer-events-none whitespace-nowrap z-50">
                   {port.label}
                 </span>
                 <div 
-                  className={`w-3 h-3 border border-zinc-900 rounded-full transition-all cursor-crosshair nodrag ${
-                    connected ? 'bg-yellow-500' : 'bg-zinc-600 hover:bg-zinc-400'
-                  }`}
+                  className={`w-3 h-3 border border-zinc-900 rounded-full transition-all cursor-crosshair nodrag ${connected ? 'bg-yellow-500' : 'bg-zinc-600 hover:bg-zinc-400'}`}
                   onPointerDown={(e) => onPortDown(e, port.id, data.id, false)}
                   onContextMenu={(e) => onPortContextMenu(e, port.id)}
                   data-port-id={port.id}
@@ -705,8 +685,6 @@ export const Node: React.FC<NodeProps> = ({
             );
         })}
       </div>
-
-      {/* Resize Handle */}
       <div 
         className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize flex items-center justify-center opacity-50 hover:opacity-100 nodrag z-20"
         onPointerDown={handleResizePointerDown}

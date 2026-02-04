@@ -206,7 +206,7 @@ export default function App() {
         const docSnap = await getDoc(docRef);
 
         if (docSnap.exists()) {
-          const data = docSnap.data();
+          const data = docSnap.data() as { state: string } | undefined;
           if (data && data.state) {
              const loadedState = JSON.parse(data.state);
              dispatch({ type: 'LOAD_STATE', payload: loadedState });
