@@ -69,6 +69,7 @@ export const Node: React.FC<NodeProps> = ({
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
   const editorRef = useRef<any>(null);
+  const contentHeightRef = useRef<number>(0);
   
   // Track data in ref to avoid stale closures in callbacks (like Editor onDidContentSizeChange)
   const nodeDataRef = useRef(data);
@@ -178,6 +179,18 @@ export const Node: React.FC<NodeProps> = ({
       const newWidth = Math.max(250, initialSizeRef.current.width + dx);
       let newHeight = Math.max(150, initialSizeRef.current.height + dy);
 
+      // RESTRICTION: Code modules cannot be longer than their content
+      if (data.type === 'CODE' && contentHeightRef.current > 0) {
+          const HEADER_HEIGHT = 40;
+          const PADDING = 20; 
+          const maxAllowedHeight = Math.max(150, contentHeightRef.current + HEADER_HEIGHT + PADDING);
+          
+          // Clamp the height. You can shrink it (create scrollbar), but you cannot expand past content.
+          if (newHeight > maxAllowedHeight) {
+              newHeight = maxAllowedHeight;
+          }
+      }
+
       onResize(data.id, {
         width: newWidth,
         height: newHeight,
@@ -271,21 +284,31 @@ export const Node: React.FC<NodeProps> = ({
           onInteraction?.(data.id, null);
       });
 
-      // Auto-Size Logic for Code Nodes
+      // Auto-Size & Auto-Shrink Logic for Code Nodes
       if (data.type === 'CODE') {
           editor.onDidContentSizeChange((e: any) => {
+              contentHeightRef.current = e.contentHeight;
+              
               // Use Ref to get the latest data state without closure staleness
               const currentNode = nodeDataRef.current;
               
-              // Only auto-resize if enabled (defaults to true until manually resized)
+              const HEADER_HEIGHT = 40;
+              const MIN_HEIGHT = 150;
+              const PADDING = 20; 
+              // The ideal height to fit all code without empty space
+              const fitHeight = Math.max(MIN_HEIGHT, e.contentHeight + HEADER_HEIGHT + PADDING);
+              
               if (currentNode.autoHeight) {
-                  const HEADER_HEIGHT = 40;
-                  const MIN_HEIGHT = 150;
-                  const targetHeight = Math.max(MIN_HEIGHT, e.contentHeight + HEADER_HEIGHT + 5); 
-                  
-                  // Use width from ref to avoid snapping back if width changed
-                  if (Math.abs(targetHeight - currentNode.size.height) > 3) {
-                      onResize(currentNode.id, { width: currentNode.size.width, height: targetHeight });
+                  // Standard Auto-Grow (Initial creation state)
+                  if (Math.abs(fitHeight - currentNode.size.height) > 3) {
+                      onResize(currentNode.id, { width: currentNode.size.width, height: fitHeight });
+                  }
+              } else {
+                  // Manual Mode Enforcement:
+                  // If the current box is LARGER than the content (extended parts), snap it shut.
+                  // We add a small buffer (5px) to prevent jitter during resize operations.
+                  if (currentNode.size.height > fitHeight + 5) {
+                      onResize(currentNode.id, { width: currentNode.size.width, height: fitHeight });
                   }
               }
           });
@@ -368,10 +391,8 @@ export const Node: React.FC<NodeProps> = ({
                   
                   // Compress
                   const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-                  
-                  // Update Content AND Title
                   onUpdateContent(data.id, dataUrl);
-                  onUpdateTitle(data.id, file.name); // Updates title with extension
+                  onUpdateTitle(data.id, file.name);
               };
               if (typeof event.target?.result === 'string') {
                   img.src = event.target.result;
@@ -572,6 +593,7 @@ export const Node: React.FC<NodeProps> = ({
 
       {/* Content Area */}
       <div className={`flex-1 relative group nodrag flex flex-col min-h-0 overflow-hidden ${data.isLoading ? 'pointer-events-none opacity-80' : ''}`}>
+        {/* ... (Existing CODE, IMAGE, NPM, AI_CHAT cases remain the same) ... */}
         {data.type === 'CODE' ? (
             <div className="w-full h-full bg-[#1e1e1e]" onPointerDown={(e) => e.stopPropagation()}>
                  <Editor
@@ -594,9 +616,8 @@ export const Node: React.FC<NodeProps> = ({
                         padding: { top: 10, bottom: 10 },
                         readOnly: data.isLoading,
                         scrollbar: {
-                            vertical: 'auto',
-                            horizontal: 'auto',
-                            handleMouseWheel: true,
+                            vertical: 'hidden',
+                            handleMouseWheel: false,
                         },
                         overviewRulerLanes: 0,
                         hideCursorInOverviewRuler: true,
