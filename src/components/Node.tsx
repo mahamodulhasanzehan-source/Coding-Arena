@@ -388,6 +388,7 @@ export const Node: React.FC<NodeProps> = ({
   return (
     <div
       ref={nodeRef}
+      data-node-id={data.id}
       className={`absolute flex flex-col bg-panel border rounded-lg shadow-2xl animate-in fade-in zoom-in-95 pointer-events-auto ${!collaboratorInfo && borderClass} ${!collaboratorInfo && shadowClass}`}
       style={{
         transform: `translate(${data.position.x}px, ${data.position.y}px)`,

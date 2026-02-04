@@ -315,6 +315,10 @@ export default function App() {
   const throttleRef = useRef(0);
   const lastSentStateRef = useRef<Record<string, any>>({});
 
+  // Long Press Logic for Mobile
+  const longPressTimer = useRef<any>(null);
+  const touchStartPos = useRef<{ x: number, y: number } | null>(null);
+
   const dispatchLocal = (action: Action) => {
       // Mark these actions as needing a sync save
       if ([
@@ -1028,16 +1032,46 @@ export default function App() {
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
+      // Pinch Zoom Logic (Existing)
       if (e.touches.length === 2) {
           isPinching.current = true;
           setIsPanning(false); 
           const t1 = e.touches[0];
           const t2 = e.touches[1];
           lastTouchDist.current = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+          
+          if (longPressTimer.current) {
+              clearTimeout(longPressTimer.current);
+              longPressTimer.current = null;
+          }
+          return;
+      }
+
+      // Long Press Logic (New)
+      if (e.touches.length === 1) {
+          const touch = e.touches[0];
+          const target = e.target as HTMLElement;
+          
+          // Check if touching a node or port to avoid opening canvas menu there
+          const isNode = target.closest('[data-node-id]');
+          const isPort = target.closest('[data-port-id]');
+          
+          if (!isNode && !isPort) {
+              touchStartPos.current = { x: touch.clientX, y: touch.clientY };
+              longPressTimer.current = setTimeout(() => {
+                  setContextMenu({ 
+                      x: touch.clientX, 
+                      y: touch.clientY 
+                  });
+                  if (navigator.vibrate) navigator.vibrate(50); // Haptic feedback
+                  longPressTimer.current = null;
+              }, 800); // 800ms wait for long press
+          }
       }
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
+      // Pinch Zoom Logic (Existing)
       if (e.touches.length === 2 && lastTouchDist.current !== null && containerRef.current) {
           e.preventDefault(); 
           const t1 = e.touches[0];
@@ -1060,9 +1094,28 @@ export default function App() {
           }
           lastTouchDist.current = dist;
       }
+
+      // Cancel Long Press if moved
+      if (longPressTimer.current && touchStartPos.current && e.touches.length === 1) {
+          const touch = e.touches[0];
+          const diffX = Math.abs(touch.clientX - touchStartPos.current.x);
+          const diffY = Math.abs(touch.clientY - touchStartPos.current.y);
+          if (diffX > 10 || diffY > 10) {
+              clearTimeout(longPressTimer.current);
+              longPressTimer.current = null;
+          }
+      }
   };
 
   const handleTouchEnd = (e: React.TouchEvent) => {
+      // Cancel Long Press
+      if (longPressTimer.current) {
+          clearTimeout(longPressTimer.current);
+          longPressTimer.current = null;
+      }
+      touchStartPos.current = null;
+
+      // Pinch Zoom Logic (Existing)
       if (e.touches.length < 2) {
           isPinching.current = false;
           lastTouchDist.current = null;
