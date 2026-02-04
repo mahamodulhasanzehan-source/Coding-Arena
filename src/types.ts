@@ -59,6 +59,9 @@ export interface UserPresence {
   color: string;
   name: string;
   lastActive: number;
+  draggingNodeId?: string;
+  draggingPosition?: Position;
+  editingNodeId?: string;
 }
 
 export interface GraphState {
@@ -74,6 +77,7 @@ export interface GraphState {
     selectedIds: string[];
   };
   collaborators: UserPresence[];
+  nodeInteractions: Record<string, 'drag' | 'edit' | null>; // Local interaction locks
 }
 
 export type Action =
@@ -96,4 +100,5 @@ export type Action =
   | { type: 'CLEAR_LOGS'; payload: { nodeId: string } }
   | { type: 'TOGGLE_PREVIEW'; payload: { nodeId: string; isRunning: boolean } }
   | { type: 'LOAD_STATE'; payload: Partial<GraphState> }
-  | { type: 'UPDATE_COLLABORATORS'; payload: UserPresence[] };
+  | { type: 'UPDATE_COLLABORATORS'; payload: UserPresence[] }
+  | { type: 'SET_NODE_INTERACTION'; payload: { nodeId: string; type: 'drag' | 'edit' | null } };

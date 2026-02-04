@@ -25,6 +25,8 @@ interface NodeProps {
   onStartContextSelection?: (id: string) => void; // For AI Chat
   onAiAction?: (nodeId: string, action: 'optimize' | 'prompt', prompt?: string) => void;
   onInjectImport?: (sourceNodeId: string, packageName: string) => void; // For NPM
+  onInteraction?: (nodeId: string, type: 'drag' | 'edit' | null) => void; // NEW: Report interaction
+  collaboratorInfo?: { name: string; color: string; action: 'dragging' | 'editing' }; // NEW: Show who is working
   logs?: any[]; 
   children?: React.ReactNode;
 }
@@ -49,6 +51,8 @@ export const Node: React.FC<NodeProps> = ({
   onStartContextSelection,
   onAiAction,
   onInjectImport,
+  onInteraction,
+  collaboratorInfo,
   logs,
   children
 }) => {
@@ -123,6 +127,7 @@ export const Node: React.FC<NodeProps> = ({
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     setIsDragging(true);
+    onInteraction?.(data.id, 'drag'); // Notify App
     dragStartRef.current = { x: e.clientX, y: e.clientY };
     initialPosRef.current = { ...data.position };
 
@@ -162,6 +167,9 @@ export const Node: React.FC<NodeProps> = ({
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
+    if (isDragging) {
+        onInteraction?.(data.id, null); // Notify App End
+    }
     setIsDragging(false);
     setIsResizing(false);
     dragStartRef.current = null;
@@ -242,6 +250,12 @@ export const Node: React.FC<NodeProps> = ({
 
   const handleEditorMount = (editor: any) => {
       editorRef.current = editor;
+      editor.onDidFocusEditorText(() => {
+          onInteraction?.(data.id, 'edit');
+      });
+      editor.onDidBlurEditorText(() => {
+          onInteraction?.(data.id, null);
+      });
   };
 
   const getLanguage = (filename: string) => {
@@ -278,27 +292,56 @@ export const Node: React.FC<NodeProps> = ({
   };
 
   // Highlight Styles
-  const highlightStyle = isHighlighted
-    ? 'border-yellow-500 shadow-[0_0_30px_rgba(234,179,8,0.6)]'
-    : (isSelected ? 'border-accent shadow-accent/20' : 'border-panelBorder');
+  let borderClass = 'border-panelBorder';
+  let shadowClass = '';
+
+  if (collaboratorInfo) {
+      borderClass = `border-[${collaboratorInfo.color}]`;
+      shadowClass = `shadow-[0_0_15px_${collaboratorInfo.color}40]`;
+  } else if (isHighlighted) {
+      borderClass = 'border-yellow-500';
+      shadowClass = 'shadow-[0_0_30px_rgba(234,179,8,0.6)]';
+  } else if (isSelected) {
+      borderClass = 'border-accent';
+      shadowClass = 'shadow-accent/20';
+  }
+
+  // Inject dynamic border color for collaborators if needed
+  const dynamicStyle = collaboratorInfo ? {
+      borderColor: collaboratorInfo.color,
+      boxShadow: `0 0 15px ${collaboratorInfo.color}40`
+  } : {};
+
 
   return (
     <div
       ref={nodeRef}
-      className={`absolute flex flex-col bg-panel border rounded-lg shadow-2xl animate-in fade-in zoom-in-95 pointer-events-auto ${highlightStyle}`}
+      className={`absolute flex flex-col bg-panel border rounded-lg shadow-2xl animate-in fade-in zoom-in-95 pointer-events-auto ${!collaboratorInfo && borderClass} ${!collaboratorInfo && shadowClass}`}
       style={{
         transform: `translate(${data.position.x}px, ${data.position.y}px)`,
         width: data.size.width,
         height: data.size.height,
-        transitionProperty: 'box-shadow, border-color', 
-        transitionDuration: isHighlighted ? '0s' : '1s',
-        transitionTimingFunction: 'ease-out'
+        transitionProperty: 'box-shadow, border-color, transform', // Added transform to transition for smoother remote updates
+        transitionDuration: isDragging ? '0s' : '0.1s', // Instant when dragging, smooth when remote update
+        transitionTimingFunction: 'linear',
+        ...dynamicStyle
       }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onContextMenu={(e) => e.preventDefault()}
     >
+      {/* Collaborator Badge */}
+      {collaboratorInfo && (
+          <div 
+            className="absolute -top-6 right-0 px-2 py-0.5 rounded text-[10px] font-bold text-white shadow-md flex items-center gap-1 z-50 animate-in fade-in slide-in-from-bottom-2"
+            style={{ backgroundColor: collaboratorInfo.color }}
+          >
+              <User size={10} />
+              {collaboratorInfo.name} {collaboratorInfo.action === 'editing' ? 'is typing...' : 'is moving...'}
+          </div>
+      )}
+
       {/* Header */}
       <div className="h-10 flex items-center justify-between px-3 border-b border-panelBorder bg-zinc-900/50 rounded-t-lg select-none shrink-0 relative">
         <div className="flex items-center gap-2 text-zinc-400 font-medium text-sm flex-1 min-w-0">
@@ -467,7 +510,7 @@ export const Node: React.FC<NodeProps> = ({
                  </div>
                  <div className="flex-1 overflow-y-auto p-2 space-y-2 custom-scrollbar">
                      {npmResults.map((pkg: any) => (
-                         <div key={pkg.package.name} className="bg-zinc-800 p-2 rounded border border-zinc-700 hover:border-zinc-500 transition-colors flex justify-between items-start group animate-in fade-in slide-in-from-top-2 duration-300">
+                         <div key={pkg.package.name} className="bg-zinc-800 p-2 rounded border border-zinc-700 hover:border-zinc-500 transition-colors flex justify-between items-start group">
                              <div>
                                  <div className="font-bold text-zinc-200 text-xs">{pkg.package.name}</div>
                                  <div className="text-[10px] text-zinc-500 truncate max-w-[160px]">{pkg.package.description}</div>
