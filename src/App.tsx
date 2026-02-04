@@ -195,7 +195,8 @@ function graphReducer(state: GraphState, action: Action): GraphState {
   }
 }
 
-// ... (Gemini Tool Definitions and Helper Functions are unchanged) ...
+// ... (Gemini Tool Definitions and Helper Functions - No changes needed here) ...
+// (Omitting strictly for brevity in this response, assuming standard merging)
 const updateCodeFunction: FunctionDeclaration = {
     name: 'updateFile',
     description: 'Update the code content of a specific file. Use this for CHAT responses or simple edits.',
@@ -264,6 +265,7 @@ const cleanAiOutput = (text: string): string => {
     return text.trim();
 };
 
+// --- Helper: Find Non-Overlapping Position (Spiral Search) ---
 const findSafePosition = (
     origin: { x: number, y: number }, 
     existingNodes: NodeData[], 
@@ -273,10 +275,13 @@ const findSafePosition = (
     let r = 50; // Start offset
     let angle = 0;
     
+    // Safety break after ~100 attempts
     for (let i = 0; i < 100; i++) {
         const x = origin.x + r * Math.cos(angle);
         const y = origin.y + r * Math.sin(angle);
         
+        // Check collision with all existing nodes
+        // Using a 20px padding
         const collision = existingNodes.some(n => 
             x < n.position.x + n.size.width + 30 &&
             x + width + 30 > n.position.x &&
@@ -286,10 +291,12 @@ const findSafePosition = (
 
         if (!collision) return { x, y };
         
+        // Spiral out
         angle += 1; // ~57 degrees
         r += 10;
     }
     
+    // Fallback
     return { x: origin.x + 50, y: origin.y + 50 };
 };
 
@@ -313,12 +320,15 @@ export default function App() {
   const throttleRef = useRef(0);
   const lastSentStateRef = useRef<Record<string, any>>({});
 
+  // Long Press Logic for Mobile
   const longPressTimer = useRef<any>(null);
   const touchStartPos = useRef<{ x: number, y: number } | null>(null);
 
+  // Cancellation & Request Tracking
   const activeAiOperations = useRef<Record<string, { id: string }>>({});
 
   const dispatchLocal = (action: Action) => {
+      // Mark these actions as needing a sync save
       if ([
           'ADD_NODE', 
           'DELETE_NODE', 
@@ -326,7 +336,7 @@ export default function App() {
           'UPDATE_NODE_SIZE', 
           'UPDATE_NODE_CONTENT', 
           'UPDATE_NODE_TITLE', 
-          'UPDATE_NODE_TYPE', // Tracking type updates too
+          'UPDATE_NODE_TYPE',
           'CONNECT', 
           'DISCONNECT',
           'TOGGLE_PREVIEW',
@@ -389,6 +399,7 @@ export default function App() {
             setSyncStatus('error');
         });
 
+        // ... (Presence logic omitted for brevity, identical to previous) ...
         const presenceRef = collection(db, 'nodecode_projects', 'global_project_room', 'presence');
         const unsubscribePresence = onSnapshot(presenceRef, (snapshot: QuerySnapshot<DocumentData>) => {
             const activeUsers: UserPresence[] = [];
@@ -417,6 +428,8 @@ export default function App() {
     init();
   }, [sessionId]);
 
+  // ... (Save Logic, Live Update, Handle Message, etc. - Identical) ...
+  // 2. Debounced Save - Only runs if isLocalChange is true
   useEffect(() => {
     if (!userUid) return;
     
@@ -448,17 +461,21 @@ export default function App() {
     }
   }, [state.nodes, state.connections, state.runningPreviewIds, userUid]); 
 
+  // LIVE UPDATE LOOP & SHARED STATE SYNC & STOP SYNC
   useEffect(() => {
+      // 1. Handle Running Previews
       state.runningPreviewIds.forEach(previewId => {
           const iframe = document.getElementById(`preview-iframe-${previewId}`) as HTMLIFrameElement;
           const node = state.nodes.find(n => n.id === previewId);
 
           if (iframe && node) {
+               // Compile Code Update
                const compiled = compilePreview(previewId, state.nodes, state.connections, false);
                if (iframe.srcdoc !== compiled) {
                   iframe.srcdoc = compiled;
                }
 
+               // Sync Shared State
                const lastSent = lastSentStateRef.current[previewId];
                if (JSON.stringify(node.sharedState) !== JSON.stringify(lastSent)) {
                    if (iframe.contentWindow) {
@@ -471,6 +488,20 @@ export default function App() {
                }
           }
       });
+
+      // 2. Handle Stopped Previews (Fix desync)
+      const previewNodes = state.nodes.filter(n => n.type === 'PREVIEW');
+      previewNodes.forEach(node => {
+          if (!state.runningPreviewIds.includes(node.id)) {
+              const iframe = document.getElementById(`preview-iframe-${node.id}`) as HTMLIFrameElement;
+              const stoppedContent = '<body style="background-color: #000; color: #555; height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; font-family: sans-serif;">STOPPED</body>';
+              
+              if (iframe && iframe.srcdoc !== stoppedContent) {
+                  iframe.srcdoc = stoppedContent;
+              }
+          }
+      });
+
   }, [state.nodes, state.connections, state.runningPreviewIds]);
 
 
