@@ -219,7 +219,7 @@ const updateCurrentFileTool: FunctionDeclaration = {
 
 const createFileTool: FunctionDeclaration = {
     name: 'createFile',
-    description: 'Create a new code file (node) on the canvas. Use this when the user asks for a completely NEW feature that requires a NEW file.',
+    description: 'Create a new code file (node) on the canvas. Use this when you need to add HTML, CSS, or JS files to build a feature.',
     parameters: {
         type: Type.OBJECT,
         properties: {
@@ -868,17 +868,43 @@ export default function App() {
                   connections.forEach(call => {
                       const args = call.args as { sourceTitle: string, targetTitle: string };
                       const sourceId = createdNodesMap.get(args.sourceTitle);
-                      const targetId = createdNodesMap.get(args.targetTitle);
+                      let targetId = createdNodesMap.get(args.targetTitle);
 
                       if (sourceId && targetId) {
+                          // Fix for AI sometimes connecting JS/CSS directly to Preview (Issue 1)
+                          const isSourceScriptOrStyle = args.sourceTitle.endsWith('.js') || args.sourceTitle.endsWith('.css');
+                          const isTargetPreview = args.targetTitle.toLowerCase().includes('preview');
+
+                          if (isSourceScriptOrStyle && isTargetPreview) {
+                              // Redirect to connect to an HTML file instead
+                              const htmlNodeEntry = Array.from(createdNodesMap.entries()).find(([title]) => title.endsWith('.html'));
+                              if (htmlNodeEntry) {
+                                  targetId = htmlNodeEntry[1];
+                              } else {
+                                  // Fallback to existing nodes if not in created map
+                                  const existingHtml = state.nodes.find(n => n.title.endsWith('.html'));
+                                  if (existingHtml) targetId = existingHtml.id;
+                                  else return; // Abort if no HTML file found to connect to
+                              }
+                          }
+
                           let sourcePort = 'out-dom'; 
                           let targetPort = 'in-file'; 
                           
                           if (args.sourceTitle.endsWith('.html')) sourcePort = 'out-dom';
                           if (args.sourceTitle.endsWith('.js') || args.sourceTitle.endsWith('.css')) sourcePort = 'out-dom'; 
                           
-                          if (args.targetTitle.includes('Preview')) targetPort = 'in-dom';
-                          else if (args.targetTitle.endsWith('.html')) targetPort = 'in-file';
+                          // Re-evaluate target node type to determine correct port
+                          // We use the potentially redirected targetId
+                          const targetNode = state.nodes.find(n => n.id === targetId) || state.nodes.find(n => n.title === args.targetTitle); // Fallback search
+                          
+                          if (targetNode) {
+                              if (targetNode.type === 'PREVIEW') targetPort = 'in-dom';
+                              else if (targetNode.type === 'CODE') targetPort = 'in-file';
+                          } else if (args.targetTitle.includes('Preview')) {
+                              // If connecting to a newly created preview that isn't fully in state yet (edge case)
+                              targetPort = 'in-dom';
+                          }
 
                           const fullSourcePortId = `${sourceId}-${sourcePort}`;
                           const fullTargetPortId = `${targetId}-${targetPort}`;

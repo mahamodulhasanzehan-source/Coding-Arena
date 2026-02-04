@@ -753,7 +753,7 @@ export const Node: React.FC<NodeProps> = ({
                 id={`preview-iframe-${data.id}`}
                 title="preview"
                 className="w-full h-full bg-white nodrag"
-                sandbox="allow-scripts allow-same-origin allow-modals"
+                sandbox="allow-scripts allow-same-origin allow-modals allow-pointer-lock"
                 onPointerDown={(e) => e.stopPropagation()}
             />
         )}
