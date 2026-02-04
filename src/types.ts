@@ -57,7 +57,6 @@ export interface UserPresence {
   x: number;
   y: number;
   color: string;
-  name: string;
   lastActive: number;
   draggingNodeId?: string;
   draggingPosition?: Position;

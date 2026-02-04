@@ -1,4 +1,3 @@
-
 import React, { useReducer, useState, useRef, useEffect, useMemo } from 'react';
 import { Node } from './components/Node';
 import { Wire } from './components/Wire';
@@ -221,11 +220,6 @@ const getRandomColor = () => {
     return colors[Math.floor(Math.random() * colors.length)];
 };
 
-const getRandomName = () => {
-    const names = ['Anonymous Axolotl', 'Busy Beaver', 'Coding Cat', 'Debugging Dog', 'Eager Eagle', 'Fast Falcon', 'Geeky Gecko'];
-    return names[Math.floor(Math.random() * names.length)];
-};
-
 export default function App() {
   const [state, dispatch] = useReducer(graphReducer, initialState);
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, targetNodeId?: string, targetPortId?: string } | null>(null);
@@ -236,7 +230,9 @@ export default function App() {
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('offline');
   const [userUid, setUserUid] = useState<string | null>(null);
   const [userColor] = useState(getRandomColor());
-  const [userName] = useState(getRandomName());
+  
+  // Use a unique session ID per tab to allow multi-tab visualization
+  const sessionId = useMemo(() => `session-${Math.random().toString(36).substr(2, 9)}`, []);
 
   // Use refs to track if a change is local, preventing the sync loop
   const isLocalChange = useRef(false);
@@ -314,13 +310,15 @@ export default function App() {
             setSyncStatus('error');
         });
 
+        // Use Session ID for Presence Logic to support multiple tabs
         const presenceRef = collection(db, 'nodecode_projects', 'global_project_room', 'presence');
         const unsubscribePresence = onSnapshot(presenceRef, (snapshot: QuerySnapshot<DocumentData>) => {
             const activeUsers: UserPresence[] = [];
             const now = Date.now();
             snapshot.forEach(doc => {
                 const data = doc.data() as UserPresence;
-                if (data.id !== user.uid && (now - data.lastActive < 30000)) { 
+                // Filter out OUR OWN session cursor
+                if (data.id !== sessionId && (now - data.lastActive < 30000)) { 
                     activeUsers.push(data);
                 }
             });
@@ -330,9 +328,8 @@ export default function App() {
         return () => {
             unsubscribeProject();
             unsubscribePresence();
-            if (user.uid) {
-                deleteDoc(doc(db, 'nodecode_projects', 'global_project_room', 'presence', user.uid));
-            }
+            // Cleanup based on Session ID
+            deleteDoc(doc(db, 'nodecode_projects', 'global_project_room', 'presence', sessionId));
         };
 
       } catch (err) {
@@ -342,7 +339,7 @@ export default function App() {
     };
 
     init();
-  }, []);
+  }, [sessionId]);
 
   // 2. Debounced Save - Only runs if isLocalChange is true
   useEffect(() => {
@@ -692,12 +689,12 @@ export default function App() {
             const draggingPosition = draggingNodeId ? state.nodes.find(n => n.id === draggingNodeId)?.position : undefined;
             const editingNodeId = Object.keys(state.nodeInteractions).find(id => state.nodeInteractions[id] === 'edit');
 
-            setDoc(doc(db, 'nodecode_projects', 'global_project_room', 'presence', userUid), {
-                id: userUid,
+            // Set presence document using SESSION ID, not USER ID
+            setDoc(doc(db, 'nodecode_projects', 'global_project_room', 'presence', sessionId), {
+                id: sessionId,
                 x,
                 y,
                 color: userColor,
-                name: userName,
                 lastActive: now,
                 draggingNodeId: draggingNodeId || null,
                 draggingPosition: draggingPosition || null,
@@ -796,7 +793,7 @@ export default function App() {
     return state.nodes.map(node => {
         // If *we* are moving it, use our state (handled by default rendering)
         // If *someone else* is moving it, we want to visualize THEIR move live
-        const collaborator = state.collaborators.find(c => c.draggingNodeId === node.id && c.id !== userUid);
+        const collaborator = state.collaborators.find(c => c.draggingNodeId === node.id && c.id !== sessionId);
         
         if (collaborator && collaborator.draggingPosition) {
             // Visual override for remote drag
@@ -808,7 +805,7 @@ export default function App() {
         }
         return node;
     });
-  }, [state.nodes, state.collaborators, userUid]);
+  }, [state.nodes, state.collaborators, sessionId]);
 
   return (
     <div 
@@ -904,7 +901,7 @@ export default function App() {
                             x={user.x} 
                             y={user.y} 
                             color={user.color} 
-                            name={user.name} 
+                            name={''} 
                         />
                     ))}
                 </div>
@@ -929,12 +926,12 @@ export default function App() {
                     
                     // Find if someone is editing/dragging this node
                     const activeCollaborator = state.collaborators.find(c => 
-                        (c.draggingNodeId === node.id || c.editingNodeId === node.id) && c.id !== userUid
+                        (c.draggingNodeId === node.id || c.editingNodeId === node.id) && c.id !== sessionId
                     );
                     const collabInfo = activeCollaborator ? {
-                        name: activeCollaborator.name,
+                        name: '', // Empty name as requested
                         color: activeCollaborator.color,
-                        action: (activeCollaborator.editingNodeId === node.id ? 'editing' : 'dragging') as 'editing' | 'dragging'
+                        action: (activeCollaborator.editingNodeId === node.id ? 'editing' : 'dragging') as 'dragging' | 'editing'
                     } : undefined;
 
                     return (
