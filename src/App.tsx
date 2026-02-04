@@ -149,22 +149,14 @@ function graphReducer(state: GraphState, action: Action): GraphState {
     case 'LOAD_STATE':
         const incomingNodes = action.payload.nodes || [];
         
-        // Critical: The server is the Source of Truth for *existence* of nodes.
-        // If a node is not in incomingNodes, it is considered deleted.
-        // We only override the *properties* (pos, content) of nodes that actually exist on the server
-        // if we are currently interacting with them locally.
-        
         const mergedNodes = incomingNodes.map(serverNode => {
-            // Find current local state of this node
             const localNode = state.nodes.find(n => n.id === serverNode.id);
             const interactionType = state.nodeInteractions[serverNode.id];
 
             if (localNode) {
-                // If we are locally dragging this node, IGNORE server position updates.
                 if (interactionType === 'drag') {
                     return { ...serverNode, position: localNode.position };
                 }
-                // If we are locally editing this node, IGNORE server content updates.
                 if (interactionType === 'edit') {
                     return { ...serverNode, content: localNode.content, title: localNode.title };
                 }
@@ -174,9 +166,10 @@ function graphReducer(state: GraphState, action: Action): GraphState {
 
         return { 
           ...state, 
-          nodes: mergedNodes, // Simply use the merged list. Do NOT append local-only nodes, as this resurrects deleted nodes.
+          nodes: mergedNodes, 
           connections: action.payload.connections || state.connections,
-          runningPreviewIds: action.payload.runningPreviewIds || state.runningPreviewIds
+          runningPreviewIds: action.payload.runningPreviewIds || state.runningPreviewIds,
+          // Explicitly do NOT overwrite pan/zoom to keep them local per user request
         };
     case 'UPDATE_COLLABORATORS':
         return { ...state, collaborators: action.payload };
@@ -187,6 +180,11 @@ function graphReducer(state: GraphState, action: Action): GraphState {
                 ...state.nodeInteractions,
                 [action.payload.nodeId]: action.payload.type
             }
+        };
+    case 'UPDATE_NODE_SHARED_STATE':
+        return {
+            ...state,
+            nodes: state.nodes.map(n => n.id === action.payload.nodeId ? { ...n, sharedState: action.payload.state } : n)
         };
     default:
       return state;
@@ -221,14 +219,11 @@ const getRandomColor = () => {
 };
 
 const cleanAiOutput = (text: string): string => {
-    // 1. Try to match markdown code blocks
     const codeBlockRegex = /```(?:html|css|js|javascript|json|typescript|ts)?\s*([\s\S]*?)```/i;
     const match = text.match(codeBlockRegex);
     if (match && match[1]) {
         return match[1].trim();
     }
-    // 2. If no code block, but text contains typical code markers, it might be raw code
-    // Just return the trimmed text, but the prompt should prevent this case.
     return text.trim();
 };
 
@@ -249,6 +244,7 @@ export default function App() {
   const isPinching = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const throttleRef = useRef(0);
+  const lastSentStateRef = useRef<Record<string, any>>({});
 
   const dispatchLocal = (action: Action) => {
       // Mark these actions as needing a sync save
@@ -262,7 +258,8 @@ export default function App() {
           'CONNECT', 
           'DISCONNECT',
           'TOGGLE_PREVIEW',
-          'SET_NODE_LOADING' // IMPORTANT: Sync loading state so everyone sees the shimmer
+          'SET_NODE_LOADING',
+          'UPDATE_NODE_SHARED_STATE' // IMPORTANT: Sync shared state
       ].includes(action.type)) {
           isLocalChange.current = true;
       }
@@ -295,6 +292,7 @@ export default function App() {
                     });
                 }
              } else {
+                 // Default State Initialization
                  const codeDefaults = NODE_DEFAULTS.CODE;
                  const previewDefaults = NODE_DEFAULTS.PREVIEW;
                  const defaultNodes: NodeData[] = [
@@ -305,6 +303,8 @@ export default function App() {
                  const defaultState = {
                     nodes: defaultNodes,
                     connections: [],
+                    // pan/zoom are not part of shared state anymore for initial creation either, effectively
+                    // but we store them just for completeness if needed later, though LOAD_STATE ignores them.
                     pan: { x: 0, y: 0 },
                     zoom: 1
                  };
@@ -358,10 +358,11 @@ export default function App() {
           try {
              const docRef = doc(db, 'nodecode_projects', 'global_project_room');
              const stateToSave = {
-                // IMPORTANT: We now SAVE isLoading state so other users see the shimmering effect
                 nodes: state.nodes, 
                 connections: state.connections,
-                runningPreviewIds: state.runningPreviewIds, // Save running state
+                runningPreviewIds: state.runningPreviewIds,
+                // We DO NOT save pan/zoom anymore to allow independent viewports
+                // But we send a dummy value to keep structure valid if needed
                 pan: {x:0, y:0}, 
                 zoom: 1
              };
@@ -381,14 +382,31 @@ export default function App() {
     }
   }, [state.nodes, state.connections, state.runningPreviewIds, userUid]); 
 
-  // LIVE UPDATE LOOP
+  // LIVE UPDATE LOOP & SHARED STATE SYNC
   useEffect(() => {
       state.runningPreviewIds.forEach(previewId => {
           const iframe = document.getElementById(`preview-iframe-${previewId}`) as HTMLIFrameElement;
-          if (iframe) {
+          const node = state.nodes.find(n => n.id === previewId);
+
+          if (iframe && node) {
+               // 1. Compile Code Update
                const compiled = compilePreview(previewId, state.nodes, state.connections, false);
                if (iframe.srcdoc !== compiled) {
                   iframe.srcdoc = compiled;
+               }
+
+               // 2. Sync Shared State DOWN to iframe
+               // Check if the current sharedState in the node is different from what we last sent
+               const lastSent = lastSentStateRef.current[previewId];
+               // Simple JSON stringify comparison to avoid deep equality check overhead
+               if (JSON.stringify(node.sharedState) !== JSON.stringify(lastSent)) {
+                   if (iframe.contentWindow) {
+                       iframe.contentWindow.postMessage({
+                           type: 'STATE_UPDATE',
+                           payload: node.sharedState
+                       }, '*');
+                       lastSentStateRef.current[previewId] = node.sharedState;
+                   }
                }
           }
       });
@@ -398,8 +416,17 @@ export default function App() {
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       const data = event.data;
-      if (data && data.source === 'preview-iframe' && data.nodeId) {
-        dispatch({ type: 'ADD_LOG', payload: { nodeId: data.nodeId, log: { type: data.type, message: data.message, timestamp: data.timestamp } } });
+      if (!data) return;
+
+      if (data.source === 'preview-iframe' && data.nodeId) {
+        if (data.type === 'log' || data.type === 'error' || data.type === 'warn' || data.type === 'info') {
+            dispatch({ type: 'ADD_LOG', payload: { nodeId: data.nodeId, log: { type: data.type, message: data.message, timestamp: data.timestamp } } });
+        } else if (data.type === 'BROADCAST_STATE') {
+            // Received state update from iframe -> update local state -> trigger sync
+            // Store it in ref first to prevent immediate echo back
+            lastSentStateRef.current[data.nodeId] = data.payload;
+            dispatchLocal({ type: 'UPDATE_NODE_SHARED_STATE', payload: { nodeId: data.nodeId, state: data.payload } });
+        }
       }
     };
     window.addEventListener('message', handleMessage);
@@ -475,7 +502,6 @@ export default function App() {
       const shouldRun = !isRunning;
       const iframe = document.getElementById(`preview-iframe-${id}`) as HTMLIFrameElement;
       
-      // Dispatch LOCAL so it triggers a save and syncs 'runningPreviewIds'
       if (shouldRun) {
            dispatchLocal({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: true } });
            dispatch({ type: 'CLEAR_LOGS', payload: { nodeId: id } });
@@ -556,7 +582,7 @@ export default function App() {
 
   const handleSendMessage = async (nodeId: string, text: string) => {
       dispatch({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'user', text } } });
-      dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: true } }); // Sync Loading
+      dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: true } }); 
 
       const node = state.nodes.find(n => n.id === nodeId);
       if (!node) return;
@@ -568,13 +594,44 @@ export default function App() {
       const fileContext = contextFiles.map(n => `Filename: ${n!.title}\nContent:\n${n!.content}`).join('\n\n');
 
       const systemInstruction = `You are an expert coding assistant in NodeCode Studio. 
-      You are concise in conversation but thorough in coding.
       
-      CRITICAL RULE:
-      When asked to write or update code, you must ONLY use the 'updateFile' tool.
-      Do NOT write code blocks in the chat response.
-      Do NOT provide conversational filler like "Here is the code".
-      Just call the tool.
+      CRITICAL: MULTIPLAYER/COLLABORATION INSTRUCTIONS
+      The user often wants to build multiplayer apps (like games).
+      The NodeCode platform provides a bridge for this:
+      
+      1. To SHARE state with other users:
+         Call \`window.broadcastState({ someKey: 'someValue' })\`
+         Do this whenever the user interacts (e.g., clicks a board cell).
+         
+      2. To RECEIVE state from other users:
+         Call \`window.onStateReceived((state) => { ...update your UI... })\`
+         Use this to re-render the board/UI based on the incoming state.
+         
+      3. Always initialize state checks (e.g. if state is null).
+      
+      Example Pattern for Games:
+      \`\`\`javascript
+      let gameState = { board: [..], turn: 'X' };
+      
+      function handleClick(i) {
+         // Update local logic
+         gameState.board[i] = gameState.turn;
+         // BROADCAST to everyone (including self eventually, but usually you update UI immediately too)
+         window.broadcastState(gameState); 
+      }
+      
+      // Listen for updates from others
+      window.onStateReceived((newState) => {
+         if (newState) {
+            gameState = newState;
+            render();
+         }
+      });
+      \`\`\`
+      
+      General Rules:
+      - Use 'updateFile' tool to write code.
+      - Return ONLY code, no conversational filler.
       
       Current Context Files:
       ${contextFiles.length > 0 ? contextFiles.map(f => f?.title).join(', ') : 'No files selected.'}`;
@@ -635,14 +692,14 @@ export default function App() {
       } catch (error: any) {
           dispatch({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: `Error: ${error.message}` } } });
       } finally {
-          dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } }); // Sync Loading Off
+          dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } }); 
       }
   };
 
   const handleAiGenerate = async (nodeId: string, action: 'optimize' | 'prompt', promptText?: string) => {
       const node = state.nodes.find(n => n.id === nodeId);
       if (!node || node.type !== 'CODE') return;
-      dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: true } }); // Sync Loading
+      dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: true } });
       try {
           const apiKey = process.env.API_KEY; 
           const ai = new GoogleGenAI({ apiKey });
@@ -652,7 +709,7 @@ export default function App() {
           
           let userPrompt = '';
           if (action === 'optimize') {
-              userPrompt = `Optimize the following code (Remove dead code, keep logic):\n\n${node.content}`;
+              userPrompt = `Optimize the following code:\n\n${node.content}`;
           } else {
               userPrompt = `Request: ${promptText}\n\nCurrent Code:\n${node.content}`;
           }
@@ -814,12 +871,9 @@ export default function App() {
   // --- Compute Display Nodes (Live Collaboration Visuals) ---
   const displayNodes = useMemo(() => {
     return state.nodes.map(node => {
-        // If *we* are moving it, use our state (handled by default rendering)
-        // If *someone else* is moving it, we want to visualize THEIR move live
         const collaborator = state.collaborators.find(c => c.draggingNodeId === node.id && c.id !== sessionId);
         
         if (collaborator && collaborator.draggingPosition) {
-            // Visual override for remote drag
             return { 
                 ...node, 
                 position: collaborator.draggingPosition,
@@ -947,12 +1001,11 @@ export default function App() {
                          logs = sources.flatMap(sid => state.logs[sid] || []).sort((a, b) => a.timestamp - b.timestamp);
                     }
                     
-                    // Find if someone is editing/dragging this node
                     const activeCollaborator = state.collaborators.find(c => 
                         (c.draggingNodeId === node.id || c.editingNodeId === node.id) && c.id !== sessionId
                     );
                     const collabInfo = activeCollaborator ? {
-                        name: '', // Empty name as requested
+                        name: '', 
                         color: activeCollaborator.color,
                         action: (activeCollaborator.editingNodeId === node.id ? 'editing' : 'dragging') as 'editing' | 'dragging'
                     } : undefined;

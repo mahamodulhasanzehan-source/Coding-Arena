@@ -28,6 +28,7 @@ export interface NodeData {
   messages?: ChatMessage[]; // For AI_CHAT nodes
   contextNodeIds?: string[]; // IDs of files selected for AI context
   isLoading?: boolean; // For AI loading state
+  sharedState?: any; // For multiplayer state synchronization
 }
 
 export interface Port {
@@ -100,4 +101,5 @@ export type Action =
   | { type: 'TOGGLE_PREVIEW'; payload: { nodeId: string; isRunning: boolean } }
   | { type: 'LOAD_STATE'; payload: Partial<GraphState> }
   | { type: 'UPDATE_COLLABORATORS'; payload: UserPresence[] }
-  | { type: 'SET_NODE_INTERACTION'; payload: { nodeId: string; type: 'drag' | 'edit' | null } };
+  | { type: 'SET_NODE_INTERACTION'; payload: { nodeId: string; type: 'drag' | 'edit' | null } }
+  | { type: 'UPDATE_NODE_SHARED_STATE'; payload: { nodeId: string; state: any } };

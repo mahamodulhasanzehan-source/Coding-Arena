@@ -125,7 +125,6 @@ export const compilePreview = (
       finalContent = `<style>\n${finalContent}\n</style>`;
   } else {
       // Everything else (txt, md, no extension): Render as plain text
-      // We escape HTML entities to prevent execution
       const escaped = finalContent
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")
@@ -141,7 +140,6 @@ export const compilePreview = (
   }
 
   // 3. Inject Dependencies based on Filenames (Only if the root is HTML-like)
-  // If it's plain text, we don't inject dependencies.
   if (lowerTitle.endsWith('.html') || lowerTitle.endsWith('.htm')) {
       // Check CSS imports <link href="style.css">
       finalContent = finalContent.replace(/<link[^>]+href=["']([^"']+)["'][^>]*>/gi, (match, filename) => {
@@ -150,7 +148,7 @@ export const compilePreview = (
             return `<style>\n/* Source: ${filename} */\n${depNode.content}\n</style>`;
         } else {
             missingDependencies.push(filename);
-            return match; // Leave it as is, it will likely fail in browser, but we report error below
+            return match; 
         }
       });
 
@@ -167,8 +165,7 @@ export const compilePreview = (
   }
 
 
-  // 4. Inject Console Interceptor & Force Reload Timestamp
-  // We also inject scripts to log errors for missing files
+  // 4. Inject Console Interceptor & Multiplayer Bridge & Force Reload Timestamp
   const errorInjections = missingDependencies.map(file => 
     `console.error('Dependency Error: "${file}" is referenced in code but not connected via wires.');`
   ).join('\n');
@@ -212,6 +209,24 @@ export const compilePreview = (
            return false;
         };
 
+        // --- Multiplayer Bridge ---
+        window.broadcastState = function(state) {
+          window.parent.postMessage({
+            source: 'preview-iframe',
+            nodeId: '${previewNodeId}',
+            type: 'BROADCAST_STATE',
+            payload: state
+          }, '*');
+        };
+
+        window.onStateReceived = function(callback) {
+          window.addEventListener('message', (event) => {
+            if (event.data && event.data.type === 'STATE_UPDATE') {
+              callback(event.data.payload);
+            }
+          });
+        };
+
         // Report Missing Dependencies immediately
         ${errorInjections}
       })();
@@ -234,8 +249,6 @@ export const compilePreview = (
         </html>
       `;
   } else {
-      // For JS/CSS/Text, we wrap the interceptor in the body if we wrapped content in <script>, 
-      // but for raw text we skip interceptor to avoid contaminating visual output.
       if (lowerTitle.endsWith('.js') || lowerTitle.endsWith('.css')) {
            return `
             <!DOCTYPE html>
