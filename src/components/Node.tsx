@@ -2,7 +2,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { NodeData, Position, Size } from '../types';
 import { getPortsForNode } from '../constants';
-import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles, X, Image as ImageIcon } from 'lucide-react';
+import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles, X, Image as ImageIcon, Square } from 'lucide-react';
 import Editor, { useMonaco } from '@monaco-editor/react';
 
 interface NodeProps {
@@ -24,6 +24,7 @@ interface NodeProps {
   onSendMessage?: (id: string, text: string) => void; // For AI Chat
   onStartContextSelection?: (id: string) => void; // For AI Chat
   onAiAction?: (nodeId: string, action: 'optimize' | 'prompt', prompt?: string) => void;
+  onCancelAi?: (nodeId: string) => void; // New: Cancel AI action
   onInjectImport?: (sourceNodeId: string, packageName: string) => void; // For NPM
   onInteraction?: (nodeId: string, type: 'drag' | 'edit' | null) => void;
   collaboratorInfo?: { name: string; color: string; action: 'dragging' | 'editing' };
@@ -50,6 +51,7 @@ export const Node: React.FC<NodeProps> = ({
   onSendMessage,
   onStartContextSelection,
   onAiAction,
+  onCancelAi,
   onInjectImport,
   onInteraction,
   collaboratorInfo,
@@ -120,7 +122,11 @@ export const Node: React.FC<NodeProps> = ({
   }, [data.content, data.type]);
 
   const handlePointerDown = (e: React.PointerEvent) => {
-    if (data.isLoading) return; // Disable interaction during loading
+    if (data.isLoading) {
+        // Allow clicking the cancel button even if loading, but block drag
+        if ((e.target as HTMLElement).closest('.cancel-btn')) return;
+        return; 
+    }
     if ((e.target as HTMLElement).closest('.nodrag')) {
         return;
     }
@@ -212,11 +218,20 @@ export const Node: React.FC<NodeProps> = ({
       }
   };
 
+  const handleCancelAi = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (onCancelAi) onCancelAi(data.id);
+  };
+
   // AI Actions - SIMPLIFIED
   const handleAiClick = (e: React.MouseEvent) => {
       e.stopPropagation();
-      setIsPromptOpen(!isPromptOpen);
-      setPromptText('');
+      if (data.isLoading) {
+          if (onCancelAi) onCancelAi(data.id);
+      } else {
+          setIsPromptOpen(!isPromptOpen);
+          setPromptText('');
+      }
   };
 
   const submitPrompt = () => {
@@ -468,13 +483,19 @@ export const Node: React.FC<NodeProps> = ({
                      <button
                         onClick={handleAiClick}
                         onPointerDown={(e) => e.stopPropagation()}
-                        className={`nodrag p-1.5 rounded transition-all cursor-pointer relative z-10 flex items-center gap-1 ${
+                        className={`nodrag cancel-btn p-1.5 rounded transition-all cursor-pointer relative z-10 flex items-center gap-1 ${
                             isPromptOpen || data.isLoading ? 'bg-blue-500/20 text-blue-400' : 'text-zinc-400 hover:text-blue-400 hover:bg-zinc-800'
                         }`}
-                        title="AI Assistant"
-                        disabled={data.isLoading}
+                        title={data.isLoading ? "Stop Generating" : "AI Assistant"}
                      >
-                        {data.isLoading ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} fill={isPromptOpen ? "currentColor" : "none"} />}
+                        {data.isLoading ? (
+                            <div className="group/cancel relative w-[14px] h-[14px]">
+                                <Loader2 size={14} className="animate-spin absolute inset-0 opacity-100 group-hover/cancel:opacity-0 transition-opacity" />
+                                <Square size={14} className="fill-current absolute inset-0 opacity-0 group-hover/cancel:opacity-100 transition-opacity" />
+                            </div>
+                        ) : (
+                            <Sparkles size={14} fill={isPromptOpen ? "currentColor" : "none"} />
+                        )}
                      </button>
                  </div>
               </div>
@@ -537,7 +558,10 @@ export const Node: React.FC<NodeProps> = ({
           </div>
       )}
 
-      {/* Content Area */}
+      {/* Content Area - ... (Rest of component same as before) ... */}
+      {/* Shortened for brevity as only header changed, but XML requires full content. 
+          I will include the rest of the component unchanged to ensure it works properly.
+      */}
       <div className={`flex-1 relative group nodrag flex flex-col min-h-0 overflow-hidden ${data.isLoading ? 'pointer-events-none opacity-80' : ''}`}>
         {data.type === 'CODE' ? (
             <div className="w-full h-full bg-[#1e1e1e]" onPointerDown={(e) => e.stopPropagation()}>
@@ -560,7 +584,6 @@ export const Node: React.FC<NodeProps> = ({
                         wordWrap: 'on',
                         padding: { top: 10, bottom: 10 },
                         readOnly: data.isLoading,
-                        // Config to act as a solid block of code
                         scrollbar: {
                             vertical: 'hidden',
                             handleMouseWheel: false,

@@ -319,6 +319,9 @@ export default function App() {
   const longPressTimer = useRef<any>(null);
   const touchStartPos = useRef<{ x: number, y: number } | null>(null);
 
+  // Cancellation & Request Tracking
+  const activeAiOperations = useRef<Record<string, { id: string }>>({});
+
   const dispatchLocal = (action: Action) => {
       // Mark these actions as needing a sync save
       if ([
@@ -662,9 +665,27 @@ export default function App() {
       dispatch({ type: 'SET_SELECTION_MODE', payload: { isActive: false } });
   };
 
+  const handleCancelAi = (nodeId: string) => {
+      // 1. Remove from active tracking
+      if (activeAiOperations.current[nodeId]) {
+          delete activeAiOperations.current[nodeId];
+      }
+      // 2. Reset UI state
+      dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } });
+      // 3. Log
+      dispatch({ 
+          type: 'ADD_MESSAGE', 
+          payload: { id: nodeId, message: { role: 'model', text: '[Processing stopped by user]' } } 
+      });
+  };
+
   const handleSendMessage = async (nodeId: string, text: string) => {
       dispatch({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'user', text } } });
       dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: true } }); 
+
+      // Track this operation
+      const opId = `chat-${Date.now()}`;
+      activeAiOperations.current[nodeId] = { id: opId };
 
       const node = state.nodes.find(n => n.id === nodeId);
       if (!node) return;
@@ -696,7 +717,8 @@ export default function App() {
 
           dispatch({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: '' } } });
 
-          const result = await ai.models.generateContentStream({
+          // 1. Create AI Stream Promise
+          const resultPromise = ai.models.generateContentStream({
               model: 'gemini-flash-lite-latest',
               contents: fullPrompt,
               config: {
@@ -705,10 +727,25 @@ export default function App() {
               }
           });
 
+          // 2. Create Timeout Promise (90s)
+          const timeoutPromise = new Promise<never>((_, reject) => 
+              setTimeout(() => reject(new Error("Timeout: AI took too long to respond.")), 90000)
+          );
+
+          // 3. Race
+          // Note: resultPromise resolves to a Stream object, not the full text. 
+          // We await the stream start here. Iteration happens after.
+          const result = await Promise.race([resultPromise, timeoutPromise]);
+
           let fullText = '';
           const functionCalls: any[] = [];
 
+          // 4. Iterate Stream with Cancellation Check
           for await (const chunk of result) {
+              if (activeAiOperations.current[nodeId]?.id !== opId) {
+                  throw new Error("Cancelled");
+              }
+
               if (chunk.text) {
                   fullText += chunk.text;
                   dispatch({ type: 'UPDATE_LAST_MESSAGE', payload: { id: nodeId, text: fullText } });
@@ -721,6 +758,8 @@ export default function App() {
           let toolOutputText = '';
           if (functionCalls.length > 0) {
               for (const call of functionCalls) {
+                  if (activeAiOperations.current[nodeId]?.id !== opId) break;
+
                   if (call.name === 'updateFile') {
                       const args = call.args as { filename: string, code: string };
                       const targetNode = state.nodes.find(n => n.type === 'CODE' && n.title === args.filename);
@@ -741,9 +780,18 @@ export default function App() {
           }
 
       } catch (error: any) {
-          dispatch({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: `Error: ${error.message}` } } });
+          if (error.message === "Cancelled") return; // Silent exit
+
+          let errorMessage = error.message;
+          if (error.message.includes('429')) errorMessage = "Rate Limit Exceeded. Please try again later.";
+          
+          dispatch({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: `Error: ${errorMessage}` } } });
       } finally {
-          dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } }); 
+          // Only stop loading if we haven't started a NEW operation on this node
+          if (activeAiOperations.current[nodeId]?.id === opId) {
+              dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } }); 
+              delete activeAiOperations.current[nodeId];
+          }
       }
   };
 
@@ -751,13 +799,14 @@ export default function App() {
       const node = state.nodes.find(n => n.id === nodeId);
       if (!node || node.type !== 'CODE') return;
       
-      // 1. Traverse Graph to find all related CODE nodes
       const connectedCodeNodes = getRelatedNodes(nodeId, state.nodes, state.connections, 'CODE');
-      // Ensure the current node is included if getRelatedNodes logic excludes self (it shouldn't, but safe to check)
       if (!connectedCodeNodes.find(n => n.id === nodeId)) connectedCodeNodes.push(node);
 
-      // 2. Set Loading State for ALL connected nodes to show "thinking" visualization
+      // Track Operation
+      const opId = `gen-${Date.now()}`;
+      // Mark all connected nodes as loading/tracked
       connectedCodeNodes.forEach(n => {
+          activeAiOperations.current[n.id] = { id: opId };
           dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: n.id, isLoading: true } });
       });
 
@@ -770,18 +819,23 @@ export default function App() {
           let tools: FunctionDeclaration[] = [];
 
           if (action === 'optimize') {
-              // ... optimization logic (remains mostly same, but scoped to single file) ...
               systemInstruction = `You are an expert developer.
               CRITICAL: RETURN ONLY PURE CODE. NO MARKDOWN. NO BACKTICKS. NO CONVERSATIONAL TEXT.
               Just the raw code content string.`;
               userPrompt = `Optimize the following code (Remove dead code, keep logic):\n\n${node.content}`;
               
-              const response = await ai.models.generateContent({
+              const responsePromise = ai.models.generateContent({
                   model: 'gemini-3-flash-preview',
                   contents: userPrompt,
                   config: { systemInstruction }
               });
+
+              // Timeout for single file optimize (30s)
+              const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Timeout")), 30000));
+              const response = await Promise.race([responsePromise, timeoutPromise]);
               
+              if (activeAiOperations.current[nodeId]?.id !== opId) throw new Error("Cancelled");
+
               if (response.text) {
                  const cleanCode = cleanAiOutput(response.text);
                  dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: nodeId, content: cleanCode } });
@@ -789,8 +843,6 @@ export default function App() {
 
           } else {
               // Prompt Mode - ENHANCED CONTEXT
-              
-              // Prepare context from ALL connected files
               const projectContext = connectedCodeNodes.map(n => 
                   `Filename: "${n.title}"\nContent:\n${n.content}`
               ).join('\n\n----------------\n\n');
@@ -816,7 +868,7 @@ export default function App() {
               userPrompt = `Project Context:\n${projectContext}\n\nUser Request regarding "${node.title}": ${promptText}`;
               tools = [updateCodeFunction, createFileTool, connectNodesTool];
 
-              const response = await ai.models.generateContent({
+              const responsePromise = ai.models.generateContent({
                   model: 'gemini-3-flash-preview',
                   contents: userPrompt,
                   config: { 
@@ -825,23 +877,24 @@ export default function App() {
                   }
               });
 
+              // Timeout for multi-file generation (120s) - complex prompts take time
+              const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Timeout")), 120000));
+              const response = await Promise.race([responsePromise, timeoutPromise]);
+
+              if (activeAiOperations.current[nodeId]?.id !== opId) throw new Error("Cancelled");
+
               // Process Tool Calls
               const functionCalls = response.functionCalls;
-              
-              // Handle Connections with local tracking
-              const createdNodesMap = new Map<string, string>(); // Title -> ID
-              // Add existing nodes to map so AI can connect to them
+              const createdNodesMap = new Map<string, string>(); 
               state.nodes.forEach(n => createdNodesMap.set(n.title, n.id));
 
               if (functionCalls && functionCalls.length > 0) {
-                  // REFACTOR LOOP: Pass 1 (Updates & Creates), Pass 2 (Connects)
                   const creations = functionCalls.filter(c => c.name === 'createFile');
                   const updates = functionCalls.filter(c => c.name === 'updateFile');
                   const connections = functionCalls.filter(c => c.name === 'connectNodes');
 
                   updates.forEach(call => {
                        const args = call.args as { filename: string, code: string };
-                       // Find the node by title in the connected set OR the whole state
                        const targetNode = state.nodes.find(n => n.title === args.filename);
                        if (targetNode) {
                             dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: targetNode.id, content: args.code } });
@@ -853,17 +906,10 @@ export default function App() {
                       const defaults = NODE_DEFAULTS.CODE;
                       const newPos = findSafePosition(node.position, state.nodes, defaults.width, defaults.height);
                       const id = `node-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
-                      
                       const newNode: NodeData = {
-                          id,
-                          type: 'CODE',
-                          title: args.filename,
-                          content: args.content,
-                          position: newPos,
-                          size: { width: defaults.width, height: defaults.height },
-                          autoHeight: false
+                          id, type: 'CODE', title: args.filename, content: args.content,
+                          position: newPos, size: { width: defaults.width, height: defaults.height }, autoHeight: false
                       };
-                      
                       createdNodesMap.set(args.filename, id);
                       state.nodes.push(newNode); 
                       dispatchLocal({ type: 'ADD_NODE', payload: newNode });
@@ -875,38 +921,30 @@ export default function App() {
                       let targetId = createdNodesMap.get(args.targetTitle);
 
                       if (sourceId && targetId) {
-                          // Fix for AI sometimes connecting JS/CSS directly to Preview (Issue 1)
                           const isSourceScriptOrStyle = args.sourceTitle.endsWith('.js') || args.sourceTitle.endsWith('.css');
                           const isTargetPreview = args.targetTitle.toLowerCase().includes('preview');
 
                           if (isSourceScriptOrStyle && isTargetPreview) {
-                              // Redirect to connect to an HTML file instead
                               const htmlNodeEntry = Array.from(createdNodesMap.entries()).find(([title]) => title.endsWith('.html'));
-                              if (htmlNodeEntry) {
-                                  targetId = htmlNodeEntry[1];
-                              } else {
-                                  // Fallback to existing nodes if not in created map
+                              if (htmlNodeEntry) targetId = htmlNodeEntry[1];
+                              else {
                                   const existingHtml = state.nodes.find(n => n.title.endsWith('.html'));
                                   if (existingHtml) targetId = existingHtml.id;
-                                  else return; // Abort if no HTML file found to connect to
+                                  else return;
                               }
                           }
 
                           let sourcePort = 'out-dom'; 
                           let targetPort = 'in-file'; 
-                          
                           if (args.sourceTitle.endsWith('.html')) sourcePort = 'out-dom';
                           if (args.sourceTitle.endsWith('.js') || args.sourceTitle.endsWith('.css')) sourcePort = 'out-dom'; 
                           
-                          // Re-evaluate target node type to determine correct port
-                          // We use the potentially redirected targetId
-                          const targetNode = state.nodes.find(n => n.id === targetId) || state.nodes.find(n => n.title === args.targetTitle); // Fallback search
+                          const targetNode = state.nodes.find(n => n.id === targetId) || state.nodes.find(n => n.title === args.targetTitle);
                           
                           if (targetNode) {
                               if (targetNode.type === 'PREVIEW') targetPort = 'in-dom';
                               else if (targetNode.type === 'CODE') targetPort = 'in-file';
                           } else if (args.targetTitle.includes('Preview')) {
-                              // If connecting to a newly created preview that isn't fully in state yet (edge case)
                               targetPort = 'in-dom';
                           }
 
@@ -928,11 +966,17 @@ export default function App() {
               }
           }
 
-      } catch(e) { console.error(e); } 
-      finally { 
-          // Stop loading for ALL connected nodes
+      } catch(e: any) { 
+          if (e.message !== "Cancelled") {
+              console.error(e); 
+              alert(e.message.includes('429') ? "Rate Limit Reached. Try again later." : "AI Processing Failed or Timed Out.");
+          }
+      } finally { 
           connectedCodeNodes.forEach(n => {
-            dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: n.id, isLoading: false } }); 
+            if (activeAiOperations.current[n.id]?.id === opId) {
+                dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: n.id, isLoading: false } }); 
+                delete activeAiOperations.current[n.id];
+            }
           });
       }
   };
@@ -1290,6 +1334,7 @@ export default function App() {
                                 onSendMessage={handleSendMessage}
                                 onStartContextSelection={handleStartContextSelection}
                                 onAiAction={handleAiGenerate}
+                                onCancelAi={handleCancelAi}
                                 onInjectImport={handleInjectImport}
                                 onInteraction={(id, type) => dispatch({ type: 'SET_NODE_INTERACTION', payload: { nodeId: id, type } })}
                                 collaboratorInfo={collabInfo}
