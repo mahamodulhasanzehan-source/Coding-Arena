@@ -24,7 +24,7 @@ export const Wire: React.FC<WireProps> = ({ x1, y1, x2, y2, active }) => {
                 d={path}
                 fill="none"
                 stroke="#71717a" // Zinc-500
-                strokeWidth={12} // Increased thickness (was 6)
+                strokeWidth={12} // Increased thickness
             />
             {/* The "Dot" being dragged */}
             <circle 
@@ -45,7 +45,7 @@ export const Wire: React.FC<WireProps> = ({ x1, y1, x2, y2, active }) => {
         d={path}
         fill="none"
         stroke="#52525b" // Zinc-600
-        strokeWidth={8} // Increased thickness (was 4)
+        strokeWidth={8} // Increased thickness
         className="transition-colors duration-200"
       />
     </g>
