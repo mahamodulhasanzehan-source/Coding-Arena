@@ -1,3 +1,4 @@
+
 import React, { useReducer, useState, useRef, useEffect, useMemo } from 'react';
 import { Node } from './components/Node';
 import { Wire } from './components/Wire';
@@ -148,8 +149,11 @@ function graphReducer(state: GraphState, action: Action): GraphState {
     case 'LOAD_STATE':
         const incomingNodes = action.payload.nodes || [];
         
-        // Critical: When loading server state, assume local interactions are TRUTH.
-        // This prevents snapping back when a user is actively dragging or editing.
+        // Critical: The server is the Source of Truth for *existence* of nodes.
+        // If a node is not in incomingNodes, it is considered deleted.
+        // We only override the *properties* (pos, content) of nodes that actually exist on the server
+        // if we are currently interacting with them locally.
+        
         const mergedNodes = incomingNodes.map(serverNode => {
             // Find current local state of this node
             const localNode = state.nodes.find(n => n.id === serverNode.id);
@@ -168,15 +172,11 @@ function graphReducer(state: GraphState, action: Action): GraphState {
             return serverNode;
         });
 
-        // Retain nodes that exist locally but not yet on server (optimistic creation)
-        const serverNodeIds = new Set(incomingNodes.map(n => n.id));
-        const localNewNodes = state.nodes.filter(n => !serverNodeIds.has(n.id));
-        const finalNodes = [...mergedNodes, ...localNewNodes];
-
         return { 
           ...state, 
-          nodes: finalNodes.length > 0 ? finalNodes : state.nodes, 
+          nodes: mergedNodes, // Simply use the merged list. Do NOT append local-only nodes, as this resurrects deleted nodes.
           connections: action.payload.connections || state.connections,
+          runningPreviewIds: action.payload.runningPreviewIds || state.runningPreviewIds
         };
     case 'UPDATE_COLLABORATORS':
         return { ...state, collaborators: action.payload };
@@ -220,6 +220,18 @@ const getRandomColor = () => {
     return colors[Math.floor(Math.random() * colors.length)];
 };
 
+const cleanAiOutput = (text: string): string => {
+    // 1. Try to match markdown code blocks
+    const codeBlockRegex = /```(?:html|css|js|javascript|json|typescript|ts)?\s*([\s\S]*?)```/i;
+    const match = text.match(codeBlockRegex);
+    if (match && match[1]) {
+        return match[1].trim();
+    }
+    // 2. If no code block, but text contains typical code markers, it might be raw code
+    // Just return the trimmed text, but the prompt should prevent this case.
+    return text.trim();
+};
+
 export default function App() {
   const [state, dispatch] = useReducer(graphReducer, initialState);
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, targetNodeId?: string, targetPortId?: string } | null>(null);
@@ -231,31 +243,32 @@ export default function App() {
   const [userUid, setUserUid] = useState<string | null>(null);
   const [userColor] = useState(getRandomColor());
   
-  // Use a unique session ID per tab to allow multi-tab visualization
   const sessionId = useMemo(() => `session-${Math.random().toString(36).substr(2, 9)}`, []);
-
-  // Use refs to track if a change is local, preventing the sync loop
   const isLocalChange = useRef(false);
-
-  // Mobile Pinch Zoom Logic
   const lastTouchDist = useRef<number | null>(null);
   const isPinching = useRef(false);
-
   const containerRef = useRef<HTMLDivElement>(null);
   const throttleRef = useRef(0);
 
-  // Helper to dispatch and mark as local change
   const dispatchLocal = (action: Action) => {
-      // Actions that modify the graph structure/content need to be marked
-      if (['ADD_NODE', 'DELETE_NODE', 'UPDATE_NODE_POSITION', 'UPDATE_NODE_SIZE', 'UPDATE_NODE_CONTENT', 'UPDATE_NODE_TITLE', 'CONNECT', 'DISCONNECT'].includes(action.type)) {
+      // Mark these actions as needing a sync save
+      if ([
+          'ADD_NODE', 
+          'DELETE_NODE', 
+          'UPDATE_NODE_POSITION', 
+          'UPDATE_NODE_SIZE', 
+          'UPDATE_NODE_CONTENT', 
+          'UPDATE_NODE_TITLE', 
+          'CONNECT', 
+          'DISCONNECT',
+          'TOGGLE_PREVIEW',
+          'SET_NODE_LOADING' // IMPORTANT: Sync loading state so everyone sees the shimmer
+      ].includes(action.type)) {
           isLocalChange.current = true;
       }
       dispatch(action);
   };
 
-  // --- Persistence Logic (Firebase) ---
-
-  // 1. Initial Login & Setup
   useEffect(() => {
     const init = async () => {
       try {
@@ -263,24 +276,21 @@ export default function App() {
         const user = await signIn();
         setUserUid(user.uid);
         
-        // --- REALTIME PROJECT LISTENER ---
         const docRef = doc(db, 'nodecode_projects', 'global_project_room'); 
         
         const unsubscribeProject = onSnapshot(docRef, (docSnap) => {
-             // If we have pending writes, it means *we* caused this snapshot.
-             // We can ignore it to prevent jitter, but Firestore handles this mostly.
              if (docSnap.metadata.hasPendingWrites) return;
 
              if (docSnap.exists()) {
                 const data = docSnap.data() as { state: string } | undefined;
                 if (data && data.state) {
                     const loadedState = JSON.parse(data.state);
-                    // This load will merge with local state respecting locks
                     dispatch({ 
                         type: 'LOAD_STATE', 
                         payload: { 
                             nodes: loadedState.nodes, 
-                            connections: loadedState.connections 
+                            connections: loadedState.connections,
+                            runningPreviewIds: loadedState.runningPreviewIds
                         } 
                     });
                 }
@@ -310,14 +320,12 @@ export default function App() {
             setSyncStatus('error');
         });
 
-        // Use Session ID for Presence Logic to support multiple tabs
         const presenceRef = collection(db, 'nodecode_projects', 'global_project_room', 'presence');
         const unsubscribePresence = onSnapshot(presenceRef, (snapshot: QuerySnapshot<DocumentData>) => {
             const activeUsers: UserPresence[] = [];
             const now = Date.now();
             snapshot.forEach(doc => {
                 const data = doc.data() as UserPresence;
-                // Filter out OUR OWN session cursor
                 if (data.id !== sessionId && (now - data.lastActive < 30000)) { 
                     activeUsers.push(data);
                 }
@@ -328,7 +336,6 @@ export default function App() {
         return () => {
             unsubscribeProject();
             unsubscribePresence();
-            // Cleanup based on Session ID
             deleteDoc(doc(db, 'nodecode_projects', 'global_project_room', 'presence', sessionId));
         };
 
@@ -345,15 +352,16 @@ export default function App() {
   useEffect(() => {
     if (!userUid) return;
     
-    // Check if there was a local change before scheduling save
     if (isLocalChange.current) {
         setSyncStatus('saving');
         const saveData = setTimeout(async () => {
           try {
              const docRef = doc(db, 'nodecode_projects', 'global_project_room');
              const stateToSave = {
-                nodes: state.nodes.map(n => ({...n, isLoading: false})), 
+                // IMPORTANT: We now SAVE isLoading state so other users see the shimmering effect
+                nodes: state.nodes, 
                 connections: state.connections,
+                runningPreviewIds: state.runningPreviewIds, // Save running state
                 pan: {x:0, y:0}, 
                 zoom: 1
              };
@@ -362,7 +370,7 @@ export default function App() {
                  updatedAt: new Date().toISOString()
              });
              setSyncStatus('synced');
-             isLocalChange.current = false; // Reset flag after successful save
+             isLocalChange.current = false; 
           } catch (e) {
               console.error("Save failed", e);
               setSyncStatus('error');
@@ -371,7 +379,7 @@ export default function App() {
 
         return () => clearTimeout(saveData);
     }
-  }, [state.nodes, state.connections, userUid]); // We still depend on state, but guard with ref
+  }, [state.nodes, state.connections, state.runningPreviewIds, userUid]); 
 
   // LIVE UPDATE LOOP
   useEffect(() => {
@@ -467,11 +475,12 @@ export default function App() {
       const shouldRun = !isRunning;
       const iframe = document.getElementById(`preview-iframe-${id}`) as HTMLIFrameElement;
       
+      // Dispatch LOCAL so it triggers a save and syncs 'runningPreviewIds'
       if (shouldRun) {
-           dispatch({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: true } });
+           dispatchLocal({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: true } });
            dispatch({ type: 'CLEAR_LOGS', payload: { nodeId: id } });
       } else {
-           dispatch({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: false } });
+           dispatchLocal({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: false } });
            dispatch({ type: 'CLEAR_LOGS', payload: { nodeId: id } });
            if (iframe) {
                iframe.srcdoc = '<body style="background-color: #000; color: #555; height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; font-family: sans-serif;">STOPPED</body>';
@@ -547,7 +556,7 @@ export default function App() {
 
   const handleSendMessage = async (nodeId: string, text: string) => {
       dispatch({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'user', text } } });
-      dispatch({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: true } });
+      dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: true } }); // Sync Loading
 
       const node = state.nodes.find(n => n.id === nodeId);
       if (!node) return;
@@ -558,7 +567,17 @@ export default function App() {
 
       const fileContext = contextFiles.map(n => `Filename: ${n!.title}\nContent:\n${n!.content}`).join('\n\n');
 
-      const systemInstruction = `You are an expert coding assistant in NodeCode Studio...`;
+      const systemInstruction = `You are an expert coding assistant in NodeCode Studio. 
+      You are concise in conversation but thorough in coding.
+      
+      CRITICAL RULE:
+      When asked to write or update code, you must ONLY use the 'updateFile' tool.
+      Do NOT write code blocks in the chat response.
+      Do NOT provide conversational filler like "Here is the code".
+      Just call the tool.
+      
+      Current Context Files:
+      ${contextFiles.length > 0 ? contextFiles.map(f => f?.title).join(', ') : 'No files selected.'}`;
 
       try {
           const apiKey = process.env.API_KEY; 
@@ -616,30 +635,39 @@ export default function App() {
       } catch (error: any) {
           dispatch({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: `Error: ${error.message}` } } });
       } finally {
-          dispatch({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } });
+          dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } }); // Sync Loading Off
       }
   };
 
   const handleAiGenerate = async (nodeId: string, action: 'optimize' | 'prompt', promptText?: string) => {
       const node = state.nodes.find(n => n.id === nodeId);
       if (!node || node.type !== 'CODE') return;
-      dispatch({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: true } });
+      dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: true } }); // Sync Loading
       try {
           const apiKey = process.env.API_KEY; 
           const ai = new GoogleGenAI({ apiKey });
-          const systemInstruction = action === 'optimize' ? 'Optimize code.' : 'Modify code.';
-          const userPrompt = `${action === 'optimize' ? 'Optimize' : 'User Request: ' + promptText}\n\n${node.content}`;
+          const systemInstruction = `You are an expert developer.
+          CRITICAL: RETURN ONLY PURE CODE. NO MARKDOWN. NO BACKTICKS. NO CONVERSATIONAL TEXT.
+          Just the raw code content string.`;
+          
+          let userPrompt = '';
+          if (action === 'optimize') {
+              userPrompt = `Optimize the following code (Remove dead code, keep logic):\n\n${node.content}`;
+          } else {
+              userPrompt = `Request: ${promptText}\n\nCurrent Code:\n${node.content}`;
+          }
+
           const response = await ai.models.generateContent({
               model: 'gemini-3-flash-preview',
               contents: userPrompt,
               config: { systemInstruction }
           });
           if (response.text) {
-             const cleanCode = response.text.replace(/^```[\w]*\n/, '').replace(/\n```$/, '');
+             const cleanCode = cleanAiOutput(response.text);
              dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: nodeId, content: cleanCode } });
           }
       } catch(e) { console.error(e); } 
-      finally { dispatch({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } }); }
+      finally { dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } }); }
   };
 
   const handlePortDown = (e: React.PointerEvent, portId: string, nodeId: string, isInput: boolean) => {
@@ -673,23 +701,18 @@ export default function App() {
         dispatch({ type: 'PAN', payload: { x: state.pan.x + e.movementX, y: state.pan.y + e.movementY } });
     }
 
-    // --- Update Collaborator Cursor & Drag State ---
     if (userUid && containerRef.current) {
         const now = Date.now();
-        if (now - throttleRef.current > 60) { // Slightly faster update
+        if (now - throttleRef.current > 60) { 
             throttleRef.current = now;
             const rect = containerRef.current.getBoundingClientRect();
             const x = (e.clientX - rect.left - state.pan.x) / state.zoom;
             const y = (e.clientY - rect.top - state.pan.y) / state.zoom;
 
-            // Check if we are dragging a node
-            // We need to find if there is a node that we are currently dragging locally
-            // We can infer this from nodeInteractions where value is 'drag'
             const draggingNodeId = Object.keys(state.nodeInteractions).find(id => state.nodeInteractions[id] === 'drag');
             const draggingPosition = draggingNodeId ? state.nodes.find(n => n.id === draggingNodeId)?.position : undefined;
             const editingNodeId = Object.keys(state.nodeInteractions).find(id => state.nodeInteractions[id] === 'edit');
 
-            // Set presence document using SESSION ID, not USER ID
             setDoc(doc(db, 'nodecode_projects', 'global_project_room', 'presence', sessionId), {
                 id: sessionId,
                 x,
@@ -800,7 +823,7 @@ export default function App() {
             return { 
                 ...node, 
                 position: collaborator.draggingPosition,
-                _remoteDrag: true // Internal flag if needed
+                _remoteDrag: true 
             };
         }
         return node;
@@ -931,7 +954,7 @@ export default function App() {
                     const collabInfo = activeCollaborator ? {
                         name: '', // Empty name as requested
                         color: activeCollaborator.color,
-                        action: (activeCollaborator.editingNodeId === node.id ? 'editing' : 'dragging') as 'dragging' | 'editing'
+                        action: (activeCollaborator.editingNodeId === node.id ? 'editing' : 'dragging') as 'editing' | 'dragging'
                     } : undefined;
 
                     return (
