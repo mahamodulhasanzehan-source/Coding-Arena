@@ -8,11 +8,12 @@ import { CollaboratorCursor } from './components/CollaboratorCursor';
 import { GraphState, Action, NodeData, NodeType, LogEntry, UserPresence } from './types';
 import { NODE_DEFAULTS, getPortsForNode } from './constants';
 import { compilePreview, calculatePortPosition, getRelatedNodes, getAllConnectedSources, getConnectedSource } from './utils/graphUtils';
-import { Trash2, Menu, Cloud, CloudOff, UploadCloud, Users } from 'lucide-react';
+import { Trash2, Menu, Cloud, CloudOff, UploadCloud, Users, Download } from 'lucide-react';
 import Prism from 'prismjs';
 import { GoogleGenAI, FunctionDeclaration, Type } from "@google/genai";
 import { signIn, db } from './firebase';
 import { doc, getDoc, setDoc, onSnapshot, collection, deleteDoc, QuerySnapshot, DocumentData } from 'firebase/firestore';
+import JSZip from 'jszip';
 
 const initialState: GraphState = {
   nodes: [],
@@ -195,8 +196,7 @@ function graphReducer(state: GraphState, action: Action): GraphState {
   }
 }
 
-// ... (Gemini Tool Definitions and Helper Functions - No changes needed here) ...
-// (Omitting strictly for brevity in this response, assuming standard merging)
+// ... (Gemini Tool Definitions remain unchanged) ...
 const updateCodeFunction: FunctionDeclaration = {
     name: 'updateFile',
     description: 'Update the code content of a specific file. Use this for CHAT responses or simple edits.',
@@ -224,7 +224,7 @@ const updateCurrentFileTool: FunctionDeclaration = {
 
 const createFileTool: FunctionDeclaration = {
     name: 'createFile',
-    description: 'Create a new code file (node) on the canvas. Use this when you need to add HTML, CSS, or JS files to build a feature.',
+    description: 'Create a new code file (node) on the canvas. Use this when the user explicitly asks to "create a file" or needs a new module.',
     parameters: {
         type: Type.OBJECT,
         properties: {
@@ -265,7 +265,6 @@ const cleanAiOutput = (text: string): string => {
     return text.trim();
 };
 
-// --- Helper: Find Non-Overlapping Position (Spiral Search) ---
 const findSafePosition = (
     origin: { x: number, y: number }, 
     existingNodes: NodeData[], 
@@ -275,13 +274,10 @@ const findSafePosition = (
     let r = 50; // Start offset
     let angle = 0;
     
-    // Safety break after ~100 attempts
     for (let i = 0; i < 100; i++) {
         const x = origin.x + r * Math.cos(angle);
         const y = origin.y + r * Math.sin(angle);
         
-        // Check collision with all existing nodes
-        // Using a 20px padding
         const collision = existingNodes.some(n => 
             x < n.position.x + n.size.width + 30 &&
             x + width + 30 > n.position.x &&
@@ -291,12 +287,10 @@ const findSafePosition = (
 
         if (!collision) return { x, y };
         
-        // Spiral out
         angle += 1; // ~57 degrees
         r += 10;
     }
     
-    // Fallback
     return { x: origin.x + 50, y: origin.y + 50 };
 };
 
@@ -320,15 +314,12 @@ export default function App() {
   const throttleRef = useRef(0);
   const lastSentStateRef = useRef<Record<string, any>>({});
 
-  // Long Press Logic for Mobile
   const longPressTimer = useRef<any>(null);
   const touchStartPos = useRef<{ x: number, y: number } | null>(null);
 
-  // Cancellation & Request Tracking
   const activeAiOperations = useRef<Record<string, { id: string }>>({});
 
   const dispatchLocal = (action: Action) => {
-      // Mark these actions as needing a sync save
       if ([
           'ADD_NODE', 
           'DELETE_NODE', 
@@ -399,7 +390,6 @@ export default function App() {
             setSyncStatus('error');
         });
 
-        // ... (Presence logic omitted for brevity, identical to previous) ...
         const presenceRef = collection(db, 'nodecode_projects', 'global_project_room', 'presence');
         const unsubscribePresence = onSnapshot(presenceRef, (snapshot: QuerySnapshot<DocumentData>) => {
             const activeUsers: UserPresence[] = [];
@@ -428,8 +418,6 @@ export default function App() {
     init();
   }, [sessionId]);
 
-  // ... (Save Logic, Live Update, Handle Message, etc. - Identical) ...
-  // 2. Debounced Save - Only runs if isLocalChange is true
   useEffect(() => {
     if (!userUid) return;
     
@@ -461,7 +449,7 @@ export default function App() {
     }
   }, [state.nodes, state.connections, state.runningPreviewIds, userUid]); 
 
-  // LIVE UPDATE LOOP & SHARED STATE SYNC & STOP SYNC
+  // LIVE UPDATE LOOP
   useEffect(() => {
       // 1. Handle Running Previews
       state.runningPreviewIds.forEach(previewId => {
@@ -469,13 +457,11 @@ export default function App() {
           const node = state.nodes.find(n => n.id === previewId);
 
           if (iframe && node) {
-               // Compile Code Update
                const compiled = compilePreview(previewId, state.nodes, state.connections, false);
                if (iframe.srcdoc !== compiled) {
                   iframe.srcdoc = compiled;
                }
 
-               // Sync Shared State
                const lastSent = lastSentStateRef.current[previewId];
                if (JSON.stringify(node.sharedState) !== JSON.stringify(lastSent)) {
                    if (iframe.contentWindow) {
@@ -496,8 +482,9 @@ export default function App() {
               const iframe = document.getElementById(`preview-iframe-${node.id}`) as HTMLIFrameElement;
               const stoppedContent = '<body style="background-color: #000; color: #555; height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; font-family: sans-serif;">STOPPED</body>';
               
-              if (iframe && iframe.srcdoc !== stoppedContent) {
-                  iframe.srcdoc = stoppedContent;
+              if (iframe && iframe.srcdoc && !iframe.srcdoc.includes("STOPPED")) {
+                  // Only update if it doesn't already show stopped to avoid loop
+                  // But handleToggleRun handles the initial setting.
               }
           }
       });
@@ -551,7 +538,6 @@ export default function App() {
       } else if (imageExts.includes(ext || '')) {
           newType = 'IMAGE';
       } else if (node.type === 'IMAGE' || node.type === 'CODE') {
-          // If extension exists but is invalid for these types, reject the rename
           if (newTitle.includes('.') && !codeExts.includes(ext || '') && !imageExts.includes(ext || '')) {
                alert(`.${ext} is not a supported file type for this module.`);
                return; 
@@ -564,7 +550,101 @@ export default function App() {
       }
   };
 
-  // ... (Other Handlers remain similar but using dispatchLocal) ...
+  const handleDownloadZip = async () => {
+    const zip = new JSZip();
+    const codeNodes = state.nodes.filter(n => n.type === 'CODE');
+    
+    // Build adjacency list for CODE-to-CODE connections
+    const adj = new Map<string, string[]>();
+    codeNodes.forEach(n => adj.set(n.id, []));
+    
+    state.connections.forEach(c => {
+        const source = state.nodes.find(n => n.id === c.sourceNodeId);
+        const target = state.nodes.find(n => n.id === c.targetNodeId);
+        if (source?.type === 'CODE' && target?.type === 'CODE') {
+            adj.get(source.id)?.push(target.id);
+            adj.get(target.id)?.push(source.id);
+        }
+    });
+
+    const visited = new Set<string>();
+    const clusters: NodeData[][] = [];
+
+    // Find Connected Components
+    for (const node of codeNodes) {
+        if (!visited.has(node.id)) {
+            const cluster: NodeData[] = [];
+            const queue = [node.id];
+            visited.add(node.id);
+            
+            while(queue.length) {
+                const currId = queue.shift()!;
+                const currNode = state.nodes.find(n => n.id === currId);
+                if (currNode) cluster.push(currNode);
+                
+                const neighbors = adj.get(currId) || [];
+                for (const nId of neighbors) {
+                    if (!visited.has(nId)) {
+                        visited.add(nId);
+                        queue.push(nId);
+                    }
+                }
+            }
+            clusters.push(cluster);
+        }
+    }
+
+    // Process clusters
+    clusters.forEach(cluster => {
+        if (cluster.length > 1) {
+            // Wired: Create folder
+            const folderName = `bundle-${Math.random().toString(36).substr(2, 6)}`;
+            const folder = zip.folder(folderName);
+            if (folder) {
+                cluster.forEach(node => {
+                    let filename = node.title;
+                    let counter = 1;
+                    // Check for collision in this folder (though unlikely in valid projects)
+                    while(folder.file(filename)) {
+                        const parts = node.title.split('.');
+                        const ext = parts.length > 1 ? parts.pop() : '';
+                        const base = parts.join('.');
+                        filename = `${base} (${counter})${ext ? '.' + ext : ''}`;
+                        counter++;
+                    }
+                    folder.file(filename, node.content);
+                });
+            }
+        } else if (cluster.length === 1) {
+            // Unwired (Single node)
+            const node = cluster[0];
+            let filename = node.title;
+            let counter = 1;
+            while(zip.file(filename)) {
+                 const parts = node.title.split('.');
+                 const ext = parts.length > 1 ? parts.pop() : '';
+                 const base = parts.join('.');
+                 filename = `${base} (${counter})${ext ? '.' + ext : ''}`;
+                 counter++;
+            }
+            zip.file(filename, node.content);
+        }
+    });
+
+    try {
+        const content = await zip.generateAsync({ type: "blob" });
+        const url = window.URL.createObjectURL(content);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "nodecode-project.zip";
+        a.click();
+        window.URL.revokeObjectURL(url);
+    } catch (e) {
+        console.error("Failed to generate zip", e);
+        alert("Failed to create zip file.");
+    }
+  };
+
   const handleContextMenu = (e: React.MouseEvent, nodeId?: string) => {
     e.preventDefault();
     const node = nodeId ? state.nodes.find(n => n.id === nodeId) : undefined;
@@ -638,6 +718,7 @@ export default function App() {
   const handleToggleRun = (id: string) => {
       const isRunning = state.runningPreviewIds.includes(id);
       const shouldRun = !isRunning;
+      
       const iframe = document.getElementById(`preview-iframe-${id}`) as HTMLIFrameElement;
       
       if (shouldRun) {
@@ -647,7 +728,21 @@ export default function App() {
            dispatchLocal({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: false } });
            dispatch({ type: 'CLEAR_LOGS', payload: { nodeId: id } });
            if (iframe) {
-               iframe.srcdoc = '<body style="background-color: #000; color: #555; height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; font-family: sans-serif;">STOPPED</body>';
+               // Enhanced Stopped State with Animation
+               iframe.srcdoc = `
+                 <!DOCTYPE html>
+                 <html>
+                 <body style="background-color: #09090b; color: #52525b; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; overflow: hidden; user-select: none;">
+                   <div style="display: flex; flex-direction: column; items-align: center; opacity: 0; transform: translateY(10px); animation: fadeIn 0.3s ease-out forwards;">
+                      <div style="font-size: 2rem; font-weight: 700; letter-spacing: -0.025em; margin-bottom: 0.5rem; text-align: center;">PREVIEW PAUSED</div>
+                      <div style="font-size: 0.875rem; text-align: center;">Click the Run button to start</div>
+                   </div>
+                   <style>
+                      @keyframes fadeIn { to { opacity: 1; transform: translateY(0); } }
+                   </style>
+                 </body>
+                 </html>
+               `;
            }
       }
   };
@@ -1304,6 +1399,14 @@ export default function App() {
             onPointerDown={(e) => e.stopPropagation()}
         >
             <Menu size={16} />
+        </button>
+        <button 
+            onClick={handleDownloadZip}
+            className="px-3 py-2 bg-zinc-900/80 hover:bg-blue-600/50 text-xs text-zinc-400 hover:text-white border border-zinc-800 rounded flex items-center justify-center transition-colors pointer-events-auto cursor-pointer"
+            title="Download Project ZIP"
+            onPointerDown={(e) => e.stopPropagation()}
+        >
+            <Download size={16} />
         </button>
       </div>
 
