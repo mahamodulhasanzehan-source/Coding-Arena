@@ -160,9 +160,18 @@ export const Node: React.FC<NodeProps> = ({
     if (isResizing) {
       const dx = (e.clientX - dragStartRef.current.x) / scale;
       const dy = (e.clientY - dragStartRef.current.y) / scale;
+      
+      const newWidth = Math.max(250, initialSizeRef.current.width + dx);
+      let newHeight = Math.max(150, initialSizeRef.current.height + dy);
+
+      // Lock height for Code nodes as it is controlled by content
+      if (data.type === 'CODE') {
+          newHeight = data.size.height;
+      }
+
       onResize(data.id, {
-        width: Math.max(150, initialSizeRef.current.width + dx),
-        height: Math.max(100, initialSizeRef.current.height + dy),
+        width: newWidth,
+        height: newHeight,
       });
     }
   };
@@ -243,6 +252,20 @@ export const Node: React.FC<NodeProps> = ({
       editor.onDidBlurEditorText(() => {
           onInteraction?.(data.id, null);
       });
+
+      // Auto-Size Logic for Code Nodes
+      if (data.type === 'CODE') {
+          editor.onDidContentSizeChange((e: any) => {
+              const HEADER_HEIGHT = 40;
+              const MIN_HEIGHT = 150;
+              // +5 padding to avoid internal scrollbar flashing
+              const targetHeight = Math.max(MIN_HEIGHT, e.contentHeight + HEADER_HEIGHT + 5); 
+              
+              if (Math.abs(targetHeight - data.size.height) > 3) {
+                  onResize(data.id, { width: data.size.width, height: targetHeight });
+              }
+          });
+      }
   };
 
   const getLanguage = (filename: string) => {
@@ -336,7 +359,7 @@ export const Node: React.FC<NodeProps> = ({
   let borderClass = 'border-panelBorder';
   let shadowClass = '';
   
-  // Shimmer effect for AI loading - Applied to overlay, not main container to allow stacked effects
+  // Shimmer effect for AI loading
   const shimmerOverlay = data.isLoading ? (
       <div className="absolute inset-0 z-50 pointer-events-none rounded-lg overflow-hidden">
           <div className="absolute inset-0 bg-gradient-to-r from-transparent via-indigo-500/20 to-transparent animate-shimmer" style={{ width: '200%' }} />
@@ -354,7 +377,6 @@ export const Node: React.FC<NodeProps> = ({
       borderClass = 'border-accent';
       shadowClass = 'shadow-accent/20';
   } else if (data.isLoading) {
-      // Logic handled by overlay, but border helps too
       borderClass = 'border-indigo-500/50';
   }
 
@@ -371,9 +393,10 @@ export const Node: React.FC<NodeProps> = ({
         transform: `translate(${data.position.x}px, ${data.position.y}px)`,
         width: data.size.width,
         height: data.size.height,
-        transitionProperty: 'box-shadow, border-color, transform', 
-        transitionDuration: isDragging ? '0s' : '0.1s',
-        transitionTimingFunction: 'linear',
+        // Add width/height to transition property for smooth resizing
+        transitionProperty: 'box-shadow, border-color, transform, width, height', 
+        transitionDuration: (isDragging || isResizing) ? '0s' : '0.2s',
+        transitionTimingFunction: 'ease-out',
         ...dynamicStyle
       }}
       onPointerDown={handlePointerDown}
@@ -535,7 +558,15 @@ export const Node: React.FC<NodeProps> = ({
                         tabSize: 2,
                         wordWrap: 'on',
                         padding: { top: 10, bottom: 10 },
-                        readOnly: data.isLoading
+                        readOnly: data.isLoading,
+                        // Config to act as a solid block of code
+                        scrollbar: {
+                            vertical: 'hidden',
+                            handleMouseWheel: false,
+                        },
+                        overviewRulerLanes: 0,
+                        hideCursorInOverviewRuler: true,
+                        overviewRulerBorder: false,
                     }}
                  />
             </div>
@@ -768,7 +799,7 @@ export const Node: React.FC<NodeProps> = ({
         })}
       </div>
       <div 
-        className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize flex items-center justify-center opacity-50 hover:opacity-100 nodrag z-20"
+        className={`absolute bottom-0 right-0 w-4 h-4 flex items-center justify-center opacity-50 hover:opacity-100 nodrag z-20 ${data.type === 'CODE' ? 'cursor-ew-resize' : 'cursor-se-resize'}`}
         onPointerDown={handleResizePointerDown}
       >
         <div className="w-1.5 h-1.5 bg-zinc-500 rounded-full" />
