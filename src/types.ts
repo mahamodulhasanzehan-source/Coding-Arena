@@ -52,6 +52,15 @@ export interface LogEntry {
   timestamp: number;
 }
 
+export interface UserPresence {
+  id: string;
+  x: number;
+  y: number;
+  color: string;
+  name: string;
+  lastActive: number;
+}
+
 export interface GraphState {
   nodes: NodeData[];
   connections: Connection[];
@@ -64,6 +73,7 @@ export interface GraphState {
     requestingNodeId: string;
     selectedIds: string[];
   };
+  collaborators: UserPresence[];
 }
 
 export type Action =
@@ -85,4 +95,5 @@ export type Action =
   | { type: 'ADD_LOG'; payload: { nodeId: string; log: LogEntry } }
   | { type: 'CLEAR_LOGS'; payload: { nodeId: string } }
   | { type: 'TOGGLE_PREVIEW'; payload: { nodeId: string; isRunning: boolean } }
-  | { type: 'LOAD_STATE'; payload: Partial<GraphState> };
+  | { type: 'LOAD_STATE'; payload: Partial<GraphState> }
+  | { type: 'UPDATE_COLLABORATORS'; payload: UserPresence[] };
