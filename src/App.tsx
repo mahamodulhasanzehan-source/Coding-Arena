@@ -8,7 +8,7 @@ import { CollaboratorCursor } from './components/CollaboratorCursor';
 import { GraphState, Action, NodeData, NodeType, LogEntry, UserPresence } from './types';
 import { NODE_DEFAULTS, getPortsForNode } from './constants';
 import { compilePreview, calculatePortPosition, getRelatedNodes, getAllConnectedSources, getConnectedSource } from './utils/graphUtils';
-import { Trash2, Menu, Cloud, CloudOff, UploadCloud, Users, Download } from 'lucide-react';
+import { Trash2, Menu, Cloud, CloudOff, UploadCloud, Users, Download, Search } from 'lucide-react';
 import Prism from 'prismjs';
 import { GoogleGenAI, FunctionDeclaration, Type } from "@google/genai";
 import { signIn, db } from './firebase';
@@ -224,7 +224,7 @@ const updateCurrentFileTool: FunctionDeclaration = {
 
 const createFileTool: FunctionDeclaration = {
     name: 'createFile',
-    description: 'Create a new code file (node) on the canvas. Use this when you need to add HTML, CSS, or JS files to build a feature.',
+    description: 'Create a new code file (node) on the canvas. Use this when the user explicitly asks to "create a file" or needs a new module.',
     parameters: {
         type: Type.OBJECT,
         properties: {
@@ -643,6 +643,46 @@ export default function App() {
         console.error("Failed to generate zip", e);
         alert("Failed to create zip file.");
     }
+  };
+
+  const handleFindNearest = () => {
+      if (state.nodes.length === 0) return;
+
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      
+      // Current center in world coordinates
+      const centerX = (viewportWidth / 2 - state.pan.x) / state.zoom;
+      const centerY = (viewportHeight / 2 - state.pan.y) / state.zoom;
+
+      let nearestId = null;
+      let minDistance = Infinity;
+
+      state.nodes.forEach(node => {
+          const nodeCenterX = node.position.x + node.size.width / 2;
+          const nodeCenterY = node.position.y + node.size.height / 2;
+          const dist = Math.hypot(nodeCenterX - centerX, nodeCenterY - centerY);
+          
+          if (dist < minDistance) {
+              minDistance = dist;
+              nearestId = node.id;
+          }
+      });
+
+      if (nearestId) {
+          const node = state.nodes.find(n => n.id === nearestId);
+          if (node) {
+              // Center the node
+              const nodeCenterX = node.position.x + node.size.width / 2;
+              const nodeCenterY = node.position.y + node.size.height / 2;
+              
+              const newPanX = viewportWidth / 2 - nodeCenterX * state.zoom;
+              const newPanY = viewportHeight / 2 - nodeCenterY * state.zoom;
+
+              dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
+              handleHighlightNode(nearestId);
+          }
+      }
   };
 
   const handleContextMenu = (e: React.MouseEvent, nodeId?: string) => {
@@ -1408,6 +1448,14 @@ export default function App() {
         >
             <Download size={16} />
         </button>
+        <button 
+            onClick={handleFindNearest}
+            className="px-3 py-2 bg-zinc-900/80 hover:bg-emerald-600/50 text-xs text-zinc-400 hover:text-white border border-zinc-800 rounded flex items-center justify-center transition-colors pointer-events-auto cursor-pointer"
+            title="Find Nearest Module"
+            onPointerDown={(e) => e.stopPropagation()}
+        >
+            <Search size={16} />
+        </button>
       </div>
 
       <Sidebar 
@@ -1448,7 +1496,8 @@ export default function App() {
                 transformOrigin: '0 0',
                 width: '100%',
                 height: '100%',
-                pointerEvents: 'none'
+                pointerEvents: 'none',
+                transition: isPanning ? 'none' : 'transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1)' 
             }}
         >
             <div className="pointer-events-none w-full h-full relative">
