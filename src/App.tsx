@@ -224,7 +224,7 @@ const updateCurrentFileTool: FunctionDeclaration = {
 
 const createFileTool: FunctionDeclaration = {
     name: 'createFile',
-    description: 'Create a new code file (node) on the canvas. Use this when the user explicitly asks to "create a file" or needs a new module.',
+    description: 'Create a new code file (node) on the canvas. Use this when you need to add HTML, CSS, or JS files to build a feature.',
     parameters: {
         type: Type.OBJECT,
         properties: {
