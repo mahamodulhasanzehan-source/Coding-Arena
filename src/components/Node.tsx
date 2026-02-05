@@ -2,7 +2,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { NodeData, Position, Size } from '../types';
 import { getPortsForNode } from '../constants';
-import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles, X, Image as ImageIcon, Square, Wrench } from 'lucide-react';
+import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles, X, Image as ImageIcon, Square, Wrench, Minus } from 'lucide-react';
 import Editor, { useMonaco } from '@monaco-editor/react';
 
 interface NodeProps {
@@ -83,6 +83,9 @@ export const Node: React.FC<NodeProps> = ({
   const [tempTitle, setTempTitle] = useState(data.title);
   const [chatInput, setChatInput] = useState('');
   
+  // Minimize State
+  const [isMinimized, setIsMinimized] = useState(false);
+  
   // AI States
   const [isPromptOpen, setIsPromptOpen] = useState(false);
   const [promptText, setPromptText] = useState('');
@@ -152,7 +155,7 @@ export const Node: React.FC<NodeProps> = ({
   };
 
   const handleResizePointerDown = (e: React.PointerEvent) => {
-    if (data.isLoading) return;
+    if (data.isLoading || isMinimized) return; // Disable resize if minimized
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     setIsResizing(true);
@@ -273,6 +276,11 @@ export const Node: React.FC<NodeProps> = ({
       if (editorRef.current) {
           editorRef.current.getAction('editor.action.formatDocument').run();
       }
+  };
+
+  const handleToggleMinimize = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      setIsMinimized(!isMinimized);
   };
 
   const handleEditorMount = (editor: any) => {
@@ -440,12 +448,14 @@ export const Node: React.FC<NodeProps> = ({
       className={`absolute flex flex-col bg-panel border rounded-lg shadow-2xl animate-in fade-in zoom-in-95 pointer-events-auto ${!collaboratorInfo && borderClass} ${!collaboratorInfo && shadowClass}`}
       style={{
         transform: `translate(${data.position.x}px, ${data.position.y}px)`,
-        width: data.size.width,
-        height: data.size.height,
+        width: isMinimized ? 'auto' : data.size.width,
+        height: isMinimized ? '40px' : data.size.height,
         // Add width/height to transition property for smooth resizing
         transitionProperty: 'box-shadow, border-color, transform, width, height', 
         transitionDuration: (isDragging || isResizing) ? '0s' : '0.2s',
         transitionTimingFunction: 'ease-out',
+        minWidth: isMinimized ? 'fit-content' : undefined,
+        maxWidth: isMinimized ? '400px' : undefined,
         ...dynamicStyle
       }}
       onPointerDown={handlePointerDown}
@@ -482,11 +492,11 @@ export const Node: React.FC<NodeProps> = ({
               autoFocus
             />
           ) : (
-             <div className="flex items-center gap-2 group/title truncate">
+             <div className={`flex items-center gap-2 group/title ${isMinimized ? '' : 'truncate'}`}>
                 {data.type === 'AI_CHAT' && <Bot size={14} className="text-indigo-400" />}
                 {data.type === 'NPM' && <Package size={14} className="text-red-500" />}
                 {data.type === 'IMAGE' && <ImageIcon size={14} className="text-purple-400" />}
-                <span className="truncate">{data.title}</span>
+                <span className={isMinimized ? 'whitespace-nowrap' : 'truncate'}>{data.title}</span>
                 <button 
                     onClick={(e) => { e.stopPropagation(); setIsEditingTitle(true); }}
                     onPointerDown={(e) => e.stopPropagation()}
@@ -502,6 +512,16 @@ export const Node: React.FC<NodeProps> = ({
         <div className="flex items-center gap-1 shrink-0">
            {data.type === 'CODE' && (
               <div className="flex items-center gap-1">
+                 {/* Minimize/Expand Button */}
+                 <button
+                    onClick={handleToggleMinimize}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className="nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 text-zinc-400 hover:text-white hover:bg-zinc-800"
+                    title={isMinimized ? "Expand" : "Minimize"}
+                 >
+                     {isMinimized ? <Square size={14} /> : <Minus size={14} />}
+                 </button>
+
                  <button
                     onClick={handleFormatCode}
                     onPointerDown={(e) => e.stopPropagation()}
@@ -592,7 +612,7 @@ export const Node: React.FC<NodeProps> = ({
       )}
 
       {/* Content Area */}
-      <div className={`flex-1 relative group nodrag flex flex-col min-h-0 overflow-hidden ${data.isLoading ? 'pointer-events-none opacity-80' : ''}`}>
+      <div className={`flex-1 relative group nodrag flex flex-col min-h-0 overflow-hidden ${data.isLoading ? 'pointer-events-none opacity-80' : ''} ${isMinimized ? 'hidden' : ''}`}>
         {/* ... (Existing CODE, IMAGE, NPM, AI_CHAT cases remain the same) ... */}
         {data.type === 'CODE' ? (
             <div className="w-full h-full bg-[#1e1e1e]" onPointerDown={(e) => e.stopPropagation()}>
@@ -866,12 +886,15 @@ export const Node: React.FC<NodeProps> = ({
             );
         })}
       </div>
-      <div 
-        className={`absolute bottom-0 right-0 w-4 h-4 flex items-center justify-center opacity-50 hover:opacity-100 nodrag z-20 cursor-se-resize`}
-        onPointerDown={handleResizePointerDown}
-      >
-        <div className="w-1.5 h-1.5 bg-zinc-500 rounded-full" />
-      </div>
+      
+      {!isMinimized && (
+          <div 
+            className={`absolute bottom-0 right-0 w-4 h-4 flex items-center justify-center opacity-50 hover:opacity-100 nodrag z-20 cursor-se-resize`}
+            onPointerDown={handleResizePointerDown}
+          >
+            <div className="w-1.5 h-1.5 bg-zinc-500 rounded-full" />
+          </div>
+      )}
     </div>
   );
 };
