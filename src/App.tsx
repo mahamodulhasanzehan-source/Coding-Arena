@@ -220,7 +220,7 @@ const updateCodeFunction: FunctionDeclaration = {
 
 const deleteFileFunction: FunctionDeclaration = {
     name: 'deleteFile',
-    description: 'Delete a file (node) from the project when it is no longer needed or requested by the user.',
+    description: 'Delete a file (node) from the project. ONLY use this for strictly empty files or when the user explicitly asks to delete a file. Do not delete files that have code.',
     parameters: {
         type: Type.OBJECT,
         properties: {
@@ -330,6 +330,10 @@ export default function App() {
         return node;
     });
   }, [state.nodes, state.collaborators, sessionId]);
+
+  // Separate nodes into regular and maximized to pull maximized node out of the transform context
+  const regularNodes = useMemo(() => displayNodes.filter(n => n.id !== maximizedNodeId), [displayNodes, maximizedNodeId]);
+  const maximizedNode = useMemo(() => displayNodes.find(n => n.id === maximizedNodeId), [displayNodes, maximizedNodeId]);
 
   const dispatchLocal = (action: Action) => {
       if ([
@@ -654,12 +658,19 @@ export default function App() {
       try {
           const fileContext = targetNodes.map(n => `Filename: ${n.title}\nContent:\n${n.content}`).join('\n\n');
           
-          const systemInstruction = `You are an expert developer.
-          You are working on a project with multiple files.
-          You can edit ANY file in the project using the 'updateFile' tool.
-          Always provide the FULL new content for the file in 'updateFile'.
-          You can DELETE files that are unused or explicitly requested to be deleted using the 'deleteFile' tool.
-          Do not use placeholders like // ... rest of code.
+          const systemInstruction = `You are an expert developer working in a multi-file NodeCode Studio environment.
+          
+          RULES FOR EDITING:
+          1. You can edit ANY file in the project using 'updateFile'.
+          2. ALWAYS provide the FULL new content for the file when using 'updateFile'.
+          3. Do NOT use placeholders like "// ... rest of code".
+          4. Maintain existing functionality unless asked to change it.
+
+          RULES FOR DELETING:
+          1. You may use 'deleteFile' ONLY if a file is COMPLETELY empty or explicitly requested to be deleted by the user.
+          2. Do NOT delete files just because they seem simple or "useless" if they contain valid code, configuration, or data.
+          3. Do NOT merge files aggressively. Respect the user's file structure (e.g., separate database files, separate CSS).
+          4. If a file is imported by another file, DO NOT delete it unless you also remove the import.
           
           Project Files:
           ${fileContext}
@@ -669,12 +680,12 @@ export default function App() {
           if (action === 'optimize') {
                userPrompt = `Optimize the file ${startNode.title}.`;
           } else {
-               userPrompt = `Request: ${promptText}\n\n(Focus on ${startNode.title} but update/delete others if needed)`;
+               userPrompt = `Request: ${promptText}\n\n(Focus on ${startNode.title} but update/delete others only if strictly necessary per rules)`;
           }
 
           // 3. API Call with Fallback
           await performGeminiCall(async (ai) => {
-               const response = await ai.models.generateContent({
+               const result = await ai.models.generateContent({
                   model: 'gemini-3-flash-preview',
                   contents: userPrompt,
                   config: { 
@@ -684,7 +695,7 @@ export default function App() {
                });
                
                // 4. Process Response
-               const functionCalls = response.functionCalls;
+               const functionCalls = result.functionCalls;
                
                if (functionCalls && functionCalls.length > 0) {
                    for (const call of functionCalls) {
@@ -703,9 +714,9 @@ export default function App() {
                            }
                        }
                    }
-               } else if (response.text) {
+               } else if (result.text) {
                    // Fallback for text-only response (assume it's for the start node if it looks like code)
-                   const clean = cleanAiOutput(response.text);
+                   const clean = cleanAiOutput(result.text);
                    dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: nodeId, content: clean } });
                    handleHighlightNode(nodeId);
                }
@@ -1678,8 +1689,12 @@ export default function App() {
                     ))}
 
                     {state.connections.map(conn => {
-                        const sourceNode = displayNodes.find(n => n.id === conn.sourceNodeId);
-                        const targetNode = displayNodes.find(n => n.id === conn.targetNodeId);
+                        const sourceNode = regularNodes.find(n => n.id === conn.sourceNodeId);
+                        const targetNode = regularNodes.find(n => n.id === conn.targetNodeId);
+                        // Even if a node is maximized, we still want to render connections if needed, 
+                        // but if we move the maximized node out of the transform, wires might look weird connecting to it.
+                        // However, practically wires are decorative when maximizing. 
+                        // We filter nulls, so if a node is "missing" (maximized), wires disappear from the canvas view, which is cleaner.
                         if (!sourceNode || !targetNode) return null;
                         const start = calculatePortPosition(sourceNode, conn.sourcePortId, 'output');
                         const end = calculatePortPosition(targetNode, conn.targetPortId, 'input');
@@ -1687,7 +1702,7 @@ export default function App() {
                     })}
                 </svg>
 
-                {displayNodes.map(node => {
+                {regularNodes.map(node => {
                     let logs: LogEntry[] = [];
                     if (node.type === 'TERMINAL') {
                          const sources = state.connections.filter(c => c.targetNodeId === node.id).map(c => c.sourceNodeId);
@@ -1710,7 +1725,7 @@ export default function App() {
                                 isSelected={state.selectedNodeIds.includes(node.id)}
                                 isHighlighted={node.id === highlightedNodeId}
                                 isRunning={state.runningPreviewIds.includes(node.id)}
-                                isMaximized={node.id === maximizedNodeId}
+                                isMaximized={false}
                                 scale={state.zoom}
                                 isConnected={isConnected}
                                 onMove={handleNodeMove}
@@ -1749,6 +1764,41 @@ export default function App() {
             </div>
         </div>
       </div>
+
+      {maximizedNode && (
+          <div className="fixed inset-0 z-[9999] bg-black">
+              <Node
+                  key={maximizedNode.id}
+                  data={maximizedNode}
+                  isSelected={false}
+                  isHighlighted={false}
+                  isRunning={state.runningPreviewIds.includes(maximizedNode.id)}
+                  isMaximized={true}
+                  scale={1}
+                  isConnected={() => false}
+                  onMove={() => {}}
+                  onResize={() => {}}
+                  onDelete={() => {}}
+                  onToggleRun={handleToggleRun}
+                  onRefresh={handleRefresh}
+                  onPortDown={() => {}}
+                  onPortContextMenu={() => {}}
+                  onUpdateTitle={() => {}}
+                  onUpdateContent={() => {}}
+                  onSendMessage={() => {}}
+                  onStartContextSelection={() => {}}
+                  onAiAction={() => {}}
+                  onCancelAi={() => {}}
+                  onInjectImport={() => {}}
+                  onFixError={() => {}}
+                  onInteraction={() => {}}
+                  onToggleMinimize={() => {}}
+                  onToggleMaximize={() => setMaximizedNodeId(null)}
+                  onSelect={() => {}}
+                  logs={[]}
+              />
+          </div>
+      )}
 
       {contextMenu && (
         <>
