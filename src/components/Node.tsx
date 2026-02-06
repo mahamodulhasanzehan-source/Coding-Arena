@@ -2,7 +2,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { NodeData, Position, Size } from '../types';
 import { getPortsForNode } from '../constants';
-import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles, X, Image as ImageIcon, Square, Minus, Maximize2, Minimize2, StickyNote } from 'lucide-react';
+import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles, X, Image as ImageIcon, Square, Minus, Maximize2, Minimize2, StickyNote, Check } from 'lucide-react';
 import Editor, { useMonaco } from '@monaco-editor/react';
 import Markdown from 'markdown-to-jsx';
 
@@ -84,6 +84,8 @@ export const Node: React.FC<NodeProps> = ({
   const textEditorRef = useRef<HTMLTextAreaElement>(null);
   const editorRef = useRef<any>(null);
   const contentHeightRef = useRef<number>(0);
+
+  const MonacoEditor = Editor as any;
   
   // Track data in ref to avoid stale closures in callbacks
   const nodeDataRef = useRef(data);
@@ -743,13 +745,13 @@ export const Node: React.FC<NodeProps> = ({
       <div className={`flex-1 relative group nodrag flex flex-col min-h-0 overflow-hidden ${data.isLoading ? 'pointer-events-none opacity-80' : ''} ${data.isMinimized ? 'hidden' : ''}`}>
         {data.type === 'CODE' ? (
             <div className="w-full h-full bg-[#1e1e1e]" onPointerDown={(e) => e.stopPropagation()}>
-                 <Editor
+                 <MonacoEditor
                     height="100%"
                     defaultLanguage={getLanguage(data.title)}
                     language={getLanguage(data.title)}
                     value={data.content}
                     theme="vs-dark"
-                    onChange={(value) => onUpdateContent?.(data.id, value || '')}
+                    onChange={(value: string | undefined) => onUpdateContent?.(data.id, value || '')}
                     onMount={handleEditorMount}
                     options={{
                         minimap: { enabled: true, scale: 0.5 },
@@ -796,15 +798,25 @@ export const Node: React.FC<NodeProps> = ({
         ) : data.type === 'TEXT' ? (
             <div className="w-full h-full bg-[#1e1e1e] overflow-hidden flex flex-col relative" onPointerDown={(e) => e.stopPropagation()}>
                 {isEditingText ? (
-                    <textarea
-                        ref={textEditorRef}
-                        className="w-full h-full bg-[#1e1e1e] text-zinc-300 p-4 font-sans text-sm resize-none focus:outline-none custom-scrollbar"
-                        value={data.content}
-                        onChange={(e) => onUpdateContent?.(data.id, e.target.value)}
-                        onBlur={() => setIsEditingText(false)}
-                        onKeyDown={handleTextKeyDown}
-                        placeholder="Write your note here... (Markdown supported)"
-                    />
+                    <>
+                        <textarea
+                            ref={textEditorRef}
+                            className="w-full h-full bg-[#1e1e1e] text-zinc-300 p-4 font-sans text-sm resize-none focus:outline-none custom-scrollbar pb-10"
+                            value={data.content}
+                            onChange={(e) => onUpdateContent?.(data.id, e.target.value)}
+                            onBlur={() => setIsEditingText(false)}
+                            onKeyDown={handleTextKeyDown}
+                            placeholder="Write your note here... (Markdown supported)"
+                        />
+                         <button 
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => setIsEditingText(false)}
+                            className="absolute bottom-2 right-2 p-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-full transition-colors shadow-lg z-10"
+                            title="Save Note"
+                        >
+                            <Check size={12} />
+                        </button>
+                    </>
                 ) : (
                     <div 
                         className="w-full h-full p-4 overflow-y-auto custom-scrollbar prose prose-invert prose-sm max-w-none select-text"
@@ -1093,3 +1105,4 @@ export const Node: React.FC<NodeProps> = ({
     </div>
   );
 };
+        
