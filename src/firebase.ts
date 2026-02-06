@@ -1,34 +1,44 @@
 
 import { initializeApp } from "firebase/app";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged as firebaseOnAuthStateChanged } from "firebase/auth";
+import { getFirestore } from "firebase/firestore";
 
-// Mock implementation to replace missing firebase module and fix build errors
-export const auth = {
-  currentUser: { uid: 'local-user', isAnonymous: true, photoURL: null }
+const firebaseConfig = {
+  apiKey: "AIzaSyBllwH83gpDoLAeo_XnnMDu4mmWVzBJOkA",
+  authDomain: "tacotyper.firebaseapp.com",
+  projectId: "tacotyper",
+  storageBucket: "tacotyper.firebasestorage.app",
+  messagingSenderId: "781290974991",
+  appId: "1:781290974991:web:9be3718a10fc11c9a5187a",
+  measurementId: "G-P0VZGCB036"
 };
 
-export const db = {};
-
-export const signIn = async () => {
-  return { uid: 'local-user', isAnonymous: true };
-};
+const app = initializeApp(firebaseConfig);
+export const auth = getAuth(app);
+export const db = getFirestore(app);
+export const googleProvider = new GoogleAuthProvider();
 
 export const signInWithGoogle = async () => {
-  return { uid: 'local-user', isAnonymous: false, photoURL: null };
+  try {
+    const result = await signInWithPopup(auth, googleProvider);
+    return result.user;
+  } catch (error) {
+    console.error("Error signing in with Google:", error);
+    throw error;
+  }
 };
 
 export const logOut = async () => {
-  console.log('Logged out');
+  try {
+    await signOut(auth);
+  } catch (error) {
+    console.error("Error signing out:", error);
+  }
 };
 
+// Wrapper to match the interface expected by components
 export const onAuthStateChanged = (authInstance: any, callback: (user: any) => void) => {
-    // Simulate auth state change immediately
-    const user = { uid: 'local-user', isAnonymous: true, photoURL: null };
-    callback(user);
-    return () => {};
+    return firebaseOnAuthStateChanged(authInstance, callback);
 };
 
-export interface User {
-    uid: string;
-    isAnonymous: boolean;
-    photoURL?: string | null;
-}
+export type { User } from "firebase/auth";

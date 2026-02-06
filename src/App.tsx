@@ -11,7 +11,7 @@ import { compilePreview, calculatePortPosition, getRelatedNodes, getAllConnected
 import { Trash2, Menu, Cloud, CloudOff, UploadCloud, Users, Download, Search } from 'lucide-react';
 import Prism from 'prismjs';
 import { GoogleGenAI, FunctionDeclaration, Type } from "@google/genai";
-import { signIn } from './firebase'; // Local mock
+import { auth, onAuthStateChanged } from './firebase';
 import JSZip from 'jszip';
 
 const initialState: GraphState = {
@@ -315,6 +315,18 @@ export default function App() {
       return () => window.removeEventListener('keydown', handleKeyDown);
   }, [maximizedNodeId]);
 
+  // Handle Auth State
+  useEffect(() => {
+      const unsubscribe = onAuthStateChanged(auth, (user) => {
+          if (user) {
+              setUserUid(user.uid);
+          } else {
+              setUserUid(null);
+          }
+      });
+      return () => unsubscribe();
+  }, []);
+
   // Use state.nodes for display
   const displayNodes = useMemo(() => {
     return state.nodes.map(node => {
@@ -386,15 +398,13 @@ export default function App() {
          dispatch({ type: 'LOAD_STATE', payload: { nodes: defaultNodes, connections: [], pan: {x:0, y:0}, zoom: 1 } });
       }
       setSyncStatus('synced');
-      setUserUid('local-user');
     };
 
     init();
-  }, []); // Remove sessionId dep as we don't use it for loading
+  }, []); 
 
   useEffect(() => {
-    if (!userUid) return;
-    
+    // Save to local storage regardless of auth for now, as requested to fix "deleted everything"
     if (isLocalChange.current) {
         setSyncStatus('saving');
         const saveData = setTimeout(() => {
@@ -412,7 +422,7 @@ export default function App() {
 
         return () => clearTimeout(saveData);
     }
-  }, [state.nodes, state.connections, state.runningPreviewIds, userUid]); 
+  }, [state.nodes, state.connections, state.runningPreviewIds]); 
 
   // LIVE UPDATE LOOP
   useEffect(() => {
