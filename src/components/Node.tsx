@@ -2,8 +2,9 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { NodeData, Position, Size } from '../types';
 import { getPortsForNode } from '../constants';
-import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles, X, Image as ImageIcon, Square, Minus, Maximize2, Minimize2 } from 'lucide-react';
+import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles, X, Image as ImageIcon, Square, Minus, Maximize2, Minimize2, StickyNote } from 'lucide-react';
 import Editor, { useMonaco } from '@monaco-editor/react';
+import Markdown from 'markdown-to-jsx';
 
 interface NodeProps {
   data: NodeData;
@@ -20,7 +21,7 @@ interface NodeProps {
   onRefresh?: (id: string) => void;
   onPortDown: (e: React.PointerEvent, portId: string, nodeId: string, isInput: boolean) => void;
   onPortContextMenu: (e: React.MouseEvent, portId: string) => void;
-  onContextMenu?: (e: React.MouseEvent | React.TouchEvent) => void; // New prop for node context menu
+  onContextMenu?: (e: React.MouseEvent | React.TouchEvent) => void; 
   onUpdateTitle: (id: string, title: string) => void;
   onUpdateContent?: (id: string, content: string) => void;
   onSendMessage?: (id: string, text: string) => void; 
@@ -80,6 +81,7 @@ export const Node: React.FC<NodeProps> = ({
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
+  const textEditorRef = useRef<HTMLTextAreaElement>(null);
   const editorRef = useRef<any>(null);
   const contentHeightRef = useRef<number>(0);
   
@@ -95,6 +97,9 @@ export const Node: React.FC<NodeProps> = ({
   const [tempTitle, setTempTitle] = useState(data.title);
   const [chatInput, setChatInput] = useState('');
   
+  // Text Node State
+  const [isEditingText, setIsEditingText] = useState(false);
+
   // AI States
   const [isPromptOpen, setIsPromptOpen] = useState(false);
   const [promptText, setPromptText] = useState('');
@@ -134,6 +139,12 @@ export const Node: React.FC<NodeProps> = ({
         promptInputRef.current.focus();
     }
   }, [isPromptOpen]);
+
+  useEffect(() => {
+      if (isEditingText && textEditorRef.current) {
+          textEditorRef.current.focus();
+      }
+  }, [isEditingText]);
 
   // Handle NPM Search Debounce/Content Update
   useEffect(() => {
@@ -467,6 +478,46 @@ export const Node: React.FC<NodeProps> = ({
       }
   };
 
+  // Text Module Shortcut Handling
+  const handleTextKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if ((e.ctrlKey || e.metaKey)) {
+          const key = e.key.toLowerCase();
+          if (['b', 'i', 'u'].includes(key)) {
+              e.preventDefault();
+              const el = e.currentTarget;
+              const start = el.selectionStart;
+              const end = el.selectionEnd;
+              const text = el.value;
+              const selection = text.substring(start, end);
+              
+              let wrapped = selection;
+              let wrapperLen = 0;
+
+              if (key === 'b') {
+                  wrapped = `**${selection}**`;
+                  wrapperLen = 2;
+              } else if (key === 'i') {
+                  wrapped = `*${selection}*`;
+                  wrapperLen = 1;
+              } else if (key === 'u') {
+                  wrapped = `<u>${selection}</u>`;
+                  wrapperLen = 3;
+              }
+
+              const newText = text.substring(0, start) + wrapped + text.substring(end);
+              if (onUpdateContent) onUpdateContent(data.id, newText);
+              
+              // Restore selection after update (need timeout for React state update)
+              setTimeout(() => {
+                  if (textEditorRef.current) {
+                      textEditorRef.current.selectionStart = start + wrapperLen;
+                      textEditorRef.current.selectionEnd = end + wrapperLen;
+                  }
+              }, 0);
+          }
+      }
+  };
+
   // Styles
   let borderClass = 'border-panelBorder';
   let shadowClass = '';
@@ -563,6 +614,7 @@ export const Node: React.FC<NodeProps> = ({
                 {data.type === 'AI_CHAT' && <Bot size={14} className="text-indigo-400" />}
                 {data.type === 'NPM' && <Package size={14} className="text-red-500" />}
                 {data.type === 'IMAGE' && <ImageIcon size={14} className="text-purple-400" />}
+                {data.type === 'TEXT' && <StickyNote size={14} className="text-emerald-400" />}
                 <span className={data.isMinimized ? 'whitespace-nowrap' : 'truncate'}>{data.title}</span>
                 {!isMaximized && (
                     <button 
@@ -741,6 +793,64 @@ export const Node: React.FC<NodeProps> = ({
                     </div>
                 )}
              </div>
+        ) : data.type === 'TEXT' ? (
+            <div className="w-full h-full bg-[#1e1e1e] overflow-hidden flex flex-col relative" onPointerDown={(e) => e.stopPropagation()}>
+                {isEditingText ? (
+                    <textarea
+                        ref={textEditorRef}
+                        className="w-full h-full bg-[#1e1e1e] text-zinc-300 p-4 font-sans text-sm resize-none focus:outline-none custom-scrollbar"
+                        value={data.content}
+                        onChange={(e) => onUpdateContent?.(data.id, e.target.value)}
+                        onBlur={() => setIsEditingText(false)}
+                        onKeyDown={handleTextKeyDown}
+                        placeholder="Write your note here... (Markdown supported)"
+                    />
+                ) : (
+                    <div 
+                        className="w-full h-full p-4 overflow-y-auto custom-scrollbar prose prose-invert prose-sm max-w-none select-text"
+                        onDoubleClick={() => setIsEditingText(true)}
+                        title="Double-click to edit"
+                    >
+                        {data.content ? (
+                            <Markdown 
+                                options={{
+                                    overrides: {
+                                        a: {
+                                            component: ({ children, href, ...props }) => (
+                                                <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline" {...props}>{children}</a>
+                                            )
+                                        },
+                                        code: {
+                                            component: ({ children, className, ...props }) => (
+                                                <code className={`${className} bg-zinc-800 px-1 py-0.5 rounded text-xs font-mono text-amber-200`} {...props}>{children}</code>
+                                            )
+                                        },
+                                        pre: {
+                                            component: ({ children, ...props }) => (
+                                                <pre className="bg-zinc-900 p-2 rounded-md overflow-x-auto text-xs my-2 border border-zinc-800" {...props}>{children}</pre>
+                                            )
+                                        }
+                                    }
+                                }}
+                            >
+                                {data.content}
+                            </Markdown>
+                        ) : (
+                            <div className="text-zinc-600 italic">Double-click to edit...</div>
+                        )}
+                    </div>
+                )}
+                {/* Visual Hint for Mode */}
+                {!isEditingText && (
+                    <button 
+                        onClick={() => setIsEditingText(true)}
+                        className="absolute bottom-2 right-2 p-1.5 bg-zinc-800/80 hover:bg-zinc-700 text-zinc-400 rounded-full transition-colors opacity-0 group-hover:opacity-100"
+                        title="Edit Note"
+                    >
+                        <Pencil size={12} />
+                    </button>
+                )}
+            </div>
         ) : data.type === 'NPM' ? (
              <div className="flex flex-col h-full bg-zinc-900/50">
                  <div className="p-3 border-b border-panelBorder flex gap-2">

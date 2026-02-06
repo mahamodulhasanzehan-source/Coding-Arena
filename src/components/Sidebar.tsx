@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { NodeData } from '../types';
-import { X, FileCode, Monitor, TerminalSquare, Package, Image as ImageIcon } from 'lucide-react';
+import { X, FileCode, Monitor, TerminalSquare, Package, Image as ImageIcon, StickyNote } from 'lucide-react';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -22,6 +22,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, nodes, onNodeClick, on
   const terminalNodes = nodes.filter(n => n.type === 'TERMINAL');
   const npmNodes = nodes.filter(n => n.type === 'NPM');
   const imageNodes = nodes.filter(n => n.type === 'IMAGE');
+  const textNodes = nodes.filter(n => n.type === 'TEXT');
 
   return (
     <div 
@@ -62,6 +63,25 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, nodes, onNodeClick, on
                     </button>
                 ))}
                 {codeNodes.length === 0 && <span className="text-zinc-600 text-xs font-medium px-3 py-2 italic">No code modules</span>}
+            </div>
+        </div>
+
+        {/* TEXT SECTION (Green) */}
+        <div className="flex-1 flex flex-col border-b border-panelBorder min-h-0">
+            <div className="bg-emerald-500/10 border-b border-emerald-500/20 px-4 py-2 flex items-center gap-2 text-emerald-500 font-bold text-xs uppercase tracking-wider shrink-0">
+                <StickyNote size={14} /> Text / Notes
+            </div>
+            <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+                {textNodes.map(node => (
+                    <button
+                        key={node.id}
+                        onClick={() => onNodeClick(node.id)}
+                        className="w-full text-left px-3 py-2 rounded text-zinc-400 hover:text-emerald-400 hover:bg-emerald-500/10 text-sm font-medium transition-colors truncate"
+                    >
+                        {node.title}
+                    </button>
+                ))}
+                {textNodes.length === 0 && <span className="text-zinc-600 text-xs font-medium px-3 py-2 italic">No text modules</span>}
             </div>
         </div>
 

@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Code2, Monitor, TerminalSquare, Trash2, Copy, Unplug, Package, Image as ImageIcon, Eraser, AlignHorizontalJustifyCenter, AlignVerticalJustifyCenter, StretchHorizontal, StretchVertical, Minimize2 } from 'lucide-react';
+import { Code2, Monitor, TerminalSquare, Trash2, Copy, Unplug, Package, Image as ImageIcon, Eraser, AlignHorizontalJustifyCenter, AlignVerticalJustifyCenter, StretchHorizontal, StretchVertical, Minimize2, StickyNote } from 'lucide-react';
 import { NodeType, Position } from '../types';
 
 interface ContextMenuProps {
@@ -180,6 +180,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   // Canvas Context Menu
   const items = [
     { label: 'Code Canvas', type: 'CODE', icon: <Code2 size={16} /> },
+    { label: 'Text Module', type: 'TEXT', icon: <StickyNote size={16} /> },
     { label: 'Image Module', type: 'IMAGE', icon: <ImageIcon size={16} /> },
     { label: 'Preview Canvas', type: 'PREVIEW', icon: <Monitor size={16} /> },
     { label: 'Terminal', type: 'TERMINAL', icon: <TerminalSquare size={16} /> },

@@ -1,5 +1,5 @@
 
-export type NodeType = 'CODE' | 'PREVIEW' | 'TERMINAL' | 'AI_CHAT' | 'NPM' | 'IMAGE';
+export type NodeType = 'CODE' | 'PREVIEW' | 'TERMINAL' | 'AI_CHAT' | 'NPM' | 'IMAGE' | 'TEXT';
 
 export interface Position {
   x: number;
@@ -22,7 +22,7 @@ export interface NodeData {
   title: string;
   position: Position;
   size: Size;
-  content: string; // Code content, internal state, NPM query, or Base64 Image
+  content: string; // Code content, internal state, NPM query, Base64 Image, or Markdown text
   lastOutput?: any; // For terminals or previews to store runtime state if needed
   autoHeight?: boolean; // For CODE nodes to grow automatically
   messages?: ChatMessage[]; // For AI_CHAT nodes
