@@ -2,7 +2,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { NodeData, Position, Size } from '../types';
 import { getPortsForNode } from '../constants';
-import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles, X, Image as ImageIcon, Square, Wrench, Minus } from 'lucide-react';
+import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles, X, Image as ImageIcon, Square, Minus } from 'lucide-react';
 import Editor, { useMonaco } from '@monaco-editor/react';
 
 interface NodeProps {
@@ -29,6 +29,7 @@ interface NodeProps {
   onFixError?: (nodeId: string, error: string) => void; // For Terminal AI Fix
   onInteraction?: (nodeId: string, type: 'drag' | 'edit' | null) => void;
   onToggleMinimize?: (id: string) => void;
+  onDragEnd?: (id: string) => void; // New prop for snap cleanup
   collaboratorInfo?: { name: string; color: string; action: 'dragging' | 'editing' };
   logs?: any[]; 
   children?: React.ReactNode;
@@ -58,6 +59,7 @@ export const Node: React.FC<NodeProps> = ({
   onFixError,
   onInteraction,
   onToggleMinimize,
+  onDragEnd,
   collaboratorInfo,
   logs,
   children
@@ -203,6 +205,7 @@ export const Node: React.FC<NodeProps> = ({
   const handlePointerUp = (e: React.PointerEvent) => {
     if (isDragging) {
         onInteraction?.(data.id, null); 
+        onDragEnd?.(data.id);
     }
     setIsDragging(false);
     setIsResizing(false);

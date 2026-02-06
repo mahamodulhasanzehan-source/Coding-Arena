@@ -5,7 +5,7 @@ import { Wire } from './components/Wire';
 import { ContextMenu } from './components/ContextMenu';
 import { Sidebar } from './components/Sidebar';
 import { CollaboratorCursor } from './components/CollaboratorCursor';
-import { GraphState, Action, NodeData, NodeType, LogEntry, UserPresence } from './types';
+import { GraphState, Action, NodeData, NodeType, LogEntry, UserPresence, Position } from './types';
 import { NODE_DEFAULTS, getPortsForNode } from './constants';
 import { compilePreview, calculatePortPosition, getRelatedNodes, getAllConnectedSources, getConnectedSource } from './utils/graphUtils';
 import { Trash2, Menu, Cloud, CloudOff, UploadCloud, Users, Download, Search } from 'lucide-react';
@@ -310,6 +310,7 @@ export default function App() {
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('offline');
   const [userUid, setUserUid] = useState<string | null>(null);
   const [userColor] = useState(getRandomColor());
+  const [snapLines, setSnapLines] = useState<{x1: number, y1: number, x2: number, y2: number}[]>([]);
   
   const sessionId = useMemo(() => `session-${Math.random().toString(36).substr(2, 9)}`, []);
   const isLocalChange = useRef(false);
@@ -689,6 +690,90 @@ export default function App() {
               handleHighlightNode(nearestId);
           }
       }
+  };
+
+  const handleNodeMove = (id: string, newPos: Position) => {
+    const node = state.nodes.find(n => n.id === id);
+    if (!node) return;
+
+    // Use current dimensions (handle minimized state)
+    const w = node.isMinimized ? 250 : node.size.width;
+    const h = node.isMinimized ? 40 : node.size.height;
+    
+    // Calculate proposed center
+    let cx = newPos.x + w / 2;
+    let cy = newPos.y + h / 2;
+
+    let snappedX = newPos.x;
+    let snappedY = newPos.y;
+
+    const SNAP_THRESHOLD = 25; // Good feel
+    const newSnapLines: {x1: number, y1: number, x2: number, y2: number}[] = [];
+
+    // Find connected nodes
+    const connectedNodeIds = new Set<string>();
+    state.connections.forEach(c => {
+        if (c.sourceNodeId === id) connectedNodeIds.add(c.targetNodeId);
+        if (c.targetNodeId === id) connectedNodeIds.add(c.sourceNodeId);
+    });
+
+    let bestVerticalSnap: { x: number, line: any, dist: number } | null = null;
+    let bestHorizontalSnap: { y: number, line: any, dist: number } | null = null;
+
+    // Check against connected nodes
+    state.nodes.forEach(other => {
+        if (other.id === id) return;
+        if (!connectedNodeIds.has(other.id)) return;
+
+        const ow = other.isMinimized ? 250 : other.size.width;
+        const oh = other.isMinimized ? 40 : other.size.height;
+        const ocx = other.position.x + ow / 2;
+        const ocy = other.position.y + oh / 2;
+
+        // Vertical Snap (Align Centers)
+        const distV = Math.abs(cx - ocx);
+        if (distV < SNAP_THRESHOLD) {
+             if (!bestVerticalSnap || distV < bestVerticalSnap.dist) {
+                 const minY = Math.min(newPos.y, other.position.y);
+                 const maxY = Math.max(newPos.y + h, other.position.y + oh);
+                 bestVerticalSnap = {
+                     x: ocx - w/2,
+                     dist: distV,
+                     line: { x1: ocx, y1: minY - 20, x2: ocx, y2: maxY + 20 }
+                 };
+             }
+        }
+
+        // Horizontal Snap
+        const distH = Math.abs(cy - ocy);
+        if (distH < SNAP_THRESHOLD) {
+             if (!bestHorizontalSnap || distH < bestHorizontalSnap.dist) {
+                 const minX = Math.min(newPos.x, other.position.x);
+                 const maxX = Math.max(newPos.x + w, other.position.x + ow);
+                 bestHorizontalSnap = {
+                     y: ocy - h/2,
+                     dist: distH,
+                     line: { x1: minX - 20, y1: ocy, x2: maxX + 20, y2: ocy }
+                 }
+             }
+        }
+    });
+
+    if (bestVerticalSnap) {
+        snappedX = bestVerticalSnap.x;
+        newSnapLines.push(bestVerticalSnap.line);
+    }
+    if (bestHorizontalSnap) {
+        snappedY = bestHorizontalSnap.y;
+        newSnapLines.push(bestHorizontalSnap.line);
+    }
+
+    setSnapLines(newSnapLines);
+    dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id, position: { x: snappedX, y: snappedY } } });
+  };
+
+  const handleNodeDragEnd = (id: string) => {
+    setSnapLines([]);
   };
 
   const handleContextMenu = (e: React.MouseEvent, nodeId?: string) => {
@@ -1521,6 +1606,19 @@ export default function App() {
                 </div>
 
                 <svg className="absolute top-0 left-0 w-full h-full overflow-visible pointer-events-none z-0">
+                    {/* Snap Lines Layer */}
+                    {snapLines.map((line, i) => (
+                        <line 
+                            key={`snap-${i}`}
+                            x1={line.x1} y1={line.y1} 
+                            x2={line.x2} y2={line.y2}
+                            stroke="#22d3ee" // Cyan accent
+                            strokeWidth="2"
+                            strokeDasharray="5,5"
+                            className="opacity-80 animate-in fade-in duration-75"
+                        />
+                    ))}
+
                     {state.connections.map(conn => {
                         const sourceNode = displayNodes.find(n => n.id === conn.sourceNodeId);
                         const targetNode = displayNodes.find(n => n.id === conn.targetNodeId);
@@ -1556,7 +1654,8 @@ export default function App() {
                                 isRunning={state.runningPreviewIds.includes(node.id)}
                                 scale={state.zoom}
                                 isConnected={isConnected}
-                                onMove={(id, pos) => dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id, position: pos } })}
+                                onMove={handleNodeMove}
+                                onDragEnd={handleNodeDragEnd}
                                 onResize={(id, size) => dispatchLocal({ type: 'UPDATE_NODE_SIZE', payload: { id, size } })}
                                 onDelete={(id) => dispatchLocal({ type: 'DELETE_NODE', payload: id })}
                                 onToggleRun={handleToggleRun}
