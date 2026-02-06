@@ -7,7 +7,7 @@ import { Sidebar } from './components/Sidebar';
 import { CollaboratorCursor } from './components/CollaboratorCursor';
 import { GraphState, Action, NodeData, NodeType, LogEntry, UserPresence } from './types';
 import { NODE_DEFAULTS } from './constants';
-import { compilePreview, calculatePortPosition } from './utils/graphUtils';
+import { compilePreview, calculatePortPosition, getRelatedNodes } from './utils/graphUtils';
 import { Trash2, Menu, Cloud, CloudOff, UploadCloud, Plus, Minus, Search, Download } from 'lucide-react';
 import { GoogleGenAI, FunctionDeclaration, Type } from "@google/genai";
 import { signIn, db } from './firebase';
@@ -655,10 +655,21 @@ export default function App() {
     const handleSendMessage = async (nodeId: string, text: string) => {
         dispatchLocal({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'user', text } } });
         
-        // 1. Set Loading for Chat Node AND all Context Nodes
+        // --- 1. Shimmer Effect for ALL Connected Nodes (Vibe Coding) ---
+        // Find the graph cluster related to this AI node (or the context files)
         const chatNode = state.nodes.find(n => n.id === nodeId);
-        const contextNodeIds = chatNode?.contextNodeIds || [];
-        const allLoadingIds = [nodeId, ...contextNodeIds];
+        const startIds = [nodeId, ...(chatNode?.contextNodeIds || [])];
+        
+        // Use a Set to avoid duplicates
+        const allRelatedIds = new Set<string>(startIds);
+
+        // For each context file/chat node, find everything connected to it
+        startIds.forEach(startId => {
+             const related = getRelatedNodes(startId, state.nodes, state.connections);
+             related.forEach(n => allRelatedIds.add(n.id));
+        });
+
+        const allLoadingIds = Array.from(allRelatedIds);
 
         allLoadingIds.forEach(id => {
             dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id, isLoading: true } });
@@ -686,7 +697,8 @@ export default function App() {
       - If the user asks for a feature that needs multiple files (like a game), CREATE them all (index.html, game.js, style.css) and CONNECT them.
       - Do NOT put all code in one file if it should be split.
       - ALWAYS check if you need to rename a file to match its content (e.g. rename 'script.js' to 'index.html' if writing HTML).
-      - When you create a file, you MUST write its initial content immediately.
+      - When you create a file, you MUST write its initial content immediately using 'updateFile' or 'createFile' content arg.
+      - Connect files automatically (e.g. connect game.js to index.html).
       - Execute multiple tools in one turn to build complete systems instantly.
       
       Current Context Files:
@@ -752,8 +764,9 @@ export default function App() {
                         
                         // Position logic: Stagger near the chat node or center
                         const chatPos = node.position;
-                        const offset = (filenameMap.size + 1) * 30;
-                        const position = { x: chatPos.x - 400, y: chatPos.y + offset };
+                        // Determine an offset based on how many files we've touched this session to avoid stacking
+                        const offsetIdx = filenameMap.size % 5;
+                        const position = { x: chatPos.x - 450, y: chatPos.y + (offsetIdx * 50) };
 
                         const newNode: NodeData = {
                             id: newId,
@@ -769,9 +782,9 @@ export default function App() {
                         filenameMap.set(args.filename, newId); // Add to local map for chaining
                         toolOutputText += `\n[Created ${args.filename}]`;
                         
-                        // Animate visual creation
+                        // Animate visual creation and add to loading set
                         dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: newId, isLoading: true } });
-                        setTimeout(() => dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: newId, isLoading: false } }), 1000);
+                        // We don't remove loading immediately, we let the 'finally' block handle it for all involved nodes
 
                     } else if (call.name === 'connectFiles') {
                         const args = call.args as { sourceFilename: string, targetFilename: string };
@@ -810,8 +823,6 @@ export default function App() {
                             toolOutputText += `\n[Updated ${args.filename}]`;
                             handleHighlightNode(nodeId);
                         } else {
-                            // If file doesn't exist, maybe create it?
-                            // For now, error
                             toolOutputText += `\n[Error: Could not find file ${args.filename}]`;
                         }
                     } else if (call.name === 'renameFile') {
@@ -852,10 +863,13 @@ export default function App() {
             console.error(error);
             dispatchLocal({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: `Error: ${error.message}` } } });
         } finally {
-            // Turn off loading for everyone
+            // Turn off loading for everyone found at the start + any newly created nodes
+            // We re-query the state or just blast the IDs we know
              allLoadingIds.forEach(id => {
                 dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id, isLoading: false } });
             });
+            // Also ensure the chat node is off
+            dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } });
         }
     };
 

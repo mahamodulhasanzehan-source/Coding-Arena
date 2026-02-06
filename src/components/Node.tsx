@@ -187,10 +187,13 @@ export const Node: React.FC<NodeProps> = ({
           const PADDING = 20; 
           const maxAllowedHeight = Math.max(150, contentHeightRef.current + HEADER_HEIGHT + PADDING);
           
-          // Clamp the height. You can shrink it (create scrollbar), but you cannot expand past content.
-          if (newHeight > maxAllowedHeight) {
-              newHeight = maxAllowedHeight;
-          }
+          // Clamp the height if user tries to resize past content height, 
+          // BUT only enforce this if we are trying to grow *larger* than content.
+          // We allow shrinking (which enables scrollbars).
+          // Actually, for "AutoHeight", we force it. For manual, we allow scrollbars.
+          
+          // Let's just allow free resizing for manual mode, enabling scrollbars.
+          // No restriction here.
       }
 
       onResize(data.id, {
@@ -291,30 +294,21 @@ export const Node: React.FC<NodeProps> = ({
           onInteraction?.(data.id, null);
       });
 
-      // Auto-Size & Auto-Shrink Logic for Code Nodes
+      // Auto-Size Logic for Code Nodes (Only if autoHeight is true)
       if (data.type === 'CODE') {
           editor.onDidContentSizeChange((e: any) => {
               contentHeightRef.current = e.contentHeight;
               
-              // Use Ref to get the latest data state without closure staleness
               const currentNode = nodeDataRef.current;
               
               const HEADER_HEIGHT = 40;
               const MIN_HEIGHT = 150;
               const PADDING = 20; 
-              // The ideal height to fit all code without empty space
               const fitHeight = Math.max(MIN_HEIGHT, e.contentHeight + HEADER_HEIGHT + PADDING);
               
               if (currentNode.autoHeight && !currentNode.isMinimized) {
-                  // Standard Auto-Grow (Initial creation state)
+                  // Standard Auto-Grow
                   if (Math.abs(fitHeight - currentNode.size.height) > 3) {
-                      onResize(currentNode.id, { width: currentNode.size.width, height: fitHeight });
-                  }
-              } else if (!currentNode.isMinimized) {
-                  // Manual Mode Enforcement:
-                  // If the current box is LARGER than the content (extended parts), snap it shut.
-                  // We add a small buffer (5px) to prevent jitter during resize operations.
-                  if (currentNode.size.height > fitHeight + 5) {
                       onResize(currentNode.id, { width: currentNode.size.width, height: fitHeight });
                   }
               }
@@ -635,9 +629,11 @@ export const Node: React.FC<NodeProps> = ({
                         wordWrap: 'on',
                         padding: { top: 10, bottom: 10 },
                         readOnly: data.isLoading,
+                        // ENABLED SCROLLBAR
                         scrollbar: {
-                            vertical: 'hidden',
-                            handleMouseWheel: false,
+                            vertical: 'auto',
+                            horizontal: 'auto',
+                            handleMouseWheel: true,
                         },
                         overviewRulerLanes: 0,
                         hideCursorInOverviewRuler: true,
