@@ -8,10 +8,19 @@ import { CollaboratorCursor } from './components/CollaboratorCursor';
 import { GraphState, Action, NodeData, NodeType, LogEntry, UserPresence } from './types';
 import { NODE_DEFAULTS } from './constants';
 import { compilePreview, calculatePortPosition } from './utils/graphUtils';
-import { Trash2, Menu, Cloud, CloudOff, UploadCloud } from 'lucide-react'; 
+import { Trash2, Menu, Cloud, CloudOff, CloudUpload, Plus, Minus, Search, Download } from 'lucide-react';
 import { GoogleGenAI, FunctionDeclaration, Type } from "@google/genai";
 import { signIn, db } from './firebase';
 import { doc, getDoc, setDoc, onSnapshot, collection, deleteDoc } from 'firebase/firestore';
+import JSZip from 'jszip';
+import { loader } from '@monaco-editor/react';
+
+// --- FIX: Configure Monaco Loader to use stable CDN for workers ---
+loader.config({
+  paths: {
+    vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.46.0/min/vs',
+  },
+});
 
 // Define SyncStatus
 type SyncStatus = 'synced' | 'saving' | 'offline' | 'error';
@@ -933,6 +942,150 @@ export default function App() {
         return state.connections.some(c => c.sourcePortId === portId || c.targetPortId === portId);
     };
 
+    const handleZoomIn = () => {
+        const newZoom = Math.min(state.zoom + 0.1, 3);
+        const center = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+        
+        // Adjust pan to zoom towards center
+        const worldX = (center.x - state.pan.x) / state.zoom;
+        const worldY = (center.y - state.pan.y) / state.zoom;
+        const newPanX = center.x - worldX * newZoom;
+        const newPanY = center.y - worldY * newZoom;
+
+        dispatch({ type: 'ZOOM', payload: { zoom: newZoom } });
+        dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
+    };
+
+    const handleZoomOut = () => {
+        const newZoom = Math.max(state.zoom - 0.1, 0.1);
+        const center = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+        
+        // Adjust pan to zoom towards center
+        const worldX = (center.x - state.pan.x) / state.zoom;
+        const worldY = (center.y - state.pan.y) / state.zoom;
+        const newPanX = center.x - worldX * newZoom;
+        const newPanY = center.y - worldY * newZoom;
+
+        dispatch({ type: 'ZOOM', payload: { zoom: newZoom } });
+        dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
+    };
+
+    const handleFindNearest = () => {
+        if (state.nodes.length === 0) {
+            dispatch({ type: 'PAN', payload: { x: 0, y: 0 } });
+            dispatch({ type: 'ZOOM', payload: { zoom: 1 } });
+            return;
+        }
+
+        const viewportW = window.innerWidth;
+        const viewportH = window.innerHeight;
+        
+        // Current center of viewport in world coordinates
+        const centerX = (viewportW / 2 - state.pan.x) / state.zoom;
+        const centerY = (viewportH / 2 - state.pan.y) / state.zoom;
+
+        // Find closest node
+        let closestNode = state.nodes[0];
+        let minDist = Infinity;
+
+        state.nodes.forEach(node => {
+            const nx = node.position.x + node.size.width / 2;
+            const ny = node.position.y + node.size.height / 2;
+            const dist = Math.hypot(nx - centerX, ny - centerY);
+            if (dist < minDist) {
+                minDist = dist;
+                closestNode = node;
+            }
+        });
+
+        const nodeCx = closestNode.position.x + closestNode.size.width / 2;
+        const nodeCy = closestNode.position.y + closestNode.size.height / 2;
+        
+        const newPanX = (viewportW / 2) - nodeCx * state.zoom;
+        const newPanY = (viewportH / 2) - nodeCy * state.zoom;
+        
+        dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
+    };
+
+    const handleDownloadZip = async () => {
+        const zip = new JSZip();
+        const codeNodes = state.nodes.filter(n => n.type === 'CODE');
+        
+        if (codeNodes.length === 0) {
+            alert("No code modules to download.");
+            return;
+        }
+
+        // Build adjacency list for connectivity check
+        const adj = new Map<string, string[]>();
+        state.nodes.forEach(n => adj.set(n.id, []));
+        state.connections.forEach(c => {
+            if (!adj.has(c.sourceNodeId)) adj.set(c.sourceNodeId, []);
+            if (!adj.has(c.targetNodeId)) adj.set(c.targetNodeId, []);
+            adj.get(c.sourceNodeId)?.push(c.targetNodeId);
+            adj.get(c.targetNodeId)?.push(c.sourceNodeId);
+        });
+
+        const visited = new Set<string>();
+        
+        for (const node of codeNodes) {
+            if (visited.has(node.id)) continue;
+
+            // Find Connected Component
+            const component: NodeData[] = [];
+            const queue = [node.id];
+            visited.add(node.id);
+            
+            // We want to verify if this group has ANY connections (wires).
+            // A node is "connected" if it has > 0 edges in the graph, even if it's size 1 connected to a non-code node.
+            let hasWires = (adj.get(node.id)?.length || 0) > 0;
+
+            while(queue.length > 0) {
+                const currId = queue.shift()!;
+                const currNode = state.nodes.find(n => n.id === currId);
+                
+                if (currNode && currNode.type === 'CODE') {
+                    component.push(currNode);
+                }
+                
+                if ((adj.get(currId)?.length || 0) > 0) {
+                    hasWires = true; 
+                }
+
+                const neighbors = adj.get(currId) || [];
+                for (const neighborId of neighbors) {
+                    if (!visited.has(neighborId)) {
+                        visited.add(neighborId);
+                        queue.push(neighborId);
+                    }
+                }
+            }
+
+            if (component.length > 0) {
+                // Decision: Folder or Root?
+                // Rule: "connected via wires... separate folder"
+                // Rule: "not connected... thrown into zip"
+                
+                if (hasWires) {
+                    const folderName = `project-${Math.random().toString(36).substr(2, 6)}`;
+                    const folder = zip.folder(folderName);
+                    component.forEach(n => folder?.file(n.title, n.content));
+                } else {
+                    // Isolated nodes
+                    component.forEach(n => zip.file(n.title, n.content));
+                }
+            }
+        }
+
+        const content = await zip.generateAsync({ type: "blob" });
+        const url = window.URL.createObjectURL(content);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "nodecode-project.zip";
+        a.click();
+        window.URL.revokeObjectURL(url);
+    };
+
     // Memoize display nodes to inject remote dragging/editing visualizations
     const displayNodes = useMemo(() => {
         return state.nodes.map(node => {
@@ -956,7 +1109,7 @@ export default function App() {
                 </div>
                 <div className="flex items-center gap-1.5 px-3 py-1 bg-zinc-900/80 border border-zinc-800 rounded-full backdrop-blur-sm pointer-events-auto" title="Cloud Sync Status">
                     {syncStatus === 'synced' && <Cloud size={14} className="text-emerald-500" />}
-                    {syncStatus === 'saving' && <UploadCloud size={14} className="text-amber-500 animate-pulse" />}
+                    {syncStatus === 'saving' && <CloudUpload size={14} className="text-amber-500 animate-pulse" />}
                     {syncStatus === 'offline' && <CloudOff size={14} className="text-zinc-500" />}
                     {syncStatus === 'error' && <CloudOff size={14} className="text-red-500" />}
                     <span className="text-[10px] uppercase font-bold tracking-wider text-zinc-400">
@@ -980,6 +1133,40 @@ export default function App() {
                 >
                     <Menu size={16} />
                 </button>
+                <div className="flex flex-col gap-1 mt-2">
+                    <button
+                        onClick={handleZoomIn}
+                        className="px-2 py-2 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-400 border border-zinc-800 rounded flex items-center justify-center transition-colors pointer-events-auto cursor-pointer"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        title="Zoom In"
+                    >
+                        <Plus size={16} />
+                    </button>
+                    <button
+                        onClick={handleZoomOut}
+                        className="px-2 py-2 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-400 border border-zinc-800 rounded flex items-center justify-center transition-colors pointer-events-auto cursor-pointer"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        title="Zoom Out"
+                    >
+                        <Minus size={16} />
+                    </button>
+                    <button
+                        onClick={handleFindNearest}
+                        className="px-2 py-2 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-400 border border-zinc-800 rounded flex items-center justify-center transition-colors pointer-events-auto cursor-pointer"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        title="Find Nearest Node"
+                    >
+                        <Search size={16} />
+                    </button>
+                    <button
+                        onClick={handleDownloadZip}
+                        className="px-2 py-2 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-400 border border-zinc-800 rounded flex items-center justify-center transition-colors pointer-events-auto cursor-pointer"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        title="Download Project (ZIP)"
+                    >
+                        <Download size={16} />
+                    </button>
+                </div>
             </div>
 
             <Sidebar
