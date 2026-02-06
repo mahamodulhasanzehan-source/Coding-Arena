@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Code2, Monitor, TerminalSquare, Trash2, Copy, Unplug, Package, Image as ImageIcon, Eraser, AlignHorizontalJustifyCenter, AlignVerticalJustifyCenter, StretchHorizontal, StretchVertical } from 'lucide-react';
+import { Code2, Monitor, TerminalSquare, Trash2, Copy, Unplug, Package, Image as ImageIcon, Eraser, AlignHorizontalJustifyCenter, AlignVerticalJustifyCenter, StretchHorizontal, StretchVertical, Minimize2 } from 'lucide-react';
 import { NodeType, Position } from '../types';
 
 interface ContextMenuProps {
@@ -16,10 +16,13 @@ interface ContextMenuProps {
   onClearImage?: (id: string) => void;
   onAlign?: (type: 'horizontal' | 'vertical') => void;
   onDistribute?: (type: 'horizontal' | 'vertical') => void;
+  onCompact?: (type: 'horizontal' | 'vertical') => void;
   canAlignHorizontal?: boolean;
   canAlignVertical?: boolean;
   canDistributeHorizontal?: boolean;
   canDistributeVertical?: boolean;
+  canCompactHorizontal?: boolean;
+  canCompactVertical?: boolean;
   onClose: () => void;
 }
 
@@ -36,10 +39,13 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onClearImage,
   onAlign,
   onDistribute,
+  onCompact,
   canAlignHorizontal = false,
   canAlignVertical = false,
   canDistributeHorizontal = false,
   canDistributeVertical = false,
+  canCompactHorizontal = false,
+  canCompactVertical = false,
   onClose 
 }) => {
   
@@ -76,7 +82,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           Node Actions
         </div>
         
-        {isMultiSelect && onAlign && onDistribute && (
+        {isMultiSelect && onAlign && onDistribute && onCompact && (
             <>
                 <button
                     onClick={() => onAlign('horizontal')}
@@ -118,6 +124,27 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
                 >
                     <StretchVertical size={14} className={canDistributeVertical ? "" : "opacity-50"} />
                     Equal Spacing (V)
+                </button>
+
+                <button
+                    onClick={() => onCompact('horizontal')}
+                    disabled={!canCompactHorizontal}
+                    className={`w-full text-left px-4 py-2 text-sm font-medium flex items-center gap-2 transition-colors ${
+                        canCompactHorizontal ? 'text-zinc-300 hover:bg-zinc-800 hover:text-white' : 'text-zinc-600 cursor-not-allowed'
+                    }`}
+                >
+                    <Minimize2 size={14} className={canCompactHorizontal ? "rotate-90" : "opacity-50 rotate-90"} />
+                    Compact Horizontally
+                </button>
+                <button
+                    onClick={() => onCompact('vertical')}
+                    disabled={!canCompactVertical}
+                    className={`w-full text-left px-4 py-2 text-sm font-medium flex items-center gap-2 transition-colors border-b border-panelBorder ${
+                        canCompactVertical ? 'text-zinc-300 hover:bg-zinc-800 hover:text-white' : 'text-zinc-600 cursor-not-allowed'
+                    }`}
+                >
+                    <Minimize2 size={14} className={canCompactVertical ? "" : "opacity-50"} />
+                    Compact Vertically
                 </button>
             </>
         )}

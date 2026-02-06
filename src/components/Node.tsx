@@ -10,7 +10,7 @@ interface NodeProps {
   isSelected: boolean;
   isHighlighted?: boolean;
   isRunning?: boolean;
-  isMaximized?: boolean; // New Prop
+  isMaximized?: boolean; 
   scale: number;
   isConnected: (portId: string) => boolean;
   onMove: (id: string, pos: Position) => void;
@@ -20,6 +20,7 @@ interface NodeProps {
   onRefresh?: (id: string) => void;
   onPortDown: (e: React.PointerEvent, portId: string, nodeId: string, isInput: boolean) => void;
   onPortContextMenu: (e: React.MouseEvent, portId: string) => void;
+  onContextMenu?: (e: React.MouseEvent | React.TouchEvent) => void; // New prop for node context menu
   onUpdateTitle: (id: string, title: string) => void;
   onUpdateContent?: (id: string, content: string) => void;
   onSendMessage?: (id: string, text: string) => void; 
@@ -30,7 +31,7 @@ interface NodeProps {
   onFixError?: (nodeId: string, error: string) => void; 
   onInteraction?: (nodeId: string, type: 'drag' | 'edit' | null) => void;
   onToggleMinimize?: (id: string) => void;
-  onToggleMaximize?: (id: string) => void; // New Prop
+  onToggleMaximize?: (id: string) => void;
   onDragEnd?: (id: string) => void; 
   onSelect?: (id: string, multi: boolean) => void; 
   collaboratorInfo?: { name: string; color: string; action: 'dragging' | 'editing' };
@@ -53,6 +54,7 @@ export const Node: React.FC<NodeProps> = ({
   onRefresh,
   onPortDown,
   onPortContextMenu,
+  onContextMenu,
   onUpdateTitle,
   onUpdateContent,
   onSendMessage,
@@ -108,6 +110,9 @@ export const Node: React.FC<NodeProps> = ({
   const dragStartRef = useRef<{ x: number, y: number } | null>(null);
   const initialPosRef = useRef<Position>({ x: 0, y: 0 });
   const initialSizeRef = useRef<Size>({ width: 0, height: 0 });
+  
+  // Mobile Long Press Timer
+  const longPressTimer = useRef<any>(null);
 
   useEffect(() => {
     if (data.type === 'TERMINAL' && terminalContainerRef.current) {
@@ -140,7 +145,7 @@ export const Node: React.FC<NodeProps> = ({
   }, [data.content, data.type]);
 
   const handlePointerDown = (e: React.PointerEvent) => {
-    if (isMaximized) return; // Disable dragging if maximized
+    if (isMaximized) return; 
     if (data.isLoading) {
         if ((e.target as HTMLElement).closest('.cancel-btn')) return;
         return; 
@@ -152,19 +157,35 @@ export const Node: React.FC<NodeProps> = ({
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
 
-    // Selection Logic
-    if (onSelect) {
-        if (e.ctrlKey) {
-            onSelect(data.id, true);
-        } else if (!isSelected) {
-            onSelect(data.id, false);
-        }
-    }
-
-    setIsDragging(true);
-    onInteraction?.(data.id, 'drag'); 
+    // Initial drag state setup
     dragStartRef.current = { x: e.clientX, y: e.clientY };
     initialPosRef.current = { ...data.position };
+
+    if (e.pointerType === 'mouse') {
+        // Desktop: Immediate Selection & Drag
+        if (onSelect) {
+            if (e.ctrlKey) {
+                onSelect(data.id, true);
+            } else if (!isSelected) {
+                onSelect(data.id, false);
+            }
+        }
+        setIsDragging(true);
+        onInteraction?.(data.id, 'drag'); 
+    } else {
+        // Mobile/Touch: Wait to distinguish Tap vs Drag vs Long Press
+        
+        // Start Long Press Timer for Context Menu
+        longPressTimer.current = setTimeout(() => {
+            if (onContextMenu) {
+                onContextMenu(e as any);
+                // Reset interaction state if long press triggered
+                dragStartRef.current = null;
+                setIsDragging(false);
+            }
+            longPressTimer.current = null;
+        }, 600);
+    }
 
     if (!isPromptOpen) setIsPromptOpen(false);
   };
@@ -180,6 +201,24 @@ export const Node: React.FC<NodeProps> = ({
 
   const handlePointerMove = (e: React.PointerEvent) => {
     if (!dragStartRef.current) return;
+
+    // Mobile Threshold Check
+    if (e.pointerType !== 'mouse' && !isDragging && !isResizing) {
+        const dist = Math.hypot(e.clientX - dragStartRef.current.x, e.clientY - dragStartRef.current.y);
+        if (dist > 10) {
+            // Moved enough to be a drag, cancel long press
+            if (longPressTimer.current) {
+                clearTimeout(longPressTimer.current);
+                longPressTimer.current = null;
+            }
+            setIsDragging(true);
+            onInteraction?.(data.id, 'drag');
+            // Optional: Select on drag start if not selected? 
+            // For now, let's keep selection strict to Tap for mobile as requested.
+        } else {
+            return; // Ignore tiny movements
+        }
+    }
 
     if (isDragging) {
       const dx = (e.clientX - dragStartRef.current.x) / scale;
@@ -215,6 +254,17 @@ export const Node: React.FC<NodeProps> = ({
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
+    // Handle Mobile Tap
+    if (e.pointerType !== 'mouse' && longPressTimer.current) {
+        clearTimeout(longPressTimer.current);
+        longPressTimer.current = null;
+        
+        // If we haven't started dragging effectively, it's a tap
+        if (!isDragging && onSelect) {
+            onSelect(data.id, true); // Always additive (multi) on mobile
+        }
+    }
+
     if (isDragging) {
         onInteraction?.(data.id, null); 
         onDragEnd?.(data.id);

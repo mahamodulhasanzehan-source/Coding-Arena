@@ -278,6 +278,8 @@ export default function App() {
       canAlignVertical?: boolean;
       canDistributeHorizontal?: boolean;
       canDistributeVertical?: boolean;
+      canCompactHorizontal?: boolean;
+      canCompactVertical?: boolean;
   } | null>(null);
 
   const [isPanning, setIsPanning] = useState(false);
@@ -469,6 +471,7 @@ export default function App() {
 
   // LIVE UPDATE LOOP
   useEffect(() => {
+      // Standard update for all running previews
       state.runningPreviewIds.forEach(previewId => {
           const iframe = document.getElementById(`preview-iframe-${previewId}`) as HTMLIFrameElement;
           const node = state.nodes.find(n => n.id === previewId);
@@ -497,6 +500,7 @@ export default function App() {
            const iframe = document.getElementById(`preview-iframe-${maximizedNodeId}`) as HTMLIFrameElement;
            if (iframe) {
                 const compiled = compilePreview(maximizedNodeId, state.nodes, state.connections, false);
+                // Force update if empty or mismatched
                 if (!iframe.srcdoc || iframe.srcdoc !== compiled) {
                    iframe.srcdoc = compiled;
                 }
@@ -703,10 +707,14 @@ export default function App() {
       const startNode = state.nodes.find(n => n.id === nodeId);
       if (!startNode || startNode.type !== 'CODE') return;
 
+      // 1. Identify Cluster: Find all connected code nodes
       const relatedNodes = getRelatedNodes(nodeId, state.nodes, state.connections);
       const codeCluster = relatedNodes.filter(n => n.type === 'CODE');
+      
+      // Fallback: If no connections, just use the single node
       const targetNodes = codeCluster.length > 0 ? codeCluster : [startNode];
 
+      // 2. Set Loading for ALL nodes in cluster (visual feedback)
       targetNodes.forEach(n => dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: n.id, isLoading: true } }));
 
       try {
@@ -737,6 +745,7 @@ export default function App() {
                userPrompt = `Request: ${promptText}\n\n(Focus on ${startNode.title} but update/delete/create others only if strictly necessary per rules)`;
           }
 
+          // 3. API Call with Fallback
           await performGeminiCall(async (ai) => {
                const result = await ai.models.generateContent({
                   model: 'gemini-3-flash-preview',
@@ -747,7 +756,8 @@ export default function App() {
                   }
                });
                
-               const response = result; // Correct access: generateContent returns the response directly in new SDK
+               // 4. Process Response
+               const response = result;
                const functionCalls = response.functionCalls;
                
                if (functionCalls && functionCalls.length > 0) {
@@ -759,6 +769,7 @@ export default function App() {
                                dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: target.id, content: args.code } });
                                handleHighlightNode(target.id);
                            } else {
+                               // Create New File
                                const newNodeId = `node-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
                                const pos = { x: startNode.position.x + 50, y: startNode.position.y + 50 };
                                
@@ -813,19 +824,15 @@ export default function App() {
   };
 
   const handleFixError = (nodeId: string, error: string) => {
-      // Find connected source
       const node = state.nodes.find(n => n.id === nodeId);
       if (!node) return;
       
-      // Simple lookup for connected code nodes via Preview
-      // Terminal -> (in-logs) -- (out-logs) -> Preview -> (in-dom) -- (out-dom) -> Code
       const connectedPreview = getConnectedSource(nodeId, 'logs', state.nodes, state.connections);
       if (!connectedPreview) return;
 
       const connectedCode = getConnectedSource(connectedPreview.id, 'dom', state.nodes, state.connections);
       if (!connectedCode) return;
 
-      // Trigger standard AI Generate on the code node
       handleAiGenerate(connectedCode.id, 'prompt', `Fix this error: ${error}`);
   };
 
@@ -1024,23 +1031,19 @@ export default function App() {
   };
 
   const handleNodeMove = (id: string, newPos: Position) => {
-    if (maximizedNodeId) return; // Disable move if a node is maximized
+    if (maximizedNodeId) return; 
     const node = state.nodes.find(n => n.id === id);
     if (!node) return;
 
-    // Use current dimensions (handle minimized state)
     const w = node.isMinimized ? 250 : node.size.width;
     const h = node.isMinimized ? 40 : node.size.height;
     
-    // Calculate deltas based on original position
     const deltaX = newPos.x - node.position.x;
     const deltaY = newPos.y - node.position.y;
 
-    // Group Drag Logic
     if (state.selectedNodeIds.includes(id)) {
-        // Move all selected nodes by delta
         state.selectedNodeIds.forEach(selId => {
-            if (selId === id) return; // Will handle main node later to allow snapping
+            if (selId === id) return;
             const selNode = state.nodes.find(n => n.id === selId);
             if (selNode) {
                 dispatchLocal({ 
@@ -1054,31 +1057,27 @@ export default function App() {
         });
     }
 
-    // Snapping Logic
     let snappedX = newPos.x;
     let snappedY = newPos.y;
 
     const SNAP_THRESHOLD = 25; 
     const newSnapLines: {x1: number, y1: number, x2: number, y2: number}[] = [];
 
-    // Calculate proposed center
     let cx = snappedX + w / 2;
     let cy = snappedY + h / 2;
 
     let bestVerticalSnap: { x: number, line: any, dist: number } | null = null;
     let bestHorizontalSnap: { y: number, line: any, dist: number } | null = null;
 
-    // Check against ANY node (Neighboring)
     state.nodes.forEach(other => {
         if (other.id === id) return;
-        if (state.selectedNodeIds.includes(other.id)) return; // Don't snap to moving group members
+        if (state.selectedNodeIds.includes(other.id)) return; 
 
         const ow = other.isMinimized ? 250 : other.size.width;
         const oh = other.isMinimized ? 40 : other.size.height;
         const ocx = other.position.x + ow / 2;
         const ocy = other.position.y + oh / 2;
 
-        // Vertical Snap (Align Centers)
         const distV = Math.abs(cx - ocx);
         if (distV < SNAP_THRESHOLD) {
              if (!bestVerticalSnap || distV < bestVerticalSnap.dist) {
@@ -1092,7 +1091,6 @@ export default function App() {
              }
         }
 
-        // Horizontal Snap
         const distH = Math.abs(cy - ocy);
         if (distH < SNAP_THRESHOLD) {
              if (!bestHorizontalSnap || distH < bestHorizontalSnap.dist) {
@@ -1118,7 +1116,6 @@ export default function App() {
 
     setSnapLines(newSnapLines);
 
-    // If snapped, re-adjust group members based on snap delta
     if (state.selectedNodeIds.includes(id)) {
         const snapDeltaX = snappedX - newPos.x;
         const snapDeltaY = snappedY - newPos.y;
@@ -1128,7 +1125,6 @@ export default function App() {
                  if (selId === id) return;
                  const selNode = state.nodes.find(n => n.id === selId);
                  if (selNode) {
-                     // Total movement = raw delta + snap delta
                      const finalDeltaX = deltaX + snapDeltaX;
                      const finalDeltaY = deltaY + snapDeltaY;
                      dispatchLocal({ 
@@ -1150,29 +1146,38 @@ export default function App() {
     setSnapLines([]);
   };
 
-  const handleContextMenu = (e: React.MouseEvent, nodeId?: string) => {
-    e.preventDefault();
-    if (maximizedNodeId) return; // No context menu when maximized
+  const handleContextMenu = (e: React.MouseEvent | React.TouchEvent | any, nodeId?: string) => {
+    if (e.preventDefault) e.preventDefault();
+    if (maximizedNodeId) return;
+    
+    let clientX, clientY;
+    if (e.touches && e.touches.length > 0) {
+        clientX = e.touches[0].clientX;
+        clientY = e.touches[0].clientY;
+    } else if (e.clientX !== undefined) {
+        clientX = e.clientX;
+        clientY = e.clientY;
+    } else {
+        return; // Unknown event type
+    }
+
     const node = nodeId ? state.nodes.find(n => n.id === nodeId) : undefined;
     
-    // Check Feasibility for Alignment & Distribution
     let canAlignHorizontal = false;
     let canAlignVertical = false;
     let canDistributeHorizontal = false;
     let canDistributeVertical = false;
+    let canCompactHorizontal = false;
+    let canCompactVertical = false;
 
     if (nodeId && state.selectedNodeIds.includes(nodeId) && state.selectedNodeIds.length > 1) {
         const selectedNodes = state.nodes.filter(n => state.selectedNodeIds.includes(n.id));
-        const targetNode = node!;
-        const targetCenterY = targetNode.position.y + (targetNode.isMinimized ? 40 : targetNode.size.height) / 2;
-        const targetCenterX = targetNode.position.x + (targetNode.isMinimized ? 250 : targetNode.size.width) / 2;
-
+        
         // Alignment Checks
         const wouldOverlapH = selectedNodes.some((n1, i) => {
             const w1 = n1.isMinimized ? 250 : n1.size.width;
             return selectedNodes.some((n2, j) => {
                 if (i === j) return false;
-                // If aligned horizontally (same Y center), do X ranges overlap?
                 return (n1.position.x < n2.position.x + w1) && (n1.position.x + w1 > n2.position.x);
             });
         });
@@ -1183,13 +1188,23 @@ export default function App() {
             return selectedNodes.some((n2, j) => {
                 if (i === j) return false;
                 const h2 = n2.isMinimized ? 40 : n2.size.height;
-                // If aligned vertically (same X center), do Y ranges overlap?
                 return (n1.position.y < n2.position.y + h2) && (n1.position.y + h1 > n2.position.y);
             });
         });
         canAlignVertical = !wouldOverlapV;
 
-        // Distribution Checks (Equal Spacing)
+        // Compact Checks (Based on Alignment)
+        const centerYs = selectedNodes.map(n => n.position.y + (n.isMinimized ? 40 : n.size.height)/2);
+        const avgY = centerYs.reduce((a,b)=>a+b,0)/centerYs.length;
+        const isAlignedH = centerYs.every(y => Math.abs(y - avgY) < 1);
+        canCompactHorizontal = isAlignedH;
+
+        const centerXs = selectedNodes.map(n => n.position.x + (n.isMinimized ? 250 : n.size.width)/2);
+        const avgX = centerXs.reduce((a,b)=>a+b,0)/centerXs.length;
+        const isAlignedV = centerXs.every(x => Math.abs(x - avgX) < 1);
+        canCompactVertical = isAlignedV;
+
+        // Distribution Checks
         if (selectedNodes.length >= 3) {
             // Horizontal
             const sortedX = [...selectedNodes].sort((a, b) => a.position.x - b.position.x);
@@ -1212,14 +1227,16 @@ export default function App() {
     }
 
     setContextMenu({ 
-        x: e.clientX, 
-        y: e.clientY, 
+        x: clientX, 
+        y: clientY, 
         targetNodeId: nodeId, 
         targetNode: node, 
         canAlignHorizontal, 
         canAlignVertical,
         canDistributeHorizontal,
-        canDistributeVertical
+        canDistributeVertical,
+        canCompactHorizontal,
+        canCompactVertical
     });
   };
 
@@ -1249,6 +1266,37 @@ export default function App() {
           }
       });
       setContextMenu(null);
+  };
+
+  const handleCompact = (type: 'horizontal' | 'vertical') => {
+    const selectedNodes = state.nodes.filter(n => state.selectedNodeIds.includes(n.id));
+    if (selectedNodes.length < 2) return;
+    const GAP = 20;
+
+    if (type === 'horizontal') {
+        const sorted = [...selectedNodes].sort((a, b) => a.position.x - b.position.x);
+        let currentX = sorted[0].position.x;
+        
+        sorted.forEach(node => {
+            if (node.position.x !== currentX) {
+                 dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id: node.id, position: { x: currentX, y: node.position.y } } });
+            }
+            const w = node.isMinimized ? 250 : node.size.width;
+            currentX += w + GAP;
+        });
+    } else {
+        const sorted = [...selectedNodes].sort((a, b) => a.position.y - b.position.y);
+        let currentY = sorted[0].position.y;
+        
+        sorted.forEach(node => {
+            if (node.position.y !== currentY) {
+                 dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id: node.id, position: { x: node.position.x, y: currentY } } });
+            }
+            const h = node.isMinimized ? 40 : node.size.height;
+            currentY += h + GAP;
+        });
+    }
+    setContextMenu(null);
   };
 
   const handleDistribute = (type: 'horizontal' | 'vertical') => {
@@ -1309,7 +1357,7 @@ export default function App() {
 
   const handleBgPointerDown = (e: React.PointerEvent) => {
       e.preventDefault(); 
-      if (maximizedNodeId) return; // Block panning if maximized
+      if (maximizedNodeId) return; 
       if (isPinching.current) return;
       
       if (e.ctrlKey) {
@@ -1323,6 +1371,7 @@ export default function App() {
           }
       }
 
+      // Clear selection on background click unless it's a touch move
       if (!e.ctrlKey && state.selectedNodeIds.length > 0) {
           dispatchLocal({ type: 'SET_SELECTED_NODES', payload: [] });
       }
@@ -1330,6 +1379,9 @@ export default function App() {
       e.currentTarget.setPointerCapture(e.pointerId);
       setIsPanning(true);
   };
+
+  // ... (handlePointerMove, handlePointerUp, handleTouchStart, handleTouchMove, handleTouchEnd - standard panning/zooming) ...
+  // Re-implementing simplified versions to ensure no conflicts with Node touch events
 
   const handlePointerMove = (e: React.PointerEvent) => {
     if (maximizedNodeId) return;
@@ -1360,6 +1412,7 @@ export default function App() {
         dispatch({ type: 'PAN', payload: { x: state.pan.x + e.movementX, y: state.pan.y + e.movementY } });
     }
 
+    // Presence Logic
     if (userUid && containerRef.current) {
         const now = Date.now();
         if (now - throttleRef.current > 60) { 
@@ -1413,64 +1466,64 @@ export default function App() {
         (e.currentTarget as Element).releasePointerCapture(e.pointerId);
     }
 
-    if (!dragWire) return;
-    
-    // Snapping Logic
-    let targetPortId = null;
-    let targetNodeId = null;
-    let minDistance = 40; 
+    if (dragWire) {
+        // ... (wire connection logic)
+        // Snapping Logic reused
+        let targetPortId = null;
+        let targetNodeId = null;
+        let minDistance = 40; 
 
-    if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect();
-        const mouseX = (e.clientX - rect.left - state.pan.x) / state.zoom;
-        const mouseY = (e.clientY - rect.top - state.pan.y) / state.zoom;
+        if (containerRef.current) {
+            const rect = containerRef.current.getBoundingClientRect();
+            const mouseX = (e.clientX - rect.left - state.pan.x) / state.zoom;
+            const mouseY = (e.clientY - rect.top - state.pan.y) / state.zoom;
 
-        const targetEl = document.elementFromPoint(e.clientX, e.clientY);
-        const portEl = targetEl?.closest('[data-port-id]');
-        if (portEl) {
-            targetPortId = portEl.getAttribute('data-port-id');
-            targetNodeId = portEl.getAttribute('data-node-id');
-        } else {
-            state.nodes.forEach(node => {
-                if (node.id === dragWire.startNodeId) return;
+            const targetEl = document.elementFromPoint(e.clientX, e.clientY);
+            const portEl = targetEl?.closest('[data-port-id]');
+            if (portEl) {
+                targetPortId = portEl.getAttribute('data-port-id');
+                targetNodeId = portEl.getAttribute('data-node-id');
+            } else {
+                state.nodes.forEach(node => {
+                    if (node.id === dragWire.startNodeId) return;
 
-                const ports = getPortsForNode(node.id, node.type);
-                ports.forEach(port => {
-                    const isTargetInput = port.type === 'input';
-                    if (dragWire.isInput === isTargetInput) return;
+                    const ports = getPortsForNode(node.id, node.type);
+                    ports.forEach(port => {
+                        const isTargetInput = port.type === 'input';
+                        if (dragWire.isInput === isTargetInput) return;
 
-                    const pos = calculatePortPosition(node, port.id, port.type);
-                    const dist = Math.hypot(pos.x - mouseX, pos.y - mouseY);
+                        const pos = calculatePortPosition(node, port.id, port.type);
+                        const dist = Math.hypot(pos.x - mouseX, pos.y - mouseY);
 
-                    if (dist < minDistance) {
-                        minDistance = dist;
-                        targetPortId = port.id;
-                        targetNodeId = node.id;
+                        if (dist < minDistance) {
+                            minDistance = dist;
+                            targetPortId = port.id;
+                            targetNodeId = node.id;
+                        }
+                    });
+                });
+            }
+        }
+
+        if (targetPortId && targetNodeId && targetPortId !== dragWire.startPortId) {
+            const isStartInput = dragWire.isInput;
+            const isTargetInput = targetPortId.includes('-in-');
+            
+            if (isStartInput !== isTargetInput && dragWire.startNodeId !== targetNodeId) {
+                dispatchLocal({
+                    type: 'CONNECT',
+                    payload: {
+                        id: `conn-${Date.now()}`,
+                        sourceNodeId: isStartInput ? targetNodeId : dragWire.startNodeId,
+                        sourcePortId: isStartInput ? targetPortId : dragWire.startPortId,
+                        targetNodeId: isStartInput ? dragWire.startNodeId : targetNodeId,
+                        targetPortId: isStartInput ? dragWire.startPortId : targetPortId
                     }
                 });
-            });
+            }
         }
+        setDragWire(null);
     }
-
-    if (targetPortId && targetNodeId && targetPortId !== dragWire.startPortId) {
-        const isStartInput = dragWire.isInput;
-        const isTargetInput = targetPortId.includes('-in-');
-        
-        if (isStartInput !== isTargetInput && dragWire.startNodeId !== targetNodeId) {
-            dispatchLocal({
-                type: 'CONNECT',
-                payload: {
-                    id: `conn-${Date.now()}`,
-                    sourceNodeId: isStartInput ? targetNodeId : dragWire.startNodeId,
-                    sourcePortId: isStartInput ? targetPortId : dragWire.startPortId,
-                    targetNodeId: isStartInput ? dragWire.startNodeId : targetNodeId,
-                    targetPortId: isStartInput ? dragWire.startPortId : targetPortId
-                }
-            });
-        }
-    }
-
-    setDragWire(null);
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -1496,6 +1549,7 @@ export default function App() {
           const isNode = target.closest('[data-node-id]');
           const isPort = target.closest('[data-port-id]');
           
+          // Long press on Background for Creation Menu
           if (!isNode && !isPort) {
               touchStartPos.current = { x: touch.clientX, y: touch.clientY };
               longPressTimer.current = setTimeout(() => {
@@ -1769,10 +1823,6 @@ export default function App() {
                     {state.connections.map(conn => {
                         const sourceNode = regularNodes.find(n => n.id === conn.sourceNodeId);
                         const targetNode = regularNodes.find(n => n.id === conn.targetNodeId);
-                        // Even if a node is maximized, we still want to render connections if needed, 
-                        // but if we move the maximized node out of the transform, wires might look weird connecting to it.
-                        // However, practically wires are decorative when maximizing. 
-                        // We filter nulls, so if a node is "missing" (maximized), wires disappear from the canvas view, which is cleaner.
                         if (!sourceNode || !targetNode) return null;
                         const start = calculatePortPosition(sourceNode, conn.sourcePortId, 'output');
                         const end = calculatePortPosition(targetNode, conn.targetPortId, 'input');
@@ -1814,6 +1864,7 @@ export default function App() {
                                 onRefresh={handleRefresh}
                                 onPortDown={handlePortDown}
                                 onPortContextMenu={handlePortContextMenu}
+                                onContextMenu={(e) => { e.stopPropagation(); handleContextMenu(e, node.id); }} // Pass handler for long press
                                 onUpdateTitle={handleUpdateTitle}
                                 onUpdateContent={(id, content) => dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id, content } })}
                                 onSendMessage={handleSendMessage}
@@ -1861,6 +1912,7 @@ export default function App() {
                   onRefresh={handleRefresh}
                   onPortDown={() => {}}
                   onPortContextMenu={() => {}}
+                  onContextMenu={() => {}}
                   onUpdateTitle={() => {}}
                   onUpdateContent={() => {}}
                   onSendMessage={() => {}}
@@ -1907,10 +1959,13 @@ export default function App() {
                 onClearImage={handleClearImage}
                 onAlign={handleAlign}
                 onDistribute={handleDistribute}
+                onCompact={handleCompact}
                 canAlignHorizontal={(contextMenu as any).canAlignHorizontal}
                 canAlignVertical={(contextMenu as any).canAlignVertical}
                 canDistributeHorizontal={(contextMenu as any).canDistributeHorizontal}
                 canDistributeVertical={(contextMenu as any).canDistributeVertical}
+                canCompactHorizontal={(contextMenu as any).canCompactHorizontal}
+                canCompactVertical={(contextMenu as any).canCompactVertical}
                 onClose={() => setContextMenu(null)} 
             />
         </>
