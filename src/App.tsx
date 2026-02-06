@@ -1,3 +1,4 @@
+
 import React, { useReducer, useState, useRef, useEffect, useMemo } from 'react';
 import { Node } from './components/Node';
 import { Wire } from './components/Wire';
@@ -746,7 +747,7 @@ export default function App() {
 
           // 3. API Call with Fallback
           await performGeminiCall(async (ai) => {
-               const response = await ai.models.generateContent({
+               const result = await ai.models.generateContent({
                   model: 'gemini-3-flash-preview',
                   contents: userPrompt,
                   config: { 
@@ -756,6 +757,7 @@ export default function App() {
                });
                
                // 4. Process Response
+               const response = result;
                const functionCalls = response.functionCalls;
                
                if (functionCalls && functionCalls.length > 0) {
@@ -1572,6 +1574,65 @@ export default function App() {
           lastTouchDist.current = null;
       }
   };
+
+  const handleWheel = (e: React.WheelEvent) => {
+        if (maximizedNodeId) return;
+        if ((e.target as HTMLElement).closest('.custom-scrollbar') || (e.target as HTMLElement).closest('.monaco-editor')) return;
+        
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (!rect) return;
+
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        const worldX = (mouseX - state.pan.x) / state.zoom;
+        const worldY = (mouseY - state.pan.y) / state.zoom;
+
+        const zoomIntensity = 0.001;
+        const newZoom = Math.min(Math.max(0.1, state.zoom - e.deltaY * zoomIntensity), 3);
+
+        const newPanX = mouseX - worldX * newZoom;
+        const newPanY = mouseY - worldY * newZoom;
+
+        if (!isNaN(newZoom) && !isNaN(newPanX) && !isNaN(newPanY)) {
+            dispatch({ type: 'ZOOM', payload: { zoom: newZoom } });
+            dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
+        }
+    };
+
+    const handleToggleRun = (id: string) => {
+        const isRunning = state.runningPreviewIds.includes(id);
+        const iframe = document.getElementById(`preview-iframe-${id}`) as HTMLIFrameElement;
+        
+        if (isRunning) {
+             dispatchLocal({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: false } });
+             dispatchLocal({ type: 'CLEAR_LOGS', payload: { nodeId: id } });
+             if (iframe) {
+                 iframe.srcdoc = '<body style="background-color: #000; color: #555; height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; font-family: sans-serif;">STOPPED</body>';
+             }
+        } else {
+             dispatchLocal({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: true } });
+             dispatchLocal({ type: 'CLEAR_LOGS', payload: { nodeId: id } });
+        }
+    };
+
+    const handleRefresh = (id: string) => {
+         const iframe = document.getElementById(`preview-iframe-${id}`) as HTMLIFrameElement;
+         if (iframe) {
+              const compiled = compilePreview(id, state.nodes, state.connections, true);
+              iframe.srcdoc = compiled;
+         }
+    };
+
+    const handlePortDown = (e: React.PointerEvent, portId: string, nodeId: string, isInput: boolean) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const node = state.nodes.find(n => n.id === nodeId);
+        if (!node) return;
+        const pos = calculatePortPosition(node, portId, isInput ? 'input' : 'output');
+        setDragWire({ x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y, startPortId: portId, startNodeId: nodeId, isInput });
+        e.currentTarget.setPointerCapture(e.pointerId);
+    };
 
   const isConnected = (portId: string) => {
       return state.connections.some(c => c.sourcePortId === portId || c.targetPortId === portId);
