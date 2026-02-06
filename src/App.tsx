@@ -8,10 +8,10 @@ import { CollaboratorCursor } from './components/CollaboratorCursor';
 import { GraphState, Action, NodeData, NodeType, LogEntry, UserPresence, Position } from './types';
 import { NODE_DEFAULTS, getPortsForNode } from './constants';
 import { compilePreview, calculatePortPosition, getRelatedNodes, getAllConnectedSources, getConnectedSource } from './utils/graphUtils';
-import { Trash2, Menu, Cloud, CloudOff, UploadCloud, Users, Download, Search } from 'lucide-react';
+import { Trash2, Menu, Cloud, CloudOff, UploadCloud, Users, Download, Search, AlertTriangle } from 'lucide-react';
 import Prism from 'prismjs';
 import { GoogleGenAI, FunctionDeclaration, Type } from "@google/genai";
-import { auth, onAuthStateChanged, db, doc, getDoc, setDoc } from './firebase';
+import { auth, onAuthStateChanged, db, doc, getDoc, setDoc, deleteDoc } from './firebase';
 import JSZip from 'jszip';
 
 const initialState: GraphState = {
@@ -548,6 +548,45 @@ export default function App() {
   }, [state.nodes]);
 
   // --- Handlers ---
+
+  const handleDeleteCloudData = async () => {
+      if (!userUid) return;
+      if (!confirm('Are you sure you want to PERMANENTLY DELETE your project from the cloud? This cannot be undone.')) return;
+
+      try {
+          setSyncStatus('saving');
+          await deleteDoc(doc(db, "nodecode_projects", userUid));
+          
+          // Also clear local storage
+          localStorage.removeItem('nodecode_project_local');
+          
+          // Reset to defaults
+          const codeDefaults = NODE_DEFAULTS.CODE;
+          const previewDefaults = NODE_DEFAULTS.PREVIEW;
+          const defaultNodes: NodeData[] = [
+              { id: 'node-1', type: 'CODE', position: { x: 100, y: 100 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'index.html', content: '<h1>Hello World</h1>\n<link href="style.css" rel="stylesheet">\n<script src="app.js"></script>', autoHeight: true },
+              { id: 'node-2', type: 'CODE', position: { x: 100, y: 450 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'style.css', content: 'body { background: #222; color: #fff; font-family: sans-serif; }', autoHeight: true },
+              { id: 'node-3', type: 'PREVIEW', position: { x: 600, y: 100 }, size: { width: previewDefaults.width, height: previewDefaults.height }, title: previewDefaults.title, content: previewDefaults.content }
+          ];
+          
+          dispatch({ 
+              type: 'LOAD_STATE', 
+              payload: { 
+                  nodes: defaultNodes, 
+                  connections: [], 
+                  pan: {x:0, y:0}, 
+                  zoom: 1 
+              } 
+          });
+          
+          setSyncStatus('synced');
+          alert('Cloud data deleted and project reset.');
+      } catch (e) {
+          console.error("Delete failed", e);
+          setSyncStatus('error');
+          alert('Failed to delete cloud data.');
+      }
+  };
 
   // Hoisted Helper Handler to prevent ReferenceError
   const handleHighlightNode = (id: string) => {
@@ -1680,12 +1719,21 @@ export default function App() {
       </div>
 
       <div className="absolute top-4 right-4 z-50 flex flex-col gap-2 items-end">
+        {userUid && (
+            <button 
+                onClick={handleDeleteCloudData}
+                className="px-3 py-1.5 bg-red-900/80 hover:bg-red-800 text-xs font-medium text-red-200 border border-red-700 rounded flex items-center gap-2 transition-colors pointer-events-auto cursor-pointer"
+                onPointerDown={(e) => e.stopPropagation()}
+            >
+                <Trash2 size={12} /> Delete Cloud Data
+            </button>
+        )}
         <button 
             onClick={() => { if(confirm('Reset?')) { localStorage.removeItem('nodecode_project_local'); window.location.reload(); } }}
             className="px-3 py-1.5 bg-zinc-900/80 hover:bg-red-900/50 text-xs font-medium text-zinc-400 border border-zinc-800 rounded flex items-center gap-2 transition-colors pointer-events-auto cursor-pointer"
             onPointerDown={(e) => e.stopPropagation()}
         >
-            <Trash2 size={12} /> Reset
+            <AlertTriangle size={12} /> Reset Local
         </button>
         <button 
             onClick={() => setIsSidebarOpen(true)}

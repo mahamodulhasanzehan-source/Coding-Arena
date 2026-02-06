@@ -1,7 +1,7 @@
 
 import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged as firebaseOnAuthStateChanged } from "firebase/auth";
-import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
+import { getFirestore, doc, getDoc, setDoc, deleteDoc } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBllwH83gpDoLAeo_XnnMDu4mmWVzBJOkA",
@@ -41,5 +41,5 @@ export const onAuthStateChanged = (authInstance: any, callback: (user: any) => v
     return firebaseOnAuthStateChanged(authInstance, callback);
 };
 
-export { doc, getDoc, setDoc };
+export { doc, getDoc, setDoc, deleteDoc };
 export type { User } from "firebase/auth";
