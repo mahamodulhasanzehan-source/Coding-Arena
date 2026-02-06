@@ -1,3 +1,4 @@
+
 import { Connection, NodeData, NodeType, Port } from '../types';
 import { getPortsForNode } from '../constants';
 
@@ -60,7 +61,7 @@ export const getAllConnectedSources = (
         .filter((n): n is NodeData => !!n);
 };
 
-// NEW: Traverse the undirected graph to find all nodes in the connected component
+// Find all nodes in the connected component of the startNode
 export const getRelatedNodes = (
   startNodeId: string,
   nodes: NodeData[],
@@ -69,29 +70,31 @@ export const getRelatedNodes = (
 ): NodeData[] => {
   const visited = new Set<string>();
   const queue = [startNodeId];
-  const relatedIds = new Set<string>();
+  const related: NodeData[] = [];
 
   while (queue.length > 0) {
     const currentId = queue.shift()!;
     if (visited.has(currentId)) continue;
     visited.add(currentId);
-    relatedIds.add(currentId);
 
-    // Find neighbors via connections (both source and target directions)
-    const neighbors: string[] = [];
-    connections.forEach(c => {
-        if (c.sourceNodeId === currentId) neighbors.push(c.targetNodeId);
-        if (c.targetNodeId === currentId) neighbors.push(c.sourceNodeId);
-    });
-
-    for (const nid of neighbors) {
-        if (!visited.has(nid)) {
-            queue.push(nid);
-        }
+    const node = nodes.find(n => n.id === currentId);
+    if (node) {
+       if (!typeFilter || node.type === typeFilter) {
+           related.push(node);
+       }
     }
+
+    // Find all neighbors
+    const neighbors = connections
+      .filter(c => c.sourceNodeId === currentId || c.targetNodeId === currentId)
+      .map(c => c.sourceNodeId === currentId ? c.targetNodeId : c.sourceNodeId);
+    
+    neighbors.forEach(nid => {
+        if (!visited.has(nid)) queue.push(nid);
+    });
   }
   
-  return nodes.filter(n => relatedIds.has(n.id) && (!typeFilter || n.type === typeFilter));
+  return related;
 };
 
 // Helper to recursively collect all code dependencies
@@ -146,6 +149,7 @@ export const compilePreview = (
       .filter(n => n.id !== rootNode.id); 
 
   let finalContent = rootNode.content;
+  const connectedFilenames = new Set(uniqueDeps.map(d => d.title));
   const missingDependencies: string[] = [];
 
   // Wrap content based on STRICT file extension
@@ -160,7 +164,7 @@ export const compilePreview = (
       // CSS: Wrap in style
       finalContent = `<style>\n${finalContent}\n</style>`;
   } else {
-      // Everything else: Render as plain text
+      // Everything else (txt, md, no extension): Render as plain text
       const escaped = finalContent
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")

@@ -1,3 +1,4 @@
+
 import React, { useRef, useEffect, useState } from 'react';
 import { NodeData, Position, Size } from '../types';
 import { getPortsForNode } from '../constants';
@@ -180,6 +181,18 @@ export const Node: React.FC<NodeProps> = ({
       const newWidth = Math.max(250, initialSizeRef.current.width + dx);
       let newHeight = Math.max(150, initialSizeRef.current.height + dy);
 
+      // RESTRICTION: Code modules cannot be longer than their content
+      if (data.type === 'CODE' && contentHeightRef.current > 0) {
+          const HEADER_HEIGHT = 40;
+          const PADDING = 20; 
+          const maxAllowedHeight = Math.max(150, contentHeightRef.current + HEADER_HEIGHT + PADDING);
+          
+          // Clamp the height. You can shrink it (create scrollbar), but you cannot expand past content.
+          if (newHeight > maxAllowedHeight) {
+              newHeight = maxAllowedHeight;
+          }
+      }
+
       onResize(data.id, {
         width: newWidth,
         height: newHeight,
@@ -278,21 +291,30 @@ export const Node: React.FC<NodeProps> = ({
           onInteraction?.(data.id, null);
       });
 
-      // Auto-Size Logic for Code Nodes (Only if autoHeight is true)
+      // Auto-Size & Auto-Shrink Logic for Code Nodes
       if (data.type === 'CODE') {
           editor.onDidContentSizeChange((e: any) => {
               contentHeightRef.current = e.contentHeight;
               
+              // Use Ref to get the latest data state without closure staleness
               const currentNode = nodeDataRef.current;
               
               const HEADER_HEIGHT = 40;
               const MIN_HEIGHT = 150;
               const PADDING = 20; 
+              // The ideal height to fit all code without empty space
               const fitHeight = Math.max(MIN_HEIGHT, e.contentHeight + HEADER_HEIGHT + PADDING);
               
               if (currentNode.autoHeight && !currentNode.isMinimized) {
-                  // Standard Auto-Grow
+                  // Standard Auto-Grow (Initial creation state)
                   if (Math.abs(fitHeight - currentNode.size.height) > 3) {
+                      onResize(currentNode.id, { width: currentNode.size.width, height: fitHeight });
+                  }
+              } else if (!currentNode.isMinimized) {
+                  // Manual Mode Enforcement:
+                  // If the current box is LARGER than the content (extended parts), snap it shut.
+                  // We add a small buffer (5px) to prevent jitter during resize operations.
+                  if (currentNode.size.height > fitHeight + 5) {
                       onResize(currentNode.id, { width: currentNode.size.width, height: fitHeight });
                   }
               }
@@ -613,11 +635,9 @@ export const Node: React.FC<NodeProps> = ({
                         wordWrap: 'on',
                         padding: { top: 10, bottom: 10 },
                         readOnly: data.isLoading,
-                        // ENABLED SCROLLBAR
                         scrollbar: {
-                            vertical: 'auto',
-                            horizontal: 'auto',
-                            handleMouseWheel: true,
+                            vertical: 'hidden',
+                            handleMouseWheel: false,
                         },
                         overviewRulerLanes: 0,
                         hideCursorInOverviewRuler: true,
@@ -717,7 +737,7 @@ export const Node: React.FC<NodeProps> = ({
                             {log.type === 'error' && onFixError && (
                                 <button
                                     onClick={() => onFixError(data.id, log.message)}
-                                    className="opacity-0 group-hover:opacity-100 p-1 bg-zinc-800 hover:bg-blue-600 text-zinc-400 hover:text-white rounded ml-2 transition-all flex items-center gap-1 shrink-0 cursor-pointer"
+                                    className="opacity-0 group-hover:opacity-100 p-1 bg-zinc-800 hover:bg-blue-600 text-zinc-400 hover:text-white rounded ml-2 transition-all flex items-center gap-1 shrink-0"
                                     title="Fix with AI"
                                     onPointerDown={(e) => e.stopPropagation()}
                                 >
