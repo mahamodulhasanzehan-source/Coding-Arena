@@ -11,7 +11,7 @@ import { compilePreview, calculatePortPosition, getRelatedNodes, getAllConnected
 import { Trash2, Menu, Cloud, CloudOff, UploadCloud, Users, Download, Search } from 'lucide-react';
 import Prism from 'prismjs';
 import { GoogleGenAI, FunctionDeclaration, Type } from "@google/genai";
-import { auth, onAuthStateChanged } from './firebase';
+import { auth, onAuthStateChanged, db, doc, getDoc, setDoc } from './firebase';
 import JSZip from 'jszip';
 
 const initialState: GraphState = {
@@ -154,6 +154,9 @@ function graphReducer(state: GraphState, action: Action): GraphState {
                 : state.runningPreviewIds.filter(id => id !== nodeId)
         };
     case 'LOAD_STATE':
+        // If state is null/undefined, don't crash
+        if (!action.payload) return state;
+        
         const incomingNodes = action.payload.nodes || [];
         const mergedNodes = incomingNodes.map(serverNode => {
             const localNode = state.nodes.find(n => n.id === serverNode.id);
@@ -175,6 +178,8 @@ function graphReducer(state: GraphState, action: Action): GraphState {
           nodes: mergedNodes, 
           connections: action.payload.connections || state.connections,
           runningPreviewIds: action.payload.runningPreviewIds || state.runningPreviewIds,
+          pan: action.payload.pan || state.pan,
+          zoom: action.payload.zoom || state.zoom
         };
     case 'UPDATE_COLLABORATORS':
         return { ...state, collaborators: action.payload };
@@ -315,13 +320,77 @@ export default function App() {
       return () => window.removeEventListener('keydown', handleKeyDown);
   }, [maximizedNodeId]);
 
-  // Handle Auth State
+  // INITIALIZATION & AUTH HANDLER
+  // This logic restores the data from the database if signed in
   useEffect(() => {
-      const unsubscribe = onAuthStateChanged(auth, (user) => {
+      const unsubscribe = onAuthStateChanged(auth, async (user) => {
           if (user) {
               setUserUid(user.uid);
+              setSyncStatus('saving'); // Show interaction while loading
+              
+              try {
+                  // Fetch from Cloud
+                  const docRef = doc(db, "nodecode_projects", user.uid);
+                  const docSnap = await getDoc(docRef);
+                  
+                  if (docSnap.exists()) {
+                      const data = docSnap.data();
+                      if (data.state) {
+                          try {
+                              const loadedState = JSON.parse(data.state);
+                              dispatch({ type: 'LOAD_STATE', payload: loadedState });
+                              setSyncStatus('synced');
+                          } catch (e) {
+                              console.error("Failed to parse cloud state", e);
+                              setSyncStatus('error');
+                          }
+                      }
+                  } else {
+                      // New user or no data on cloud yet, check local storage or load defaults
+                      const local = localStorage.getItem('nodecode_project_local');
+                      if (local) {
+                          try {
+                              const localState = JSON.parse(local);
+                              dispatch({ type: 'LOAD_STATE', payload: localState });
+                          } catch(e) {}
+                      } else {
+                          // Load defaults
+                          const codeDefaults = NODE_DEFAULTS.CODE;
+                          const previewDefaults = NODE_DEFAULTS.PREVIEW;
+                          const defaultNodes: NodeData[] = [
+                              { id: 'node-1', type: 'CODE', position: { x: 100, y: 100 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'index.html', content: '<h1>Hello World</h1>\n<link href="style.css" rel="stylesheet">\n<script src="app.js"></script>', autoHeight: true },
+                              { id: 'node-2', type: 'CODE', position: { x: 100, y: 450 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'style.css', content: 'body { background: #222; color: #fff; font-family: sans-serif; }', autoHeight: true },
+                              { id: 'node-3', type: 'PREVIEW', position: { x: 600, y: 100 }, size: { width: previewDefaults.width, height: previewDefaults.height }, title: previewDefaults.title, content: previewDefaults.content }
+                          ];
+                          dispatch({ type: 'LOAD_STATE', payload: { nodes: defaultNodes, connections: [], pan: {x:0, y:0}, zoom: 1 } });
+                      }
+                      setSyncStatus('synced');
+                  }
+              } catch (err) {
+                  console.error("Cloud Fetch Error:", err);
+                  setSyncStatus('error');
+              }
           } else {
+              // Signed Out: Fallback to Local Storage
               setUserUid(null);
+              setSyncStatus('offline');
+              const saved = localStorage.getItem('nodecode_project_local');
+              if (saved) {
+                  try {
+                     const loadedState = JSON.parse(saved);
+                     dispatch({ type: 'LOAD_STATE', payload: loadedState });
+                  } catch(e) { console.error(e); }
+              } else {
+                 // Defaults
+                 const codeDefaults = NODE_DEFAULTS.CODE;
+                 const previewDefaults = NODE_DEFAULTS.PREVIEW;
+                 const defaultNodes: NodeData[] = [
+                    { id: 'node-1', type: 'CODE', position: { x: 100, y: 100 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'index.html', content: '<h1>Hello World</h1>\n<link href="style.css" rel="stylesheet">\n<script src="app.js"></script>', autoHeight: true },
+                    { id: 'node-2', type: 'CODE', position: { x: 100, y: 450 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'style.css', content: 'body { background: #222; color: #fff; font-family: sans-serif; }', autoHeight: true },
+                    { id: 'node-3', type: 'PREVIEW', position: { x: 600, y: 100 }, size: { width: previewDefaults.width, height: previewDefaults.height }, title: previewDefaults.title, content: previewDefaults.content }
+                 ];
+                 dispatch({ type: 'LOAD_STATE', payload: { nodes: defaultNodes, connections: [], pan: {x:0, y:0}, zoom: 1 } });
+              }
           }
       });
       return () => unsubscribe();
@@ -369,60 +438,44 @@ export default function App() {
       dispatch(action);
   };
 
+  // SAVE LOGIC (Dual: Cloud & Local)
   useEffect(() => {
-    const init = async () => {
-      setSyncStatus('saving');
-      
-      const saved = localStorage.getItem('nodecode_project_local');
-      if (saved) {
-          try {
-             const loadedState = JSON.parse(saved);
-             dispatch({ 
-                type: 'LOAD_STATE', 
-                payload: { 
-                    nodes: loadedState.nodes, 
-                    connections: loadedState.connections,
-                    runningPreviewIds: loadedState.runningPreviewIds
-                } 
-            });
-          } catch(e) { console.error(e); }
-      } else {
-         // Load defaults
-         const codeDefaults = NODE_DEFAULTS.CODE;
-         const previewDefaults = NODE_DEFAULTS.PREVIEW;
-         const defaultNodes: NodeData[] = [
-            { id: 'node-1', type: 'CODE', position: { x: 100, y: 100 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'index.html', content: '<h1>Hello World</h1>\n<link href="style.css" rel="stylesheet">\n<script src="app.js"></script>', autoHeight: true },
-            { id: 'node-2', type: 'CODE', position: { x: 100, y: 450 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'style.css', content: 'body { background: #222; color: #fff; font-family: sans-serif; }', autoHeight: true },
-            { id: 'node-3', type: 'PREVIEW', position: { x: 600, y: 100 }, size: { width: previewDefaults.width, height: previewDefaults.height }, title: previewDefaults.title, content: previewDefaults.content }
-         ];
-         dispatch({ type: 'LOAD_STATE', payload: { nodes: defaultNodes, connections: [], pan: {x:0, y:0}, zoom: 1 } });
-      }
-      setSyncStatus('synced');
-    };
-
-    init();
-  }, []); 
-
-  useEffect(() => {
-    // Save to local storage regardless of auth for now, as requested to fix "deleted everything"
     if (isLocalChange.current) {
         setSyncStatus('saving');
-        const saveData = setTimeout(() => {
+        const saveData = setTimeout(async () => {
              const stateToSave = {
                 nodes: state.nodes, 
                 connections: state.connections,
                 runningPreviewIds: state.runningPreviewIds,
-                pan: {x:0, y:0}, 
-                zoom: 1
+                pan: state.pan, 
+                zoom: state.zoom
              };
+             
+             // Always save local backup
              localStorage.setItem('nodecode_project_local', JSON.stringify(stateToSave));
-             setSyncStatus('synced');
+
+             // If signed in, save to Cloud
+             if (userUid) {
+                 try {
+                     await setDoc(doc(db, "nodecode_projects", userUid), {
+                         state: JSON.stringify(stateToSave),
+                         updatedAt: new Date().toISOString()
+                     }, { merge: true });
+                     setSyncStatus('synced');
+                 } catch (e) {
+                     console.error("Cloud Save Failed", e);
+                     setSyncStatus('error');
+                 }
+             } else {
+                 setSyncStatus('offline');
+             }
+
              isLocalChange.current = false; 
-        }, 800); 
+        }, 1000); // 1s debounce
 
         return () => clearTimeout(saveData);
     }
-  }, [state.nodes, state.connections, state.runningPreviewIds]); 
+  }, [state.nodes, state.connections, state.runningPreviewIds, state.pan, state.zoom, userUid]); 
 
   // LIVE UPDATE LOOP
   useEffect(() => {
