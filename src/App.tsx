@@ -27,6 +27,16 @@ const initialState: GraphState = {
   selectedNodeIds: [],
 };
 
+// Helper to calculate width of a minimized node based on title
+const calculateMinimizedWidth = (title: string): number => {
+    // Approx width calculations based on font and padding
+    // Base chrome (icons, grips, buttons) approx 140px
+    const baseWidth = 140; 
+    const charWidth = 9; // Approx 9px per char for text-sm font-semibold
+    const width = baseWidth + (title.length * charWidth);
+    return Math.max(250, Math.min(600, width));
+};
+
 function graphReducer(state: GraphState, action: Action): GraphState {
   switch (action.type) {
     case 'ADD_NODE':
@@ -58,7 +68,27 @@ function graphReducer(state: GraphState, action: Action): GraphState {
     case 'UPDATE_NODE_TITLE':
       return {
         ...state,
-        nodes: state.nodes.map(n => n.id === action.payload.id ? { ...n, title: action.payload.title } : n)
+        nodes: state.nodes.map(n => {
+            if (n.id !== action.payload.id) return n;
+            
+            const newTitle = action.payload.title;
+            
+            // If minimized, we need to resize and re-center based on new title length
+            if (n.isMinimized) {
+                const oldWidth = n.size.width;
+                const newWidth = calculateMinimizedWidth(newTitle);
+                const center = n.position.x + oldWidth / 2;
+                
+                return { 
+                    ...n, 
+                    title: newTitle,
+                    size: { ...n.size, width: newWidth },
+                    position: { x: center - newWidth / 2, y: n.position.y }
+                };
+            }
+            
+            return { ...n, title: newTitle };
+        })
       };
     case 'UPDATE_NODE_TYPE':
         return {
@@ -200,7 +230,33 @@ function graphReducer(state: GraphState, action: Action): GraphState {
     case 'TOGGLE_MINIMIZE':
         return {
             ...state,
-            nodes: state.nodes.map(n => n.id === action.payload.id ? { ...n, isMinimized: !n.isMinimized } : n)
+            nodes: state.nodes.map(n => {
+                if (n.id !== action.payload.id) return n;
+
+                const isMinimizing = !n.isMinimized;
+                const center = n.position.x + n.size.width / 2;
+
+                if (isMinimizing) {
+                     const minWidth = calculateMinimizedWidth(n.title);
+                     return {
+                         ...n,
+                         isMinimized: true,
+                         expandedSize: n.size, // Save current full size
+                         size: { width: minWidth, height: 40 },
+                         position: { x: center - minWidth / 2, y: n.position.y }
+                     };
+                } else {
+                     // Maximizing (Un-minimizing)
+                     const restoredSize = n.expandedSize || { width: 450, height: 300 }; // Fallback default
+                     return {
+                         ...n,
+                         isMinimized: false,
+                         expandedSize: undefined,
+                         size: restoredSize,
+                         position: { x: center - restoredSize.width / 2, y: n.position.y }
+                     };
+                }
+            })
         };
     case 'SET_SELECTED_NODES':
         return { ...state, selectedNodeIds: action.payload };
@@ -1154,8 +1210,9 @@ export default function App() {
     const node = state.nodes.find(n => n.id === id);
     if (!node) return;
 
-    const w = node.isMinimized ? 250 : node.size.width;
-    const h = node.isMinimized ? 40 : node.size.height;
+    // Use actual dimensions for snapping logic
+    const w = node.size.width;
+    const h = node.size.height;
     
     const deltaX = newPos.x - node.position.x;
     const deltaY = newPos.y - node.position.y;
@@ -1192,8 +1249,8 @@ export default function App() {
         if (other.id === id) return;
         if (state.selectedNodeIds.includes(other.id)) return; 
 
-        const ow = other.isMinimized ? 250 : other.size.width;
-        const oh = other.isMinimized ? 40 : other.size.height;
+        const ow = other.size.width;
+        const oh = other.size.height;
         const ocx = other.position.x + ow / 2;
         const ocy = other.position.y + oh / 2;
 
@@ -1294,7 +1351,7 @@ export default function App() {
         
         // Alignment Checks
         const wouldOverlapH = selectedNodes.some((n1, i) => {
-            const w1 = n1.isMinimized ? 250 : n1.size.width;
+            const w1 = n1.size.width;
             return selectedNodes.some((n2, j) => {
                 if (i === j) return false;
                 return (n1.position.x < n2.position.x + w1) && (n1.position.x + w1 > n2.position.x);
@@ -1303,22 +1360,22 @@ export default function App() {
         canAlignHorizontal = !wouldOverlapH;
 
         const wouldOverlapV = selectedNodes.some((n1, i) => {
-            const h1 = n1.isMinimized ? 40 : n1.size.height;
+            const h1 = n1.size.height;
             return selectedNodes.some((n2, j) => {
                 if (i === j) return false;
-                const h2 = n2.isMinimized ? 40 : n2.size.height;
+                const h2 = n2.size.height;
                 return (n1.position.y < n2.position.y + h2) && (n1.position.y + h1 > n2.position.y);
             });
         });
         canAlignVertical = !wouldOverlapV;
 
         // Compact Checks (Based on Alignment)
-        const centerYs = selectedNodes.map(n => n.position.y + (n.isMinimized ? 40 : n.size.height)/2);
+        const centerYs = selectedNodes.map(n => n.position.y + (n.size.height)/2);
         const avgY = centerYs.reduce((a,b)=>a+b,0)/centerYs.length;
         const isAlignedH = centerYs.every(y => Math.abs(y - avgY) < 1);
         canCompactHorizontal = isAlignedH;
 
-        const centerXs = selectedNodes.map(n => n.position.x + (n.isMinimized ? 250 : n.size.width)/2);
+        const centerXs = selectedNodes.map(n => n.position.x + (n.size.width)/2);
         const avgX = centerXs.reduce((a,b)=>a+b,0)/centerXs.length;
         const isAlignedV = centerXs.every(x => Math.abs(x - avgX) < 1);
         canCompactVertical = isAlignedV;
@@ -1329,8 +1386,8 @@ export default function App() {
             const sortedX = [...selectedNodes].sort((a, b) => a.position.x - b.position.x);
             const firstX = sortedX[0];
             const lastX = sortedX[sortedX.length - 1];
-            const totalSpanX = lastX.position.x - (firstX.position.x + (firstX.isMinimized ? 250 : firstX.size.width));
-            const sumInnerWidths = sortedX.slice(1, -1).reduce((acc, n) => acc + (n.isMinimized ? 250 : n.size.width), 0);
+            const totalSpanX = lastX.position.x - (firstX.position.x + (firstX.size.width));
+            const sumInnerWidths = sortedX.slice(1, -1).reduce((acc, n) => acc + (n.size.width), 0);
             const gapX = (totalSpanX - sumInnerWidths) / (sortedX.length - 1);
             canDistributeHorizontal = gapX >= 0;
 
@@ -1338,8 +1395,8 @@ export default function App() {
             const sortedY = [...selectedNodes].sort((a, b) => a.position.y - b.position.y);
             const firstY = sortedY[0];
             const lastY = sortedY[sortedY.length - 1];
-            const totalSpanY = lastY.position.y - (firstY.position.y + (firstY.isMinimized ? 40 : firstY.size.height));
-            const sumInnerHeights = sortedY.slice(1, -1).reduce((acc, n) => acc + (n.isMinimized ? 40 : n.size.height), 0);
+            const totalSpanY = lastY.position.y - (firstY.position.y + (firstY.size.height));
+            const sumInnerHeights = sortedY.slice(1, -1).reduce((acc, n) => acc + (n.size.height), 0);
             const gapY = (totalSpanY - sumInnerHeights) / (sortedY.length - 1);
             canDistributeVertical = gapY >= 0;
         }
@@ -1372,14 +1429,14 @@ export default function App() {
           
           if (type === 'horizontal') {
               // Align Centers Y
-              const targetCenterY = targetNode.position.y + (targetNode.isMinimized ? 40 : targetNode.size.height) / 2;
-              const nodeH = node.isMinimized ? 40 : node.size.height;
+              const targetCenterY = targetNode.position.y + (targetNode.size.height) / 2;
+              const nodeH = node.size.height;
               const newY = targetCenterY - nodeH / 2;
               dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id: node.id, position: { x: node.position.x, y: newY } } });
           } else {
               // Align Centers X
-              const targetCenterX = targetNode.position.x + (targetNode.isMinimized ? 250 : targetNode.size.width) / 2;
-              const nodeW = node.isMinimized ? 250 : node.size.width;
+              const targetCenterX = targetNode.position.x + (targetNode.size.width) / 2;
+              const nodeW = node.size.width;
               const newX = targetCenterX - nodeW / 2;
               dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id: node.id, position: { x: newX, y: node.position.y } } });
           }
@@ -1400,7 +1457,7 @@ export default function App() {
             if (node.position.x !== currentX) {
                  dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id: node.id, position: { x: currentX, y: node.position.y } } });
             }
-            const w = node.isMinimized ? 250 : node.size.width;
+            const w = node.size.width;
             currentX += w + GAP;
         });
     } else {
@@ -1411,7 +1468,7 @@ export default function App() {
             if (node.position.y !== currentY) {
                  dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id: node.id, position: { x: node.position.x, y: currentY } } });
             }
-            const h = node.isMinimized ? 40 : node.size.height;
+            const h = node.size.height;
             currentY += h + GAP;
         });
     }
@@ -1427,11 +1484,11 @@ export default function App() {
           const first = sorted[0];
           const last = sorted[sorted.length - 1];
           
-          const firstW = first.isMinimized ? 250 : first.size.width;
+          const firstW = first.size.width;
           const totalSpan = last.position.x - (first.position.x + firstW);
           
           const innerNodes = sorted.slice(1, -1);
-          const sumInnerW = innerNodes.reduce((acc, n) => acc + (n.isMinimized ? 250 : n.size.width), 0);
+          const sumInnerW = innerNodes.reduce((acc, n) => acc + (n.size.width), 0);
           
           const totalGap = totalSpan - sumInnerW;
           const gap = totalGap / (sorted.length - 1);
@@ -1439,7 +1496,7 @@ export default function App() {
           let currentX = first.position.x + firstW + gap;
           innerNodes.forEach(node => {
               dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id: node.id, position: { x: currentX, y: node.position.y } } });
-              const w = node.isMinimized ? 250 : node.size.width;
+              const w = node.size.width;
               currentX += w + gap;
           });
       } else {
@@ -1447,11 +1504,11 @@ export default function App() {
           const first = sorted[0];
           const last = sorted[sorted.length - 1];
           
-          const firstH = first.isMinimized ? 40 : first.size.height;
+          const firstH = first.size.height;
           const totalSpan = last.position.y - (first.position.y + firstH);
           
           const innerNodes = sorted.slice(1, -1);
-          const sumInnerH = innerNodes.reduce((acc, n) => acc + (n.isMinimized ? 40 : n.size.height), 0);
+          const sumInnerH = innerNodes.reduce((acc, n) => acc + (n.size.height), 0);
           
           const totalGap = totalSpan - sumInnerH;
           const gap = totalGap / (sorted.length - 1);
@@ -1459,7 +1516,7 @@ export default function App() {
           let currentY = first.position.y + firstH + gap;
           innerNodes.forEach(node => {
               dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id: node.id, position: { x: node.position.x, y: currentY } } });
-              const h = node.isMinimized ? 40 : node.size.height;
+              const h = node.size.height;
               currentY += h + gap;
           });
       }
@@ -1537,8 +1594,8 @@ export default function App() {
         const selectedIds: string[] = [];
         const prevSelected = new Set(state.selectedNodeIds);
         state.nodes.forEach(node => {
-            const nw = node.isMinimized ? 250 : node.size.width;
-            const nh = node.isMinimized ? 40 : node.size.height;
+            const nw = node.size.width;
+            const nh = node.size.height;
             if (
                 node.position.x < selectionBox.x + selectionBox.w &&
                 node.position.x + nw > selectionBox.x &&

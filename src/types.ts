@@ -22,6 +22,7 @@ export interface NodeData {
   title: string;
   position: Position;
   size: Size;
+  expandedSize?: Size; // Store original size when minimized
   content: string; // Code content, internal state, NPM query, Base64 Image, or Markdown text
   lastOutput?: any; // For terminals or previews to store runtime state if needed
   autoHeight?: boolean; // For CODE nodes to grow automatically

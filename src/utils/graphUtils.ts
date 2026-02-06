@@ -23,7 +23,9 @@ export const calculatePortPosition = (
   const yRelative = startY + 6 + (portIndex * PORT_STRIDE);
   const y = node.position.y + yRelative;
 
-  const width = node.isMinimized ? 250 : node.size.width;
+  // With the state update logic, node.size.width is now the correct visual width
+  // even when minimized.
+  const width = node.size.width;
 
   const x = type === 'input' 
     ? node.position.x - 6 

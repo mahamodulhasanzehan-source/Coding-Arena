@@ -558,10 +558,8 @@ export const Node: React.FC<NodeProps> = ({
       borderWidth: 0,
   } : {
       transform: `translate(${data.position.x}px, ${data.position.y}px)`,
-      width: data.isMinimized ? 'auto' : data.size.width,
-      minWidth: data.isMinimized ? '250px' : undefined,
-      height: data.isMinimized ? '40px' : data.size.height,
-      maxWidth: data.isMinimized ? '600px' : undefined,
+      width: data.size.width,
+      height: data.isMinimized ? 40 : data.size.height,
   };
 
   const dynamicStyle = collaboratorInfo ? {
