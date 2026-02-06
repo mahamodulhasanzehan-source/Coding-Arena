@@ -1116,11 +1116,25 @@ export default function App() {
         window.URL.revokeObjectURL(url);
     };
 
-    const handleReset = () => {
+    const handleReset = async () => {
         const pwd = prompt("Enter password to reset:");
         if (pwd === 'password') {
-            localStorage.removeItem('nodecode-studio-v1');
-            window.location.reload();
+            try {
+                // Clear local storage
+                localStorage.removeItem('nodecode-studio-v1');
+                
+                // Clear Cloud Firestore if connected
+                // This prevents the app from immediately downloading the old state upon reload
+                if (userUid) {
+                    // We delete the entire doc so the next load triggers the "Defaults" logic
+                    await deleteDoc(doc(db, 'nodecode_projects', 'global_project_room'));
+                }
+
+                window.location.reload();
+            } catch (e) {
+                console.error("Reset failed", e);
+                alert("Failed to reset cloud data, check console.");
+            }
         } else if (pwd !== null) {
             alert("Incorrect password");
         }
