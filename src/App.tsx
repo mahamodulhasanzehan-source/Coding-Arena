@@ -8,7 +8,7 @@ import { CollaboratorCursor } from './components/CollaboratorCursor';
 import { GraphState, Action, NodeData, NodeType, LogEntry, UserPresence } from './types';
 import { NODE_DEFAULTS } from './constants';
 import { compilePreview, calculatePortPosition } from './utils/graphUtils';
-import { Trash2, Menu, Cloud, CloudOff, CloudUpload, Plus, Minus, Search, Download } from 'lucide-react';
+import { Trash2, Menu, Cloud, CloudOff, UploadCloud, Plus, Minus, Search, Download } from 'lucide-react';
 import { GoogleGenAI, FunctionDeclaration, Type } from "@google/genai";
 import { signIn, db } from './firebase';
 import { doc, getDoc, setDoc, onSnapshot, collection, deleteDoc } from 'firebase/firestore';
@@ -1163,7 +1163,7 @@ export default function App() {
                 </div>
                 <div className="flex items-center gap-1.5 px-3 py-1 bg-zinc-900/80 border border-zinc-800 rounded-full backdrop-blur-sm pointer-events-auto" title="Cloud Sync Status">
                     {syncStatus === 'synced' && <Cloud size={14} className="text-emerald-500" />}
-                    {syncStatus === 'saving' && <CloudUpload size={14} className="text-amber-500 animate-pulse" />}
+                    {syncStatus === 'saving' && <UploadCloud size={14} className="text-amber-500 animate-pulse" />}
                     {syncStatus === 'offline' && <CloudOff size={14} className="text-zinc-500" />}
                     {syncStatus === 'error' && <CloudOff size={14} className="text-red-500" />}
                     <span className="text-[10px] uppercase font-bold tracking-wider text-zinc-400">
