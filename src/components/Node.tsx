@@ -518,7 +518,7 @@ export const Node: React.FC<NodeProps> = ({
                     <button 
                         onClick={(e) => { e.stopPropagation(); setIsEditingTitle(true); }}
                         onPointerDown={(e) => e.stopPropagation()}
-                        className="opacity-0 group-hover/title:opacity-100 p-1 hover:bg-zinc-800 rounded text-zinc-500 hover:text-zinc-300 transition-all nodrag shrink-0"
+                        className="opacity-0 group-hover/title:opacity-100 p-1 hover:bg-zinc-800 rounded text-zinc-500 hover:text-zinc-300 transition-all nodrag shrink-0 active:scale-90 transition-transform"
                         disabled={data.isLoading}
                     >
                         <Pencil size={12} />
@@ -534,7 +534,7 @@ export const Node: React.FC<NodeProps> = ({
                  <button
                     onClick={handleToggleMinimize}
                     onPointerDown={(e) => e.stopPropagation()}
-                    className="nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 text-zinc-400 hover:text-white hover:bg-zinc-800"
+                    className="nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 text-zinc-400 hover:text-white hover:bg-zinc-800 active:scale-90 transition-transform"
                     title={data.isMinimized ? "Expand" : "Minimize"}
                  >
                      {data.isMinimized ? <Square size={14} /> : <Minus size={14} />}
@@ -543,7 +543,7 @@ export const Node: React.FC<NodeProps> = ({
                  <button
                     onClick={handleFormatCode}
                     onPointerDown={(e) => e.stopPropagation()}
-                    className="nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 text-zinc-400 hover:text-white hover:bg-zinc-800"
+                    className="nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 text-zinc-400 hover:text-white hover:bg-zinc-800 active:scale-90 transition-transform"
                     title="Format Code"
                     disabled={data.isLoading}
                  >
@@ -554,7 +554,7 @@ export const Node: React.FC<NodeProps> = ({
                      <button
                         onClick={handleAiClick}
                         onPointerDown={(e) => e.stopPropagation()}
-                        className={`nodrag cancel-btn p-1.5 rounded transition-all cursor-pointer relative z-10 flex items-center gap-1 ${
+                        className={`nodrag cancel-btn p-1.5 rounded transition-all cursor-pointer relative z-10 flex items-center gap-1 active:scale-90 transition-transform ${
                             isPromptOpen || data.isLoading ? 'bg-blue-500/20 text-blue-400' : 'text-zinc-400 hover:text-blue-400 hover:bg-zinc-800'
                         }`}
                         title={data.isLoading ? "Stop Generating" : "AI Assistant"}
@@ -577,7 +577,7 @@ export const Node: React.FC<NodeProps> = ({
                <button 
                   onClick={handleRefreshClick}
                   onPointerDown={(e) => e.stopPropagation()}
-                  className="nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 text-zinc-400 hover:text-white hover:bg-zinc-800"
+                  className="nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 text-zinc-400 hover:text-white hover:bg-zinc-800 active:scale-90 transition-transform"
                   title="Refresh"
                 >
                    <RotateCcw size={14} />
@@ -585,7 +585,7 @@ export const Node: React.FC<NodeProps> = ({
                <button 
                   onClick={handleRunClick}
                   onPointerDown={(e) => e.stopPropagation()}
-                  className={`nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 ${
+                  className={`nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 active:scale-90 transition-transform ${
                       isRunning ? 'text-yellow-500 hover:bg-yellow-500/20' : 'text-green-500 hover:bg-green-500/20'
                   }`}
                   title={isRunning ? "Stop" : "Run"}
@@ -596,7 +596,7 @@ export const Node: React.FC<NodeProps> = ({
               <button 
                   onClick={handleToggleMaximize}
                   onPointerDown={(e) => e.stopPropagation()}
-                  className="nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 text-zinc-400 hover:text-white hover:bg-zinc-800"
+                  className="nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 text-zinc-400 hover:text-white hover:bg-zinc-800 active:scale-90 transition-transform"
                   title={isMaximized ? "Minimize" : "Maximize"}
               >
                   {isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
@@ -621,14 +621,14 @@ export const Node: React.FC<NodeProps> = ({
                   />
                   <button 
                     onClick={submitPrompt}
-                    className="absolute bottom-2 right-2 p-1 bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors"
+                    className="absolute bottom-2 right-2 p-1 bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors active:scale-90 transition-transform"
                     title="Generate"
                   >
                       <ArrowRight size={12} />
                   </button>
                   <button
                     onClick={() => setIsPromptOpen(false)}
-                    className="absolute top-[-2px] right-[-2px] p-1 text-zinc-500 hover:text-zinc-300"
+                    className="absolute top-[-2px] right-[-2px] p-1 text-zinc-500 hover:text-zinc-300 active:scale-90 transition-transform"
                     title="Close"
                   >
                       <X size={10} />
@@ -708,7 +708,7 @@ export const Node: React.FC<NodeProps> = ({
                      </div>
                      <button 
                         onClick={searchNpm} 
-                        className="bg-red-600 hover:bg-red-500 text-white p-2 rounded transition-colors"
+                        className="bg-red-600 hover:bg-red-500 text-white p-2 rounded transition-colors active:scale-90 transition-transform"
                         disabled={isSearchingNpm}
                         onPointerDown={(e) => e.stopPropagation()}
                      >
@@ -724,7 +724,7 @@ export const Node: React.FC<NodeProps> = ({
                              </div>
                              <button 
                                 onClick={() => handleInjectPackage(pkg.package.name)}
-                                className="p-1.5 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded transition-colors"
+                                className="p-1.5 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded transition-colors active:scale-90 transition-transform"
                                 title="Inject Import into connected Code"
                                 onPointerDown={(e) => e.stopPropagation()}
                              >
@@ -761,7 +761,7 @@ export const Node: React.FC<NodeProps> = ({
                             {log.type === 'error' && onFixError && (
                                 <button
                                     onClick={() => onFixError(data.id, log.message)}
-                                    className="opacity-0 group-hover:opacity-100 p-1 bg-zinc-800 hover:bg-blue-600 text-zinc-400 hover:text-white rounded ml-2 transition-all flex items-center gap-1 shrink-0"
+                                    className="opacity-0 group-hover:opacity-100 p-1 bg-zinc-800 hover:bg-blue-600 text-zinc-400 hover:text-white rounded ml-2 transition-all flex items-center gap-1 shrink-0 active:scale-90"
                                     title="Fix with AI"
                                     onPointerDown={(e) => e.stopPropagation()}
                                 >
@@ -829,7 +829,7 @@ export const Node: React.FC<NodeProps> = ({
                      <div className="relative flex items-center gap-2">
                         <button 
                             onClick={(e) => { e.stopPropagation(); onStartContextSelection?.(data.id); }}
-                            className="p-1.5 rounded bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700 transition-colors shrink-0"
+                            className="p-1.5 rounded bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700 transition-colors shrink-0 active:scale-90 transition-transform"
                             title="Select files for context"
                             onPointerDown={(e) => e.stopPropagation()}
                             disabled={data.isLoading}
@@ -848,7 +848,7 @@ export const Node: React.FC<NodeProps> = ({
                         />
                         <button 
                             onClick={(e) => { e.stopPropagation(); handleSendChat(); }}
-                            className={`p-1.5 rounded text-white transition-colors shrink-0 flex items-center justify-center ${
+                            className={`p-1.5 rounded text-white transition-colors shrink-0 flex items-center justify-center active:scale-90 transition-transform ${
                                 data.isLoading ? 'bg-indigo-600/50 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-500'
                             }`}
                             onPointerDown={(e) => e.stopPropagation()}

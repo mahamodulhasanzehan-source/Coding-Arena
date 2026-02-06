@@ -207,12 +207,12 @@ function graphReducer(state: GraphState, action: Action): GraphState {
 // ... (Gemini Tool Definitions) ...
 const updateCodeFunction: FunctionDeclaration = {
     name: 'updateFile',
-    description: 'Update the code content of a specific file. Use this to write code or make changes. ALWAYS provide the FULL content of the file, not just the diff.',
+    description: 'Create or Update a file. If the file does not exist, it will be created. Use this to write code, split code into new files, or make changes. ALWAYS provide the FULL content.',
     parameters: {
         type: Type.OBJECT,
         properties: {
-            filename: { type: Type.STRING, description: 'The exact name of the file to update (e.g., script.js, index.html).' },
-            code: { type: Type.STRING, description: 'The NEW full content of the file. Do not reduce code size unless optimizing. Maintain existing functionality.' }
+            filename: { type: Type.STRING, description: 'The exact name of the file to create or update (e.g., script.js, style.css).' },
+            code: { type: Type.STRING, description: 'The NEW full content of the file.' }
         },
         required: ['filename', 'code']
     }
@@ -220,11 +220,11 @@ const updateCodeFunction: FunctionDeclaration = {
 
 const deleteFileFunction: FunctionDeclaration = {
     name: 'deleteFile',
-    description: 'Delete a file (node) from the project. ONLY use this for strictly empty files or when the user explicitly asks to delete a file. Do not delete files that have code.',
+    description: 'Delete a file (node) from the project. ONLY use this for strictly empty files, files explicitly requested for deletion, or files that are completely unused and unnecessary.',
     parameters: {
         type: Type.OBJECT,
         properties: {
-            filename: { type: Type.STRING, description: 'The exact name of the file to delete (e.g., old_script.js).' }
+            filename: { type: Type.STRING, description: 'The exact name of the file to delete.' }
         },
         required: ['filename']
     }
@@ -580,10 +580,15 @@ export default function App() {
 
       const fileContext = contextFiles.map(n => `Filename: ${n!.title}\nContent:\n${n!.content}`).join('\n\n');
 
-      const systemInstruction = `You are a coding assistant.
+      const systemInstruction = `You are a coding assistant in NodeCode Studio.
       Context Files:
       ${contextFiles.length > 0 ? contextFiles.map(f => f?.title).join(', ') : 'No files selected.'}
-      If asked to edit code, you MUST use the 'updateFile' tool with the full content.`;
+      
+      RULES:
+      1. You can CREATE or UPDATE files using the 'updateFile' tool. If a filename doesn't exist, it will be created.
+      2. You can DELETE files using 'deleteFile'. ONLY delete if specifically asked or if a file is empty/redundant.
+      3. Always provide FULL content in 'updateFile'.
+      `;
 
       try {
           dispatchLocal({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: '' } } });
@@ -594,7 +599,7 @@ export default function App() {
                   contents: [{ role: 'user', parts: [{ text: `Query: ${text}\n\n${fileContext}` }] }],
                   config: {
                       systemInstruction,
-                      tools: [{ functionDeclarations: [updateCodeFunction] }]
+                      tools: [{ functionDeclarations: [updateCodeFunction, deleteFileFunction] }]
                   }
               });
 
@@ -623,7 +628,33 @@ export default function App() {
                               toolOutput += `\n[Updated ${args.filename}]`;
                               handleHighlightNode(target.id);
                           } else {
-                              toolOutput += `\n[Error: ${args.filename} not found]`;
+                              // Create New File
+                              const newNodeId = `node-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+                              const chatNode = state.nodes.find(n => n.id === nodeId);
+                              const pos = chatNode ? { x: chatNode.position.x + 50, y: chatNode.position.y + 50 } : { x: 100, y: 100 };
+                              
+                              dispatchLocal({
+                                  type: 'ADD_NODE',
+                                  payload: {
+                                      id: newNodeId,
+                                      type: 'CODE',
+                                      title: args.filename,
+                                      content: args.code,
+                                      position: pos,
+                                      size: { width: 450, height: 300 },
+                                      autoHeight: false
+                                  }
+                              });
+                              toolOutput += `\n[Created ${args.filename}]`;
+                          }
+                      } else if (call.name === 'deleteFile') {
+                          const args = call.args as any;
+                          const target = state.nodes.find(n => n.title === args.filename && n.type === 'CODE');
+                          if (target) {
+                              dispatchLocal({ type: 'DELETE_NODE', payload: target.id });
+                              toolOutput += `\n[Deleted ${args.filename}]`;
+                          } else {
+                              toolOutput += `\n[Error: ${args.filename} not found for deletion]`;
                           }
                       }
                   }
@@ -661,7 +692,7 @@ export default function App() {
           const systemInstruction = `You are an expert developer working in a multi-file NodeCode Studio environment.
           
           RULES FOR EDITING:
-          1. You can edit ANY file in the project using 'updateFile'.
+          1. You can Create or Update files using 'updateFile'. If the file doesn't exist, it is created.
           2. ALWAYS provide the FULL new content for the file when using 'updateFile'.
           3. Do NOT use placeholders like "// ... rest of code".
           4. Maintain existing functionality unless asked to change it.
@@ -680,12 +711,12 @@ export default function App() {
           if (action === 'optimize') {
                userPrompt = `Optimize the file ${startNode.title}.`;
           } else {
-               userPrompt = `Request: ${promptText}\n\n(Focus on ${startNode.title} but update/delete others only if strictly necessary per rules)`;
+               userPrompt = `Request: ${promptText}\n\n(Focus on ${startNode.title} but update/delete/create others only if strictly necessary per rules)`;
           }
 
           // 3. API Call with Fallback
           await performGeminiCall(async (ai) => {
-               const result = await ai.models.generateContent({
+               const response = await ai.models.generateContent({
                   model: 'gemini-3-flash-preview',
                   contents: userPrompt,
                   config: { 
@@ -695,7 +726,7 @@ export default function App() {
                });
                
                // 4. Process Response
-               const functionCalls = result.functionCalls;
+               const functionCalls = response.functionCalls;
                
                if (functionCalls && functionCalls.length > 0) {
                    for (const call of functionCalls) {
@@ -705,6 +736,23 @@ export default function App() {
                            if (target) {
                                dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: target.id, content: args.code } });
                                handleHighlightNode(target.id);
+                           } else {
+                               // Create New File
+                               const newNodeId = `node-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+                               const pos = { x: startNode.position.x + 50, y: startNode.position.y + 50 };
+                               
+                               dispatchLocal({
+                                  type: 'ADD_NODE',
+                                  payload: {
+                                      id: newNodeId,
+                                      type: 'CODE',
+                                      title: args.filename,
+                                      content: args.code,
+                                      position: pos,
+                                      size: { width: 450, height: 300 },
+                                      autoHeight: false
+                                  }
+                              });
                            }
                        } else if (call.name === 'deleteFile') {
                            const args = call.args as any;
@@ -714,9 +762,9 @@ export default function App() {
                            }
                        }
                    }
-               } else if (result.text) {
+               } else if (response.text) {
                    // Fallback for text-only response (assume it's for the start node if it looks like code)
-                   const clean = cleanAiOutput(result.text);
+                   const clean = cleanAiOutput(response.text);
                    dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: nodeId, content: clean } });
                    handleHighlightNode(nodeId);
                }
