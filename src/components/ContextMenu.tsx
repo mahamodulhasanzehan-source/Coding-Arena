@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Code2, Monitor, TerminalSquare, Trash2, Copy, Unplug, Package, Image as ImageIcon, Eraser } from 'lucide-react';
+import { Code2, Monitor, TerminalSquare, Trash2, Copy, Unplug, Package, Image as ImageIcon, Eraser, AlignHorizontalJustifyCenter, AlignVerticalJustifyCenter } from 'lucide-react';
 import { NodeType, Position } from '../types';
 
 interface ContextMenuProps {
@@ -8,11 +8,15 @@ interface ContextMenuProps {
   targetNodeId?: string;
   targetNode?: any; // To check if it's an image node
   targetPortId?: string; 
+  selectedNodeIds?: string[];
   onAdd: (type: NodeType) => void;
   onDeleteNode: (id: string) => void;
   onDuplicateNode: (id: string) => void;
   onDisconnect: (portId: string) => void;
   onClearImage?: (id: string) => void;
+  onAlign?: (type: 'horizontal' | 'vertical') => void;
+  canAlignHorizontal?: boolean;
+  canAlignVertical?: boolean;
   onClose: () => void;
 }
 
@@ -21,11 +25,15 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   targetNodeId,
   targetNode, 
   targetPortId,
+  selectedNodeIds = [],
   onAdd, 
   onDeleteNode,
   onDuplicateNode,
   onDisconnect,
   onClearImage,
+  onAlign,
+  canAlignHorizontal = false,
+  canAlignVertical = false,
   onClose 
 }) => {
   
@@ -50,9 +58,11 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
 
   // Node Context Menu
   if (targetNodeId) {
+    const isMultiSelect = selectedNodeIds.length > 1 && selectedNodeIds.includes(targetNodeId);
+
     return (
       <div 
-        className="fixed z-50 bg-panel border border-panelBorder rounded-lg shadow-2xl overflow-hidden min-w-[160px] animate-in fade-in zoom-in-95 duration-100"
+        className="fixed z-50 bg-panel border border-panelBorder rounded-lg shadow-2xl overflow-hidden min-w-[180px] animate-in fade-in zoom-in-95 duration-100"
         style={{ left: position.x, top: position.y }}
         onContextMenu={(e) => e.preventDefault()}
       >
@@ -60,6 +70,31 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           Node Actions
         </div>
         
+        {isMultiSelect && onAlign && (
+            <>
+                <button
+                    onClick={() => onAlign('horizontal')}
+                    disabled={!canAlignHorizontal}
+                    className={`w-full text-left px-4 py-2 text-sm flex items-center gap-2 transition-colors ${
+                        canAlignHorizontal ? 'text-zinc-300 hover:bg-zinc-800 hover:text-white' : 'text-zinc-600 cursor-not-allowed'
+                    }`}
+                >
+                    <AlignVerticalJustifyCenter size={14} className={canAlignHorizontal ? "" : "opacity-50"} />
+                    Align Horizontally
+                </button>
+                <button
+                    onClick={() => onAlign('vertical')}
+                    disabled={!canAlignVertical}
+                    className={`w-full text-left px-4 py-2 text-sm flex items-center gap-2 transition-colors border-b border-panelBorder ${
+                        canAlignVertical ? 'text-zinc-300 hover:bg-zinc-800 hover:text-white' : 'text-zinc-600 cursor-not-allowed'
+                    }`}
+                >
+                    <AlignHorizontalJustifyCenter size={14} className={canAlignVertical ? "" : "opacity-50"} />
+                    Align Vertically
+                </button>
+            </>
+        )}
+
         {targetNode?.type === 'IMAGE' && onClearImage && (
              <button
                 onClick={() => onClearImage(targetNodeId)}

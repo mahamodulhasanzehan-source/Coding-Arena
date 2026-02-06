@@ -79,6 +79,7 @@ export interface GraphState {
   };
   collaborators: UserPresence[];
   nodeInteractions: Record<string, 'drag' | 'edit' | null>; // Local interaction locks
+  selectedNodeIds: string[]; // Multi-selection state
 }
 
 export type Action =
@@ -105,4 +106,5 @@ export type Action =
   | { type: 'UPDATE_COLLABORATORS'; payload: UserPresence[] }
   | { type: 'SET_NODE_INTERACTION'; payload: { nodeId: string; type: 'drag' | 'edit' | null } }
   | { type: 'UPDATE_NODE_SHARED_STATE'; payload: { nodeId: string; state: any } }
-  | { type: 'TOGGLE_MINIMIZE'; payload: { id: string } };
+  | { type: 'TOGGLE_MINIMIZE'; payload: { id: string } }
+  | { type: 'SET_SELECTED_NODES'; payload: string[] };

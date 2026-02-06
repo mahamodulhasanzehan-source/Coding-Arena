@@ -29,7 +29,8 @@ interface NodeProps {
   onFixError?: (nodeId: string, error: string) => void; // For Terminal AI Fix
   onInteraction?: (nodeId: string, type: 'drag' | 'edit' | null) => void;
   onToggleMinimize?: (id: string) => void;
-  onDragEnd?: (id: string) => void; // New prop for snap cleanup
+  onDragEnd?: (id: string) => void; 
+  onSelect?: (id: string, multi: boolean) => void; // New prop for selection
   collaboratorInfo?: { name: string; color: string; action: 'dragging' | 'editing' };
   logs?: any[]; 
   children?: React.ReactNode;
@@ -60,6 +61,7 @@ export const Node: React.FC<NodeProps> = ({
   onInteraction,
   onToggleMinimize,
   onDragEnd,
+  onSelect,
   collaboratorInfo,
   logs,
   children
@@ -146,6 +148,19 @@ export const Node: React.FC<NodeProps> = ({
     
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
+
+    // Selection Logic
+    if (onSelect) {
+        // If Ctrl is pressed, toggle multi-select
+        // If not pressed, and node NOT selected, select only this.
+        // If not pressed, and node IS selected, do nothing (dragging group).
+        if (e.ctrlKey) {
+            onSelect(data.id, true);
+        } else if (!isSelected) {
+            onSelect(data.id, false);
+        }
+    }
+
     setIsDragging(true);
     onInteraction?.(data.id, 'drag'); 
     dragStartRef.current = { x: e.clientX, y: e.clientY };
@@ -170,6 +185,8 @@ export const Node: React.FC<NodeProps> = ({
     if (isDragging) {
       const dx = (e.clientX - dragStartRef.current.x) / scale;
       const dy = (e.clientY - dragStartRef.current.y) / scale;
+      // Pass the *absolute* position based on this node's start.
+      // App.tsx handles delta for group moving.
       onMove(data.id, {
         x: initialPosRef.current.x + dx,
         y: initialPosRef.current.y + dy,

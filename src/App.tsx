@@ -25,6 +25,7 @@ const initialState: GraphState = {
   selectionMode: { isActive: false, requestingNodeId: '', selectedIds: [] },
   collaborators: [],
   nodeInteractions: {},
+  selectedNodeIds: [],
 };
 
 function graphReducer(state: GraphState, action: Action): GraphState {
@@ -37,7 +38,8 @@ function graphReducer(state: GraphState, action: Action): GraphState {
         nodes: state.nodes.filter(n => n.id !== action.payload),
         connections: state.connections.filter(c => c.sourceNodeId !== action.payload && c.targetNodeId !== action.payload),
         logs: { ...state.logs, [action.payload]: [] },
-        runningPreviewIds: state.runningPreviewIds.filter(id => id !== action.payload)
+        runningPreviewIds: state.runningPreviewIds.filter(id => id !== action.payload),
+        selectedNodeIds: state.selectedNodeIds.filter(id => id !== action.payload)
       };
     case 'UPDATE_NODE_POSITION':
       return {
@@ -196,12 +198,14 @@ function graphReducer(state: GraphState, action: Action): GraphState {
             ...state,
             nodes: state.nodes.map(n => n.id === action.payload.id ? { ...n, isMinimized: !n.isMinimized } : n)
         };
+    case 'SET_SELECTED_NODES':
+        return { ...state, selectedNodeIds: action.payload };
     default:
       return state;
   }
 }
 
-// ... (Gemini Tool Definitions remain unchanged) ...
+// ... (Gemini Tool Definitions) ...
 const updateCodeFunction: FunctionDeclaration = {
     name: 'updateFile',
     description: 'Update the code content of a specific file. Use this for CHAT responses or simple edits.',
@@ -212,18 +216,6 @@ const updateCodeFunction: FunctionDeclaration = {
             code: { type: Type.STRING, description: 'The NEW full content of the file.' }
         },
         required: ['filename', 'code']
-    }
-};
-
-const updateCurrentFileTool: FunctionDeclaration = {
-    name: 'updateCurrentFile',
-    description: 'Update the content of the CURRENT file you are prompting from. Use this when the user says "fix this" or "change this".',
-    parameters: {
-        type: Type.OBJECT,
-        properties: {
-            code: { type: Type.STRING, description: 'The new full code content.' }
-        },
-        required: ['code']
     }
 };
 
@@ -239,20 +231,6 @@ const createFileTool: FunctionDeclaration = {
         required: ['filename', 'content']
     }
 };
-
-const connectNodesTool: FunctionDeclaration = {
-    name: 'connectNodes',
-    description: 'Connect two nodes by their titles. Use this to wire HTML to Preview, or CSS/JS to HTML.',
-    parameters: {
-        type: Type.OBJECT,
-        properties: {
-            sourceTitle: { type: Type.STRING, description: 'Title of the source node (e.g. style.css)' },
-            targetTitle: { type: Type.STRING, description: 'Title of the target node (e.g. index.html or Preview Output)' }
-        },
-        required: ['sourceTitle', 'targetTitle']
-    }
-};
-
 
 type SyncStatus = 'synced' | 'saving' | 'offline' | 'error';
 
@@ -312,6 +290,9 @@ export default function App() {
   const [userColor] = useState(getRandomColor());
   const [snapLines, setSnapLines] = useState<{x1: number, y1: number, x2: number, y2: number}[]>([]);
   
+  // Selection Box State
+  const [selectionBox, setSelectionBox] = useState<{ x: number, y: number, w: number, h: number, startX: number, startY: number } | null>(null);
+
   const sessionId = useMemo(() => `session-${Math.random().toString(36).substr(2, 9)}`, []);
   const isLocalChange = useRef(false);
   const lastTouchDist = useRef<number | null>(null);
@@ -339,7 +320,8 @@ export default function App() {
           'TOGGLE_PREVIEW',
           'SET_NODE_LOADING',
           'UPDATE_NODE_SHARED_STATE',
-          'TOGGLE_MINIMIZE'
+          'TOGGLE_MINIMIZE',
+          'SET_SELECTED_NODES'
       ].includes(action.type)) {
           isLocalChange.current = true;
       }
@@ -458,7 +440,6 @@ export default function App() {
 
   // LIVE UPDATE LOOP
   useEffect(() => {
-      // 1. Handle Running Previews
       state.runningPreviewIds.forEach(previewId => {
           const iframe = document.getElementById(`preview-iframe-${previewId}`) as HTMLIFrameElement;
           const node = state.nodes.find(n => n.id === previewId);
@@ -481,21 +462,6 @@ export default function App() {
                }
           }
       });
-
-      // 2. Handle Stopped Previews (Fix desync)
-      const previewNodes = state.nodes.filter(n => n.type === 'PREVIEW');
-      previewNodes.forEach(node => {
-          if (!state.runningPreviewIds.includes(node.id)) {
-              const iframe = document.getElementById(`preview-iframe-${node.id}`) as HTMLIFrameElement;
-              const stoppedContent = '<body style="background-color: #000; color: #555; height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; font-family: sans-serif;">STOPPED</body>';
-              
-              if (iframe && iframe.srcdoc && !iframe.srcdoc.includes("STOPPED")) {
-                  // Only update if it doesn't already show stopped to avoid loop
-                  // But handleToggleRun handles the initial setting.
-              }
-          }
-      });
-
   }, [state.nodes, state.connections, state.runningPreviewIds]);
 
 
@@ -554,6 +520,366 @@ export default function App() {
       dispatchLocal({ type: 'UPDATE_NODE_TITLE', payload: { id, title: newTitle } });
       if (newType !== node.type) {
           dispatchLocal({ type: 'UPDATE_NODE_TYPE', payload: { id, type: newType } });
+      }
+  };
+
+  const handleHighlightNode = (id: string) => {
+      setHighlightedNodeId(id);
+      setTimeout(() => {
+          setHighlightedNodeId(null);
+      }, 2000);
+  };
+
+  const handleWheel = (e: React.WheelEvent) => {
+    if ((e.target as HTMLElement).closest('.custom-scrollbar') || (e.target as HTMLElement).closest('.monaco-editor')) return;
+    
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    const worldX = (mouseX - state.pan.x) / state.zoom;
+    const worldY = (mouseY - state.pan.y) / state.zoom;
+
+    const zoomIntensity = 0.001;
+    const newZoom = Math.min(Math.max(0.1, state.zoom - e.deltaY * zoomIntensity), 3);
+
+    const newPanX = mouseX - worldX * newZoom;
+    const newPanY = mouseY - worldY * newZoom;
+
+    if (!isNaN(newZoom) && !isNaN(newPanX) && !isNaN(newPanY)) {
+        dispatch({ type: 'ZOOM', payload: { zoom: newZoom } });
+        dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
+    }
+  };
+
+  const handleAddNode = (type: NodeType) => {
+    if (!contextMenu) return;
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = (contextMenu.x - rect.left - state.pan.x) / state.zoom;
+    const y = (contextMenu.y - rect.top - state.pan.y) / state.zoom;
+    const defaults = NODE_DEFAULTS[type];
+    const newNode: NodeData = {
+      id: `node-${Date.now()}`,
+      type,
+      title: defaults.title,
+      content: defaults.content,
+      position: { x, y },
+      size: { width: defaults.width, height: defaults.height },
+      autoHeight: type === 'CODE', 
+    };
+    dispatchLocal({ type: 'ADD_NODE', payload: newNode });
+    setContextMenu(null);
+  };
+
+  const handleToggleRun = (id: string) => {
+      const isRunning = state.runningPreviewIds.includes(id);
+      if (!isRunning) {
+           dispatchLocal({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: true } });
+           dispatchLocal({ type: 'CLEAR_LOGS', payload: { nodeId: id } });
+      } else {
+           dispatchLocal({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: false } });
+           dispatchLocal({ type: 'CLEAR_LOGS', payload: { nodeId: id } });
+      }
+  };
+
+  const handleRefresh = (id: string) => {
+     const iframe = document.getElementById(`preview-iframe-${id}`) as HTMLIFrameElement;
+     if (iframe) {
+          const compiled = compilePreview(id, state.nodes, state.connections, true);
+          iframe.srcdoc = compiled;
+     }
+  };
+
+  const handlePortDown = (e: React.PointerEvent, portId: string, nodeId: string, isInput: boolean) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const node = state.nodes.find(n => n.id === nodeId);
+    if (!node) return;
+    const pos = calculatePortPosition(node, portId, isInput ? 'input' : 'output');
+    setDragWire({ x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y, startPortId: portId, startNodeId: nodeId, isInput });
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const handleClearImage = (id: string) => {
+      dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id, content: '' } });
+      setContextMenu(null);
+  };
+
+  // --- NPM Import Injection ---
+  const handleInjectImport = (sourceNodeId: string, packageName: string) => {
+      const connections = state.connections.filter(c => c.sourceNodeId === sourceNodeId);
+      let injectedCount = 0;
+
+      connections.forEach(conn => {
+          const targetNode = state.nodes.find(n => n.id === conn.targetNodeId);
+          if (targetNode && targetNode.type === 'CODE') {
+              const importStatement = `import * as ${packageName.replace(/[^a-zA-Z0-9]/g, '_')} from 'https://esm.sh/${packageName}';\n`;
+              if (!targetNode.content.includes(`https://esm.sh/${packageName}`)) {
+                  dispatchLocal({ 
+                      type: 'UPDATE_NODE_CONTENT', 
+                      payload: { 
+                          id: targetNode.id, 
+                          content: importStatement + targetNode.content 
+                      } 
+                  });
+                  injectedCount++;
+                  handleHighlightNode(targetNode.id);
+              }
+          }
+      });
+
+      if (injectedCount === 0) {
+          alert('Connect this NPM node to a Code node first!');
+      }
+  };
+
+  // --- AI Logic ---
+
+  const handleStartContextSelection = (nodeId: string) => {
+      const node = state.nodes.find(n => n.id === nodeId);
+      dispatchLocal({ 
+          type: 'SET_SELECTION_MODE', 
+          payload: { 
+              isActive: true, 
+              requestingNodeId: nodeId, 
+              selectedIds: node?.contextNodeIds || [] 
+          } 
+      });
+      setIsSidebarOpen(true);
+  };
+
+  const handleToggleSelection = (nodeId: string) => {
+      if (!state.selectionMode?.isActive) return;
+      const current = state.selectionMode.selectedIds;
+      const next = current.includes(nodeId) ? current.filter(id => id !== nodeId) : [...current, nodeId];
+      dispatchLocal({ type: 'SET_SELECTION_MODE', payload: { ...state.selectionMode, selectedIds: next } });
+  };
+
+  const handleConfirmSelection = () => {
+      if (!state.selectionMode?.isActive) return;
+      dispatchLocal({ 
+          type: 'UPDATE_CONTEXT_NODES', 
+          payload: { 
+              id: state.selectionMode.requestingNodeId, 
+              nodeIds: state.selectionMode.selectedIds 
+          } 
+      });
+      dispatchLocal({ type: 'SET_SELECTION_MODE', payload: { isActive: false } });
+  };
+
+  const handleCancelAi = (nodeId: string) => {
+      if (activeAiOperations.current[nodeId]) {
+          delete activeAiOperations.current[nodeId];
+          dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } });
+          dispatchLocal({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: '[Cancelled]' } } });
+      }
+  };
+
+  const handleSendMessage = async (nodeId: string, text: string) => {
+      const opId = Math.random().toString(36);
+      activeAiOperations.current[nodeId] = { id: opId };
+
+      dispatchLocal({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'user', text } } });
+      dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: true } });
+
+      const node = state.nodes.find(n => n.id === nodeId);
+      if (!node) return;
+
+      const contextFiles = (node.contextNodeIds || [])
+          .map(id => state.nodes.find(n => n.id === id))
+          .filter(n => n && n.type === 'CODE');
+
+      const fileContext = contextFiles.map(n => `Filename: ${n!.title}\nContent:\n${n!.content}`).join('\n\n');
+
+      const systemInstruction = `You are an expert coding assistant.
+      Current Context Files:
+      ${contextFiles.length > 0 ? contextFiles.map(f => f?.title).join(', ') : 'No files selected.'}
+      `;
+
+      try {
+          const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+          const fullPrompt = `User Query: ${text}\n\nContext Files Content:\n${fileContext}`;
+
+          dispatchLocal({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: '' } } });
+          
+          const result = await ai.models.generateContentStream({
+            model: 'gemini-3-flash-preview',
+            contents: fullPrompt,
+            config: {
+                systemInstruction,
+                tools: [{ functionDeclarations: [updateCodeFunction, createFileTool] }]
+            }
+          });
+
+          let fullText = '';
+          const functionCalls: any[] = [];
+
+          for await (const chunk of result) {
+              if (activeAiOperations.current[nodeId]?.id !== opId) break;
+
+              const chunkText = chunk.text;
+              if (chunkText) {
+                  fullText += chunkText;
+                  dispatchLocal({ type: 'UPDATE_LAST_MESSAGE', payload: { id: nodeId, text: fullText } });
+              }
+              if (chunk.functionCalls) {
+                  functionCalls.push(...chunk.functionCalls);
+              }
+          }
+
+          if (activeAiOperations.current[nodeId]?.id !== opId) return;
+
+          if (functionCalls.length > 0) {
+              let toolOutputText = '';
+              for (const call of functionCalls) {
+                  if (call.name === 'updateFile') {
+                      const args = call.args as { filename: string, code: string };
+                      const targetNode = state.nodes.find(n => n.type === 'CODE' && n.title === args.filename);
+                      if (targetNode) {
+                          dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: targetNode.id, content: args.code } });
+                          toolOutputText += `\n[Updated ${args.filename}]`;
+                          handleHighlightNode(targetNode.id);
+                      } else {
+                          toolOutputText += `\n[Error: File ${args.filename} not found]`;
+                      }
+                  } else if (call.name === 'createFile') {
+                      const args = call.args as { filename: string, content: string };
+                      const {x, y} = findSafePosition(node.position, state.nodes, 450, 300);
+                      const newNode: NodeData = {
+                          id: `node-${Date.now()}`,
+                          type: 'CODE',
+                          title: args.filename,
+                          content: args.content,
+                          position: { x, y },
+                          size: { width: 450, height: 300 },
+                          autoHeight: true
+                      };
+                      dispatchLocal({ type: 'ADD_NODE', payload: newNode });
+                      toolOutputText += `\n[Created ${args.filename}]`;
+                  }
+              }
+              if (toolOutputText) {
+                  fullText += toolOutputText;
+                  dispatchLocal({ type: 'UPDATE_LAST_MESSAGE', payload: { id: nodeId, text: fullText } });
+              }
+          }
+
+      } catch (error: any) {
+          if (activeAiOperations.current[nodeId]?.id === opId) {
+             dispatchLocal({ type: 'UPDATE_LAST_MESSAGE', payload: { id: nodeId, text: `Error: ${error.message}` } });
+          }
+      } finally {
+          if (activeAiOperations.current[nodeId]?.id === opId) {
+             delete activeAiOperations.current[nodeId];
+             dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } });
+          }
+      }
+  };
+
+  const handleAiGenerate = async (nodeId: string, action: 'optimize' | 'prompt', promptText?: string) => {
+      const opId = Math.random().toString(36);
+      activeAiOperations.current[nodeId] = { id: opId };
+      
+      const node = state.nodes.find(n => n.id === nodeId);
+      if (!node || node.type !== 'CODE') return;
+
+      dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: true } });
+
+      try {
+          const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+          let systemInstruction = '';
+          let userPrompt = '';
+
+          if (action === 'optimize') {
+              systemInstruction = "Optimize the code. Remove dead code. Improve performance. Return ONLY the code.";
+              userPrompt = `Code:\n${node.content}`;
+          } else {
+              systemInstruction = "Modify the code based on the request. Return ONLY the code.";
+              userPrompt = `Request: ${promptText}\nCode:\n${node.content}`;
+          }
+
+          const response = await ai.models.generateContent({
+              model: 'gemini-3-flash-preview',
+              contents: userPrompt,
+              config: { systemInstruction }
+          });
+          
+          if (activeAiOperations.current[nodeId]?.id !== opId) return;
+
+          const rawText = response.text;
+          if (rawText) {
+              const cleanCode = cleanAiOutput(rawText);
+              dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: nodeId, content: cleanCode } });
+              handleHighlightNode(nodeId); 
+          }
+      } catch (error: any) {
+          alert(`AI Error: ${error.message}`);
+      } finally {
+          if (activeAiOperations.current[nodeId]?.id === opId) {
+             delete activeAiOperations.current[nodeId];
+             dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } });
+          }
+      }
+  };
+
+  const handleFixError = async (nodeId: string, errorMsg: string) => {
+      const node = state.nodes.find(n => n.id === nodeId);
+      if (!node) return;
+      
+      const connectedSources = getAllConnectedSources(nodeId, 'source', state.nodes, state.connections);
+      if (connectedSources.length === 0) {
+          alert("Connect a preview or code node to the terminal source input to fix errors.");
+          return;
+      }
+
+      let sourceCodeNode: NodeData | undefined;
+      const primarySource = connectedSources[0];
+      if (primarySource.type === 'PREVIEW') {
+           sourceCodeNode = getConnectedSource(primarySource.id, 'dom', state.nodes, state.connections);
+      } else if (primarySource.type === 'CODE') {
+           sourceCodeNode = primarySource;
+      }
+
+      if (!sourceCodeNode) {
+          alert("Could not trace error back to a code file.");
+          return;
+      }
+
+      const opId = Math.random().toString(36);
+      activeAiOperations.current[sourceCodeNode.id] = { id: opId };
+      dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: sourceCodeNode.id, isLoading: true } });
+      handleHighlightNode(sourceCodeNode.id);
+
+      try {
+          const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+          const prompt = `Fix the following error in the code.\nError: ${errorMsg}\n\nCode:\n${sourceCodeNode.content}`;
+          
+          const response = await ai.models.generateContent({
+              model: 'gemini-3-flash-preview',
+              contents: prompt,
+              config: {
+                  systemInstruction: "Return ONLY the fixed code. No markdown formatting if possible, or standard markdown.",
+              }
+          });
+
+          if (activeAiOperations.current[sourceCodeNode.id]?.id !== opId) return;
+
+          const rawText = response.text;
+          if (rawText) {
+              const cleanCode = cleanAiOutput(rawText);
+              dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: sourceCodeNode.id, content: cleanCode } });
+          }
+
+      } catch (e: any) {
+          alert(e.message);
+      } finally {
+          if (activeAiOperations.current[sourceCodeNode.id]?.id === opId) {
+             delete activeAiOperations.current[sourceCodeNode.id];
+             dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: sourceCodeNode.id, isLoading: false } });
+          }
       }
   };
 
@@ -700,9 +1026,24 @@ export default function App() {
     const w = node.isMinimized ? 250 : node.size.width;
     const h = node.isMinimized ? 40 : node.size.height;
     
-    // Calculate proposed center
-    let cx = newPos.x + w / 2;
-    let cy = newPos.y + h / 2;
+    const deltaX = newPos.x - node.position.x;
+    const deltaY = newPos.y - node.position.y;
+
+    if (state.selectedNodeIds.includes(id)) {
+        state.selectedNodeIds.forEach(selId => {
+            if (selId === id) return; 
+            const selNode = state.nodes.find(n => n.id === selId);
+            if (selNode) {
+                dispatchLocal({ 
+                    type: 'UPDATE_NODE_POSITION', 
+                    payload: { 
+                        id: selId, 
+                        position: { x: selNode.position.x + deltaX, y: selNode.position.y + deltaY } 
+                    } 
+                });
+            }
+        });
+    }
 
     let snappedX = newPos.x;
     let snappedY = newPos.y;
@@ -710,7 +1051,6 @@ export default function App() {
     const SNAP_THRESHOLD = 25; // Good feel
     const newSnapLines: {x1: number, y1: number, x2: number, y2: number}[] = [];
 
-    // Find connected nodes
     const connectedNodeIds = new Set<string>();
     state.connections.forEach(c => {
         if (c.sourceNodeId === id) connectedNodeIds.add(c.targetNodeId);
@@ -720,9 +1060,12 @@ export default function App() {
     let bestVerticalSnap: { x: number, line: any, dist: number } | null = null;
     let bestHorizontalSnap: { y: number, line: any, dist: number } | null = null;
 
-    // Check against connected nodes
+    let cx = snappedX + w / 2;
+    let cy = snappedY + h / 2;
+
     state.nodes.forEach(other => {
         if (other.id === id) return;
+        if (state.selectedNodeIds.includes(other.id)) return; // Don't snap to moving group members
         if (!connectedNodeIds.has(other.id)) return;
 
         const ow = other.isMinimized ? 250 : other.size.width;
@@ -730,7 +1073,6 @@ export default function App() {
         const ocx = other.position.x + ow / 2;
         const ocy = other.position.y + oh / 2;
 
-        // Vertical Snap (Align Centers)
         const distV = Math.abs(cx - ocx);
         if (distV < SNAP_THRESHOLD) {
              if (!bestVerticalSnap || distV < bestVerticalSnap.dist) {
@@ -744,7 +1086,6 @@ export default function App() {
              }
         }
 
-        // Horizontal Snap
         const distH = Math.abs(cy - ocy);
         if (distH < SNAP_THRESHOLD) {
              if (!bestHorizontalSnap || distH < bestHorizontalSnap.dist) {
@@ -769,6 +1110,30 @@ export default function App() {
     }
 
     setSnapLines(newSnapLines);
+
+    if (state.selectedNodeIds.includes(id)) {
+        const snapDeltaX = snappedX - newPos.x;
+        const snapDeltaY = snappedY - newPos.y;
+        
+        if (snapDeltaX !== 0 || snapDeltaY !== 0) {
+             state.selectedNodeIds.forEach(selId => {
+                 if (selId === id) return;
+                 const selNode = state.nodes.find(n => n.id === selId);
+                 if (selNode) {
+                     const finalDeltaX = deltaX + snapDeltaX;
+                     const finalDeltaY = deltaY + snapDeltaY;
+                     dispatchLocal({ 
+                        type: 'UPDATE_NODE_POSITION', 
+                        payload: { 
+                            id: selId, 
+                            position: { x: selNode.position.x + finalDeltaX, y: selNode.position.y + finalDeltaY } 
+                        } 
+                    });
+                 }
+             });
+        }
+    }
+
     dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id, position: { x: snappedX, y: snappedY } } });
   };
 
@@ -779,7 +1144,87 @@ export default function App() {
   const handleContextMenu = (e: React.MouseEvent, nodeId?: string) => {
     e.preventDefault();
     const node = nodeId ? state.nodes.find(n => n.id === nodeId) : undefined;
-    setContextMenu({ x: e.clientX, y: e.clientY, targetNodeId: nodeId, targetNode: node });
+    
+    // Check Feasibility for Alignment
+    let canAlignHorizontal = false;
+    let canAlignVertical = false;
+
+    if (nodeId && state.selectedNodeIds.includes(nodeId) && state.selectedNodeIds.length > 1) {
+        const selectedNodes = state.nodes.filter(n => state.selectedNodeIds.includes(n.id));
+        const targetNode = node!;
+        const targetCenterY = targetNode.position.y + (targetNode.isMinimized ? 40 : targetNode.size.height) / 2;
+        const targetCenterX = targetNode.position.x + (targetNode.isMinimized ? 250 : targetNode.size.width) / 2;
+
+        // Check Horizontal (Align Y)
+        const wouldOverlapH = selectedNodes.some((n1, i) => {
+            const h1 = n1.isMinimized ? 40 : n1.size.height;
+            const y1 = targetCenterY - h1/2;
+            const w1 = n1.isMinimized ? 250 : n1.size.width;
+            
+            return selectedNodes.some((n2, j) => {
+                if (i === j) return false;
+                const h2 = n2.isMinimized ? 40 : n2.size.height;
+                const y2 = targetCenterY - h2/2;
+                const w2 = n2.isMinimized ? 250 : n2.size.width;
+                
+                return (n1.position.x < n2.position.x + w2) && (n1.position.x + w1 > n2.position.x);
+            });
+        });
+        canAlignHorizontal = !wouldOverlapH;
+
+        // Check Vertical (Align X)
+        const wouldOverlapV = selectedNodes.some((n1, i) => {
+            const w1 = n1.isMinimized ? 250 : n1.size.width;
+            const x1 = targetCenterX - w1/2;
+            const h1 = n1.isMinimized ? 40 : n1.size.height;
+
+            return selectedNodes.some((n2, j) => {
+                if (i === j) return false;
+                const w2 = n2.isMinimized ? 250 : n2.size.width;
+                const x2 = targetCenterX - w2/2;
+                const h2 = n2.isMinimized ? 40 : n2.size.height;
+
+                return (n1.position.y < n2.position.y + h2) && (n1.position.y + h1 > n2.position.y);
+            });
+        });
+        canAlignVertical = !wouldOverlapV;
+    }
+
+    setContextMenu({ 
+        x: e.clientX, 
+        y: e.clientY, 
+        targetNodeId: nodeId, 
+        targetNode: node 
+    });
+    (setContextMenu as any)(prev => ({ ...prev, x: e.clientX, y: e.clientY, targetNodeId: nodeId, targetNode: node, canAlignHorizontal, canAlignVertical }));
+  };
+
+  const handleAlign = (type: 'horizontal' | 'vertical') => {
+      if (!contextMenu?.targetNodeId) return;
+      const targetId = contextMenu.targetNodeId;
+      const targetNode = state.nodes.find(n => n.id === targetId);
+      if (!targetNode) return;
+
+      const selectedNodes = state.nodes.filter(n => state.selectedNodeIds.includes(n.id));
+
+      selectedNodes.forEach(node => {
+          if (node.id === targetId) return;
+          
+          if (type === 'horizontal') {
+              // Align Centers Y
+              const targetCenterY = targetNode.position.y + (targetNode.isMinimized ? 40 : targetNode.size.height) / 2;
+              const nodeH = node.isMinimized ? 40 : node.size.height;
+              const newY = targetCenterY - nodeH / 2;
+              dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id: node.id, position: { x: node.position.x, y: newY } } });
+          } else {
+              // Align Centers X
+              const targetCenterX = targetNode.position.x + (targetNode.isMinimized ? 250 : targetNode.size.width) / 2;
+              const nodeW = node.isMinimized ? 250 : node.size.width;
+              const newX = targetCenterX - nodeW / 2;
+              dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id: node.id, position: { x: newX, y: node.position.y } } });
+          }
+      });
+      setContextMenu(null);
   };
 
   const handlePortContextMenu = (e: React.MouseEvent, portId: string) => {
@@ -790,497 +1235,45 @@ export default function App() {
     }
   };
 
-  const handleWheel = (e: React.WheelEvent) => {
-    if ((e.target as HTMLElement).closest('.custom-scrollbar') || (e.target as HTMLElement).closest('.monaco-editor')) return;
-    
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-
-    const worldX = (mouseX - state.pan.x) / state.zoom;
-    const worldY = (mouseY - state.pan.y) / state.zoom;
-
-    const zoomIntensity = 0.001;
-    const newZoom = Math.min(Math.max(0.1, state.zoom - e.deltaY * zoomIntensity), 3);
-
-    const newPanX = mouseX - worldX * newZoom;
-    const newPanY = mouseY - worldY * newZoom;
-
-    if (!isNaN(newZoom) && !isNaN(newPanX) && !isNaN(newPanY)) {
-        dispatch({ type: 'ZOOM', payload: { zoom: newZoom } });
-        dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
-    }
-  };
-
-  const handleAddNode = (type: NodeType) => {
-    if (!contextMenu) return;
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const x = (contextMenu.x - rect.left - state.pan.x) / state.zoom;
-    const y = (contextMenu.y - rect.top - state.pan.y) / state.zoom;
-    const defaults = NODE_DEFAULTS[type];
-    const newNode: NodeData = {
-      id: `node-${Date.now()}`,
-      type,
-      title: defaults.title,
-      content: defaults.content,
-      position: { x, y },
-      size: { width: defaults.width, height: defaults.height },
-      autoHeight: type === 'CODE' ? true : undefined, 
-    };
-    dispatchLocal({ type: 'ADD_NODE', payload: newNode });
-    setContextMenu(null);
-  };
-
-  const handleClearImage = (id: string) => {
-      dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id, content: '' } });
-      setContextMenu(null);
-  };
-
-  const handleHighlightNode = (id: string) => {
-      setHighlightedNodeId(id);
-      setTimeout(() => {
-          setHighlightedNodeId(null);
-      }, 2000);
-  };
-
-  const handleToggleRun = (id: string) => {
-      const isRunning = state.runningPreviewIds.includes(id);
-      const shouldRun = !isRunning;
-      
-      const iframe = document.getElementById(`preview-iframe-${id}`) as HTMLIFrameElement;
-      
-      if (shouldRun) {
-           dispatchLocal({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: true } });
-           dispatch({ type: 'CLEAR_LOGS', payload: { nodeId: id } });
-      } else {
-           dispatchLocal({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: false } });
-           dispatch({ type: 'CLEAR_LOGS', payload: { nodeId: id } });
-           if (iframe) {
-               // Enhanced Stopped State with Animation
-               iframe.srcdoc = `
-                 <!DOCTYPE html>
-                 <html>
-                 <body style="background-color: #09090b; color: #52525b; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; overflow: hidden; user-select: none;">
-                   <div style="display: flex; flex-direction: column; items-align: center; opacity: 0; transform: translateY(10px); animation: fadeIn 0.3s ease-out forwards;">
-                      <div style="font-size: 2rem; font-weight: 700; letter-spacing: -0.025em; margin-bottom: 0.5rem; text-align: center;">PREVIEW PAUSED</div>
-                      <div style="font-size: 0.875rem; text-align: center;">Click the Run button to start</div>
-                   </div>
-                   <style>
-                      @keyframes fadeIn { to { opacity: 1; transform: translateY(0); } }
-                   </style>
-                 </body>
-                 </html>
-               `;
-           }
-      }
-  };
-
-  const handleRefresh = (id: string) => {
-     const iframe = document.getElementById(`preview-iframe-${id}`) as HTMLIFrameElement;
-     if (iframe) {
-          const compiled = compilePreview(id, state.nodes, state.connections, true);
-          iframe.srcdoc = compiled;
-     }
-  };
-
-  const handleInjectImport = (sourceNodeId: string, packageName: string) => {
-      const connections = state.connections.filter(c => c.sourceNodeId === sourceNodeId);
-      let injectedCount = 0;
-      connections.forEach(conn => {
-          const targetNode = state.nodes.find(n => n.id === conn.targetNodeId);
-          if (targetNode && targetNode.type === 'CODE') {
-              const importStatement = `import * as ${packageName.replace(/[^a-zA-Z0-9]/g, '_')} from 'https://esm.sh/${packageName}';\n`;
-              if (!targetNode.content.includes(`https://esm.sh/${packageName}`)) {
-                  dispatchLocal({ 
-                      type: 'UPDATE_NODE_CONTENT', 
-                      payload: { 
-                          id: targetNode.id, 
-                          content: importStatement + targetNode.content 
-                      } 
-                  });
-                  injectedCount++;
-                  handleHighlightNode(targetNode.id);
-              }
-          }
-      });
-      if (injectedCount === 0) {
-          alert('Connect this NPM node to a Code node first!');
-      }
-  };
-
-  const handleStartContextSelection = (nodeId: string) => {
-      const node = state.nodes.find(n => n.id === nodeId);
-      dispatch({ 
-          type: 'SET_SELECTION_MODE', 
-          payload: { 
-              isActive: true, 
-              requestingNodeId: nodeId, 
-              selectedIds: node?.contextNodeIds || [] 
-          } 
-      });
-      setIsSidebarOpen(true);
-  };
-
-  const handleToggleSelection = (nodeId: string) => {
-      if (!state.selectionMode?.isActive) return;
-      const current = state.selectionMode.selectedIds;
-      const next = current.includes(nodeId) ? current.filter(id => id !== nodeId) : [...current, nodeId];
-      dispatch({ type: 'SET_SELECTION_MODE', payload: { ...state.selectionMode, selectedIds: next } });
-  };
-
-  const handleConfirmSelection = () => {
-      if (!state.selectionMode?.isActive) return;
-      dispatchLocal({ 
-          type: 'UPDATE_CONTEXT_NODES', 
-          payload: { 
-              id: state.selectionMode.requestingNodeId, 
-              nodeIds: state.selectionMode.selectedIds 
-          } 
-      });
-      dispatch({ type: 'SET_SELECTION_MODE', payload: { isActive: false } });
-  };
-
-  const handleCancelAi = (nodeId: string) => {
-      if (activeAiOperations.current[nodeId]) {
-          delete activeAiOperations.current[nodeId];
-      }
-      dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } });
-      dispatch({ 
-          type: 'ADD_MESSAGE', 
-          payload: { id: nodeId, message: { role: 'model', text: '[Processing stopped by user]' } } 
-      });
-  };
-
-  const handleSendMessage = async (nodeId: string, text: string) => {
-      dispatch({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'user', text } } });
-      dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: true } }); 
-
-      const opId = `chat-${Date.now()}`;
-      activeAiOperations.current[nodeId] = { id: opId };
-
-      const node = state.nodes.find(n => n.id === nodeId);
-      if (!node) return;
-
-      const contextFiles = (node.contextNodeIds || [])
-          .map(id => state.nodes.find(n => n.id === id))
-          .filter(n => n && n.type === 'CODE');
-
-      const fileContext = contextFiles.map(n => `Filename: ${n!.title}\nContent:\n${n!.content}`).join('\n\n');
-
-      const systemInstruction = `You are an expert coding assistant in NodeCode Studio. 
-      You are concise in conversation but thorough in coding.
-      
-      CRITICAL RULE:
-      When asked to write or update code, you must ONLY use the 'updateFile' tool.
-      Do NOT write code blocks in the chat response.
-      Do NOT provide conversational filler like "Here is the code".
-      Just call the tool.
-      
-      Current Context Files:
-      ${contextFiles.length > 0 ? contextFiles.map(f => f?.title).join(', ') : 'No files selected.'}`;
-
-      try {
-          const apiKey = process.env.API_KEY; 
-          if (!apiKey) throw new Error('API Key not found.');
-
-          const ai = new GoogleGenAI({ apiKey });
-          const fullPrompt = `User Query: ${text}\n\nContext Files Content:\n${fileContext}`;
-
-          dispatch({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: '' } } });
-
-          const resultPromise = ai.models.generateContentStream({
-              model: 'gemini-flash-lite-latest',
-              contents: fullPrompt,
-              config: {
-                  systemInstruction,
-                  tools: [{ functionDeclarations: [updateCodeFunction] }]
-              }
-          });
-
-          const timeoutPromise = new Promise<never>((_, reject) => 
-              setTimeout(() => reject(new Error("Timeout: AI took too long to respond.")), 90000)
-          );
-
-          const result = await Promise.race([resultPromise, timeoutPromise]);
-
-          let fullText = '';
-          const functionCalls: any[] = [];
-
-          for await (const chunk of result) {
-              if (activeAiOperations.current[nodeId]?.id !== opId) {
-                  throw new Error("Cancelled");
-              }
-
-              if (chunk.text) {
-                  fullText += chunk.text;
-                  dispatch({ type: 'UPDATE_LAST_MESSAGE', payload: { id: nodeId, text: fullText } });
-              }
-              if (chunk.functionCalls) {
-                  functionCalls.push(...chunk.functionCalls);
-              }
-          }
-
-          let toolOutputText = '';
-          if (functionCalls.length > 0) {
-              for (const call of functionCalls) {
-                  if (activeAiOperations.current[nodeId]?.id !== opId) break;
-
-                  if (call.name === 'updateFile') {
-                      const args = call.args as { filename: string, code: string };
-                      const targetNode = state.nodes.find(n => n.type === 'CODE' && n.title === args.filename);
-                      
-                      if (targetNode) {
-                          dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: targetNode.id, content: args.code } });
-                          toolOutputText += `\n[Updated ${args.filename}]`;
-                          handleHighlightNode(targetNode.id);
-                      } else {
-                          toolOutputText += `\n[Error: Could not find file ${args.filename}]`;
-                      }
-                  }
-              }
-              if (toolOutputText) {
-                  fullText += toolOutputText;
-                  dispatch({ type: 'UPDATE_LAST_MESSAGE', payload: { id: nodeId, text: fullText } });
-              }
-          }
-
-      } catch (error: any) {
-          if (error.message === "Cancelled") return; // Silent exit
-
-          let errorMessage = error.message;
-          if (error.message.includes('429')) errorMessage = "Rate Limit Exceeded. Please try again later.";
-          
-          dispatch({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: `Error: ${errorMessage}` } } });
-      } finally {
-          if (activeAiOperations.current[nodeId]?.id === opId) {
-              dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } }); 
-              delete activeAiOperations.current[nodeId];
-          }
-      }
-  };
-
-  const handleFixError = async (terminalNodeId: string, errorText: string) => {
-      const previewNode = getConnectedSource(terminalNodeId, 'logs', state.nodes, state.connections);
-      if (!previewNode) {
-          alert("This terminal isn't connected to a Preview.");
-          return;
-      }
-      const connectedCodeNodes = getAllConnectedSources(previewNode.id, 'dom', state.nodes, state.connections);
-      if (connectedCodeNodes.length === 0) {
-          alert("No code connected to the preview to fix.");
-          return;
-      }
-      const anchorNode = connectedCodeNodes[0];
-      const prompt = `Fix the following runtime error: "${errorText}". \n\nReview the connected code files and apply the necessary fix using 'updateFile'.`;
-      handleAiGenerate(anchorNode.id, 'prompt', prompt);
-  };
-
-  const handleAiGenerate = async (nodeId: string, action: 'optimize' | 'prompt', promptText?: string) => {
-      const node = state.nodes.find(n => n.id === nodeId);
-      if (!node || node.type !== 'CODE') return;
-      
-      const connectedCodeNodes = getRelatedNodes(nodeId, state.nodes, state.connections, 'CODE');
-      if (!connectedCodeNodes.find(n => n.id === nodeId)) connectedCodeNodes.push(node);
-
-      const opId = `gen-${Date.now()}`;
-      connectedCodeNodes.forEach(n => {
-          activeAiOperations.current[n.id] = { id: opId };
-          dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: n.id, isLoading: true } });
-      });
-
-      try {
-          const apiKey = process.env.API_KEY; 
-          const ai = new GoogleGenAI({ apiKey });
-          
-          let systemInstruction = '';
-          let userPrompt = '';
-          let tools: FunctionDeclaration[] = [];
-
-          if (action === 'optimize') {
-              systemInstruction = `You are an expert developer.
-              CRITICAL: RETURN ONLY PURE CODE. NO MARKDOWN. NO BACKTICKS. NO CONVERSATIONAL TEXT.
-              Just the raw code content string.`;
-              userPrompt = `Optimize the following code (Remove dead code, keep logic):\n\n${node.content}`;
-              
-              const responsePromise = ai.models.generateContent({
-                  model: 'gemini-3-flash-preview',
-                  contents: userPrompt,
-                  config: { systemInstruction }
-              });
-
-              const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Timeout")), 30000));
-              const response = await Promise.race([responsePromise, timeoutPromise]);
-              
-              if (activeAiOperations.current[nodeId]?.id !== opId) throw new Error("Cancelled");
-
-              if (response.text) {
-                 const cleanCode = cleanAiOutput(response.text);
-                 dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: nodeId, content: cleanCode } });
-              }
-
-          } else {
-              const projectContext = connectedCodeNodes.map(n => 
-                  `Filename: "${n.title}"\nContent:\n${n.content}`
-              ).join('\n\n----------------\n\n');
-
-              systemInstruction = `You are an expert web developer and architect in NodeCode Studio.
-              You have the ability to not just write code, but to BUILD THE GRAPH.
-              
-              You are viewing a cluster of connected files. You have access to:
-              ${connectedCodeNodes.map(n => n.title).join(', ')}
-
-              Capabilities:
-              1. **updateFile(filename, code)**: Use this to update ANY file in the connected graph.
-              2. **createFile(filename, content)**: Use this ONLY if the user asks for a completely NEW feature that requires a NEW file.
-              3. **connectNodes(sourceTitle, targetTitle)**: Use this to wire files together. 
-                 
-              Guidelines:
-              - Always write complete, working code.
-              `;
-              
-              userPrompt = `Project Context:\n${projectContext}\n\nUser Request regarding "${node.title}": ${promptText}`;
-              tools = [updateCodeFunction, createFileTool, connectNodesTool];
-
-              const responsePromise = ai.models.generateContent({
-                  model: 'gemini-3-flash-preview',
-                  contents: userPrompt,
-                  config: { 
-                      systemInstruction,
-                      tools: [{ functionDeclarations: tools }]
-                  }
-              });
-
-              const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Timeout")), 120000));
-              const response = await Promise.race([responsePromise, timeoutPromise]);
-
-              if (activeAiOperations.current[nodeId]?.id !== opId) throw new Error("Cancelled");
-
-              const functionCalls = response.functionCalls;
-              const createdNodesMap = new Map<string, string>(); 
-              state.nodes.forEach(n => createdNodesMap.set(n.title, n.id));
-
-              if (functionCalls && functionCalls.length > 0) {
-                  const creations = functionCalls.filter(c => c.name === 'createFile');
-                  const updates = functionCalls.filter(c => c.name === 'updateFile');
-                  const connections = functionCalls.filter(c => c.name === 'connectNodes');
-
-                  updates.forEach(call => {
-                       const args = call.args as { filename: string, code: string };
-                       const targetNode = state.nodes.find(n => n.title === args.filename);
-                       if (targetNode) {
-                            dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: targetNode.id, content: args.code } });
-                       }
-                  });
-
-                  creations.forEach(call => {
-                      const args = call.args as { filename: string, content: string };
-                      const defaults = NODE_DEFAULTS.CODE;
-                      const newPos = findSafePosition(node.position, state.nodes, defaults.width, defaults.height);
-                      const id = `node-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
-                      const newNode: NodeData = {
-                          id, type: 'CODE', title: args.filename, content: args.content,
-                          position: newPos, size: { width: defaults.width, height: defaults.height }, autoHeight: true // Default autoHeight for new nodes
-                      };
-                      createdNodesMap.set(args.filename, id);
-                      state.nodes.push(newNode); 
-                      dispatchLocal({ type: 'ADD_NODE', payload: newNode });
-                  });
-
-                  connections.forEach(call => {
-                      const args = call.args as { sourceTitle: string, targetTitle: string };
-                      const sourceId = createdNodesMap.get(args.sourceTitle);
-                      let targetId = createdNodesMap.get(args.targetTitle);
-
-                      if (sourceId) {
-                          if (!targetId) {
-                              const existingTarget = state.nodes.find(n => n.title === args.targetTitle);
-                              if (existingTarget) targetId = existingTarget.id;
-                          }
-                          // Generic Preview check
-                          if (!targetId && args.targetTitle.toLowerCase().includes('preview')) {
-                              const anyPreview = state.nodes.find(n => n.type === 'PREVIEW');
-                              if (anyPreview) targetId = anyPreview.id;
-                          }
-                          
-                          // Fix for JS/CSS -> Preview connection
-                          if (targetId) {
-                              const targetNode = state.nodes.find(n => n.id === targetId);
-                              const isSourceScriptOrStyle = args.sourceTitle.endsWith('.js') || args.sourceTitle.endsWith('.css');
-                              if (targetNode && targetNode.type === 'PREVIEW' && isSourceScriptOrStyle) {
-                                  let htmlId = Array.from(createdNodesMap.entries()).find(([t]) => t.endsWith('.html'))?.[1];
-                                  if (!htmlId) {
-                                      htmlId = state.nodes.find(n => n.title.endsWith('.html'))?.id;
-                                  }
-                                  if (htmlId) targetId = htmlId;
-                              }
-                          }
-                      }
-
-                      if (sourceId && targetId) {
-                          let sourcePort = 'out-dom'; 
-                          let targetPort = 'in-file'; 
-                          
-                          if (args.sourceTitle.endsWith('.html')) sourcePort = 'out-dom';
-                          if (args.sourceTitle.endsWith('.js') || args.sourceTitle.endsWith('.css')) sourcePort = 'out-dom'; 
-                          
-                          const targetNode = state.nodes.find(n => n.id === targetId);
-                          if (targetNode) {
-                              if (targetNode.type === 'PREVIEW') targetPort = 'in-dom';
-                              else if (targetNode.type === 'CODE') targetPort = 'in-file';
-                          }
-
-                          dispatchLocal({
-                              type: 'CONNECT',
-                              payload: {
-                                  id: `conn-${Date.now()}-${Math.random()}`,
-                                  sourceNodeId: sourceId,
-                                  sourcePortId: `${sourceId}-${sourcePort}`,
-                                  targetNodeId: targetId,
-                                  targetPortId: `${targetId}-${targetPort}`
-                              }
-                          });
-                      }
-                  });
-              }
-          }
-
-      } catch(e: any) { 
-          if (e.message !== "Cancelled") {
-              console.error(e); 
-              alert(e.message.includes('429') ? "Rate Limit Reached. Try again later." : "AI Processing Failed or Timed Out.");
-          }
-      } finally { 
-          connectedCodeNodes.forEach(n => {
-            if (activeAiOperations.current[n.id]?.id === opId) {
-                dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: n.id, isLoading: false } }); 
-                delete activeAiOperations.current[n.id];
-            }
-          });
-      }
-  };
-
-  const handlePortDown = (e: React.PointerEvent, portId: string, nodeId: string, isInput: boolean) => {
-    e.stopPropagation();
-    e.preventDefault();
-    const node = state.nodes.find(n => n.id === nodeId);
-    if (!node) return;
-    const pos = calculatePortPosition(node, portId, isInput ? 'input' : 'output');
-    setDragWire({ x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y, startPortId: portId, startNodeId: nodeId, isInput });
-    e.currentTarget.setPointerCapture(e.pointerId);
-  };
-
   const handleBgPointerDown = (e: React.PointerEvent) => {
       e.preventDefault(); 
       if (isPinching.current) return;
+      
+      if (e.ctrlKey) {
+          const rect = containerRef.current?.getBoundingClientRect();
+          if (rect) {
+              const x = (e.clientX - rect.left - state.pan.x) / state.zoom;
+              const y = (e.clientY - rect.top - state.pan.y) / state.zoom;
+              setSelectionBox({ x, y, w: 0, h: 0, startX: x, startY: y });
+              e.currentTarget.setPointerCapture(e.pointerId);
+              return;
+          }
+      }
+
+      if (!e.ctrlKey && state.selectedNodeIds.length > 0) {
+          dispatchLocal({ type: 'SET_SELECTED_NODES', payload: [] });
+      }
+
       e.currentTarget.setPointerCapture(e.pointerId);
       setIsPanning(true);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
     if (isPinching.current) return;
+
+    if (selectionBox && containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        const currentX = (e.clientX - rect.left - state.pan.x) / state.zoom;
+        const currentY = (e.clientY - rect.top - state.pan.y) / state.zoom;
+        
+        const x = Math.min(selectionBox.startX, currentX);
+        const y = Math.min(selectionBox.startY, currentY);
+        const w = Math.abs(currentX - selectionBox.startX);
+        const h = Math.abs(currentY - selectionBox.startY);
+        
+        setSelectionBox({ ...selectionBox, x, y, w, h });
+        return;
+    }
 
     if (dragWire && containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
@@ -1320,6 +1313,31 @@ export default function App() {
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
+    if (selectionBox) {
+        const selectedIds: string[] = [];
+        
+        const prevSelected = new Set(state.selectedNodeIds);
+
+        state.nodes.forEach(node => {
+            const nw = node.isMinimized ? 250 : node.size.width;
+            const nh = node.isMinimized ? 40 : node.size.height;
+            
+            if (
+                node.position.x < selectionBox.x + selectionBox.w &&
+                node.position.x + nw > selectionBox.x &&
+                node.position.y < selectionBox.y + selectionBox.h &&
+                node.position.y + nh > selectionBox.y
+            ) {
+                prevSelected.add(node.id);
+            }
+        });
+        
+        dispatchLocal({ type: 'SET_SELECTED_NODES', payload: Array.from(prevSelected) });
+        setSelectionBox(null);
+        (e.currentTarget as Element).releasePointerCapture(e.pointerId);
+        return;
+    }
+
     if (isPanning) {
         setIsPanning(false);
         (e.currentTarget as Element).releasePointerCapture(e.pointerId);
@@ -1327,7 +1345,6 @@ export default function App() {
 
     if (!dragWire) return;
     
-    // Snapping Logic
     let targetPortId = null;
     let targetNodeId = null;
     let minDistance = 40; // Snapping radius (40px)
@@ -1489,6 +1506,17 @@ export default function App() {
     });
   }, [state.nodes, state.collaborators, sessionId]);
 
+  const handleToggleSelectNode = (id: string, multi: boolean) => {
+      if (multi) {
+          const newSelection = state.selectedNodeIds.includes(id) 
+              ? state.selectedNodeIds.filter(sid => sid !== id)
+              : [...state.selectedNodeIds, id];
+          dispatchLocal({ type: 'SET_SELECTED_NODES', payload: newSelection });
+      } else {
+          dispatchLocal({ type: 'SET_SELECTED_NODES', payload: [id] });
+      }
+  };
+
   return (
     <div 
       className="w-screen h-screen bg-canvas overflow-hidden flex flex-col text-zinc-100 font-sans select-none touch-none"
@@ -1605,6 +1633,20 @@ export default function App() {
                     ))}
                 </div>
 
+                {/* Selection Box */}
+                {selectionBox && (
+                    <div 
+                        className="absolute bg-blue-500/10 border border-blue-500 z-[999]"
+                        style={{
+                            left: selectionBox.x,
+                            top: selectionBox.y,
+                            width: selectionBox.w,
+                            height: selectionBox.h,
+                            pointerEvents: 'none'
+                        }}
+                    />
+                )}
+
                 <svg className="absolute top-0 left-0 w-full h-full overflow-visible pointer-events-none z-0">
                     {/* Snap Lines Layer */}
                     {snapLines.map((line, i) => (
@@ -1649,7 +1691,7 @@ export default function App() {
                         <div key={node.id} onContextMenu={(e) => { e.stopPropagation(); handleContextMenu(e, node.id); }}>
                             <Node
                                 data={node}
-                                isSelected={false}
+                                isSelected={state.selectedNodeIds.includes(node.id)}
                                 isHighlighted={node.id === highlightedNodeId}
                                 isRunning={state.runningPreviewIds.includes(node.id)}
                                 scale={state.zoom}
@@ -1672,6 +1714,7 @@ export default function App() {
                                 onFixError={handleFixError}
                                 onInteraction={(id, type) => dispatch({ type: 'SET_NODE_INTERACTION', payload: { nodeId: id, type } })}
                                 onToggleMinimize={(id) => dispatchLocal({ type: 'TOGGLE_MINIMIZE', payload: { id } })}
+                                onSelect={handleToggleSelectNode}
                                 collaboratorInfo={collabInfo}
                                 logs={logs}
                             >
@@ -1697,6 +1740,7 @@ export default function App() {
                 targetNodeId={contextMenu.targetNodeId}
                 targetNode={contextMenu.targetNode}
                 targetPortId={contextMenu.targetPortId}
+                selectedNodeIds={state.selectedNodeIds}
                 onAdd={handleAddNode} 
                 onDeleteNode={(id) => { dispatchLocal({ type: 'DELETE_NODE', payload: id }); setContextMenu(null); }}
                 onDuplicateNode={(id) => { 
@@ -1715,6 +1759,9 @@ export default function App() {
                 }}
                 onDisconnect={(id) => { dispatchLocal({ type: 'DISCONNECT', payload: id }); setContextMenu(null); }}
                 onClearImage={handleClearImage}
+                onAlign={handleAlign}
+                canAlignHorizontal={(contextMenu as any).canAlignHorizontal}
+                canAlignVertical={(contextMenu as any).canAlignVertical}
                 onClose={() => setContextMenu(null)} 
             />
         </>
