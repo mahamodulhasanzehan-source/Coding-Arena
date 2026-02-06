@@ -1,4 +1,3 @@
-
 import React, { useReducer, useState, useRef, useEffect, useMemo } from 'react';
 import { Node } from './components/Node';
 import { Wire } from './components/Wire';
@@ -469,6 +468,7 @@ export default function App() {
 
   // LIVE UPDATE LOOP
   useEffect(() => {
+      // Standard update for all running previews
       state.runningPreviewIds.forEach(previewId => {
           const iframe = document.getElementById(`preview-iframe-${previewId}`) as HTMLIFrameElement;
           const node = state.nodes.find(n => n.id === previewId);
@@ -491,7 +491,19 @@ export default function App() {
                }
           }
       });
-  }, [state.nodes, state.connections, state.runningPreviewIds]);
+
+      // Special force update for maximized node to prevent white screen
+      if (maximizedNodeId && state.runningPreviewIds.includes(maximizedNodeId)) {
+           const iframe = document.getElementById(`preview-iframe-${maximizedNodeId}`) as HTMLIFrameElement;
+           if (iframe) {
+                const compiled = compilePreview(maximizedNodeId, state.nodes, state.connections, false);
+                // Force update if empty or mismatched
+                if (!iframe.srcdoc || iframe.srcdoc !== compiled) {
+                   iframe.srcdoc = compiled;
+                }
+           }
+      }
+  }, [state.nodes, state.connections, state.runningPreviewIds, maximizedNodeId]);
 
 
   useEffect(() => {
@@ -646,6 +658,24 @@ export default function App() {
                                   }
                               });
                               toolOutput += `\n[Created ${args.filename}]`;
+
+                              // AUTO-CONNECT LOGIC
+                              // If chatting inside a code node (which acts as context), try to connect to it.
+                              const contextNode = state.nodes.find(n => n.id === nodeId);
+                              if (contextNode && contextNode.type === 'CODE') {
+                                  // Determine direction: Dependency (new) -> Consumer (context) usually
+                                  dispatchLocal({
+                                      type: 'CONNECT',
+                                      payload: {
+                                          id: `conn-auto-${Date.now()}`,
+                                          sourceNodeId: newNodeId,
+                                          sourcePortId: `${newNodeId}-out-dom`,
+                                          targetNodeId: contextNode.id,
+                                          targetPortId: `${contextNode.id}-in-file`
+                                      }
+                                  });
+                                  toolOutput += ` [Auto-Connected]`;
+                              }
                           }
                       } else if (call.name === 'deleteFile') {
                           const args = call.args as any;
@@ -751,6 +781,20 @@ export default function App() {
                                       position: pos,
                                       size: { width: 450, height: 300 },
                                       autoHeight: false
+                                  }
+                              });
+
+                              // AUTO-CONNECT LOGIC
+                              // When generating, we typically have a 'startNode' (the one the prompt was on).
+                              // Connect NewNode -> StartNode
+                              dispatchLocal({
+                                  type: 'CONNECT',
+                                  payload: {
+                                      id: `conn-auto-${Date.now()}`,
+                                      sourceNodeId: newNodeId,
+                                      sourcePortId: `${newNodeId}-out-dom`,
+                                      targetNodeId: startNode.id,
+                                      targetPortId: `${startNode.id}-in-file`
                                   }
                               });
                            }
@@ -1528,65 +1572,6 @@ export default function App() {
           lastTouchDist.current = null;
       }
   };
-
-  const handleWheel = (e: React.WheelEvent) => {
-        if (maximizedNodeId) return;
-        if ((e.target as HTMLElement).closest('.custom-scrollbar') || (e.target as HTMLElement).closest('.monaco-editor')) return;
-        
-        const rect = containerRef.current?.getBoundingClientRect();
-        if (!rect) return;
-
-        const mouseX = e.clientX - rect.left;
-        const mouseY = e.clientY - rect.top;
-
-        const worldX = (mouseX - state.pan.x) / state.zoom;
-        const worldY = (mouseY - state.pan.y) / state.zoom;
-
-        const zoomIntensity = 0.001;
-        const newZoom = Math.min(Math.max(0.1, state.zoom - e.deltaY * zoomIntensity), 3);
-
-        const newPanX = mouseX - worldX * newZoom;
-        const newPanY = mouseY - worldY * newZoom;
-
-        if (!isNaN(newZoom) && !isNaN(newPanX) && !isNaN(newPanY)) {
-            dispatch({ type: 'ZOOM', payload: { zoom: newZoom } });
-            dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
-        }
-    };
-
-    const handleToggleRun = (id: string) => {
-        const isRunning = state.runningPreviewIds.includes(id);
-        const iframe = document.getElementById(`preview-iframe-${id}`) as HTMLIFrameElement;
-        
-        if (isRunning) {
-             dispatchLocal({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: false } });
-             dispatchLocal({ type: 'CLEAR_LOGS', payload: { nodeId: id } });
-             if (iframe) {
-                 iframe.srcdoc = '<body style="background-color: #000; color: #555; height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; font-family: sans-serif;">STOPPED</body>';
-             }
-        } else {
-             dispatchLocal({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: true } });
-             dispatchLocal({ type: 'CLEAR_LOGS', payload: { nodeId: id } });
-        }
-    };
-
-    const handleRefresh = (id: string) => {
-         const iframe = document.getElementById(`preview-iframe-${id}`) as HTMLIFrameElement;
-         if (iframe) {
-              const compiled = compilePreview(id, state.nodes, state.connections, true);
-              iframe.srcdoc = compiled;
-         }
-    };
-
-    const handlePortDown = (e: React.PointerEvent, portId: string, nodeId: string, isInput: boolean) => {
-        e.stopPropagation();
-        e.preventDefault();
-        const node = state.nodes.find(n => n.id === nodeId);
-        if (!node) return;
-        const pos = calculatePortPosition(node, portId, isInput ? 'input' : 'output');
-        setDragWire({ x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y, startPortId: portId, startNodeId: nodeId, isInput });
-        e.currentTarget.setPointerCapture(e.pointerId);
-    };
 
   const isConnected = (portId: string) => {
       return state.connections.some(c => c.sourcePortId === portId || c.targetPortId === portId);
