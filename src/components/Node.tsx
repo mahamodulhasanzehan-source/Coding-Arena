@@ -115,28 +115,6 @@ export const Node: React.FC<NodeProps> = ({
   const [isDragOver, setIsDragOver] = useState(false);
 
   // Locking Logic
-  // We don't have direct access to "currentUser" here easily without passing it down.
-  // BUT, we can infer "Locked by Other" if lockedBy exists. 
-  // Wait, we need to know if it's "ME" or "OTHER" to determine readOnly status.
-  // Since we aren't passing currentUser to Node explicitly, we can't strictly determine 
-  // "Locked by Me" vs "Locked by Other" purely for UI disabled state unless we modify props.
-  // HOWEVER, functionality is protected in App.tsx. 
-  // Visuals: If locked, show lock. If locked, maybe disable inputs regardless (even for owner) until unlocked?
-  // No, owner should be able to edit.
-  // We need to assume "Locked" means readonly unless we verify ownership. 
-  // Let's rely on the App.tsx modification handlers (onUpdateContent) to reject changes.
-  // But strictly for the "readOnly" prop of Monaco, it's better if we know.
-  // Since I can't easily change the signature too much without prop drilling hell, 
-  // I will rely on the visual indicator. 
-  // Actually, let's enable readOnly if `data.lockedBy` is set.
-  // Wait, if *I* locked it, I should be able to edit it.
-  // The requirement says: "Once locked... can only be edited... by the user who locked them."
-  // So strictly speaking, we need `currentUser` here to set `readOnly={locked && !owner}`.
-  // I'll skip the `readOnly` prop strictness here and rely on App.tsx alert, 
-  // BUT I will add the visual lock icon.
-  // To make the UX better, I will assume if `onUpdateContent` fails (due to App.tsx check), 
-  // the editor simply won't update.
-  
   const isLocked = !!data.lockedBy;
 
   const dragStartRef = useRef<{ x: number, y: number } | null>(null);
@@ -580,8 +558,10 @@ export const Node: React.FC<NodeProps> = ({
       borderWidth: 0,
   } : {
       transform: `translate(${data.position.x}px, ${data.position.y}px)`,
-      width: data.isMinimized ? '250px' : data.size.width,
+      width: data.isMinimized ? 'auto' : data.size.width,
+      minWidth: data.isMinimized ? '250px' : undefined,
       height: data.isMinimized ? '40px' : data.size.height,
+      maxWidth: data.isMinimized ? '600px' : undefined,
   };
 
   const dynamicStyle = collaboratorInfo ? {
