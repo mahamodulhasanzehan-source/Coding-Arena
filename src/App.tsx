@@ -244,6 +244,33 @@ function graphReducer(state: GraphState, action: Action): GraphState {
 
 // --- Tool Definitions ---
 
+const createFileFunction: FunctionDeclaration = {
+    name: 'createFile',
+    description: 'Create a new code file (node) in the workspace. Use this to split code into modules (e.g. creating style.css or game.js).',
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            filename: { type: Type.STRING, description: 'Name of the file (e.g. script.js)' },
+            content: { type: Type.STRING, description: 'Initial content of the file.' },
+            fileType: { type: Type.STRING, description: 'Type of node. Usually "CODE".', enum: ['CODE'] }
+        },
+        required: ['filename', 'content']
+    }
+};
+
+const connectFilesFunction: FunctionDeclaration = {
+    name: 'connectFiles',
+    description: 'Connect two files together using wires. Use this to link CSS/JS to HTML or other dependencies. Source is the dependency (e.g. style.css), Target is the importer (e.g. index.html).',
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            sourceFilename: { type: Type.STRING, description: 'The file providing functionality (e.g. style.css, script.js)' },
+            targetFilename: { type: Type.STRING, description: 'The file importing functionality (e.g. index.html)' }
+        },
+        required: ['sourceFilename', 'targetFilename']
+    }
+};
+
 const updateCodeFunction: FunctionDeclaration = {
     name: 'updateFile',
     description: 'Update the code content of a specific file. Use this to write code or make changes. ALWAYS provide the FULL content of the file, not just the diff.',
@@ -646,23 +673,24 @@ export default function App() {
 
         const fileContext = contextFiles.map(n => `Filename: ${n!.title}\nContent:\n${n!.content}`).join('\n\n');
 
-        const systemInstruction = `You are an expert coding assistant in NodeCode Studio. 
-      You are concise in conversation but thorough in coding.
-      You have access to the user's files ONLY IF they have been selected in the context.
+        const systemInstruction = `You are an expert coding architect in NodeCode Studio.
+      You control a visual node-based programming environment.
+      
+      CAPABILITIES:
+      1. CREATE FILES: Use 'createFile' to make new modules (HTML, CSS, JS). Split code logically!
+      2. CONNECT FILES: Use 'connectFiles' to wire dependencies (e.g. style.css -> index.html).
+      3. UPDATE CODE: Use 'updateFile' to write content.
+      4. RENAME/DELETE: Manage the graph structure.
+
+      RULES:
+      - If the user asks for a feature that needs multiple files (like a game), CREATE them all (index.html, game.js, style.css) and CONNECT them.
+      - Do NOT put all code in one file if it should be split.
+      - ALWAYS check if you need to rename a file to match its content (e.g. rename 'script.js' to 'index.html' if writing HTML).
+      - When you create a file, you MUST write its initial content immediately.
+      - Execute multiple tools in one turn to build complete systems instantly.
       
       Current Context Files:
       ${contextFiles.length > 0 ? contextFiles.map(f => f?.title).join(', ') : 'No files selected.'}
-
-      Important Rules:
-      1. If the user asks you to edit code but NO files are selected, politely ask them to "Select files using the + button" first.
-      2. When asked to code, ALWAYS check if you should edit an existing file.
-      3. To edit a file, you MUST use the 'updateFile' tool.
-      4. The 'updateFile' tool requires the FULL content of the file.
-      5. To rename a file or change its extension (e.g. .js to .html), use 'renameFile'.
-      6. To delete a file, use 'deleteFile'. Only delete files if the user asks or if they are truly redundant.
-      7. MULTI-FILE EDITING: You can and SHOULD call multiple tools in a single response. If a feature requires changes to HTML, CSS, and JS, call 'updateFile' for ALL of them. Do not wait for the user to ask for the next file.
-      8. Do not reduce code size or functionality unless explicitly asked to optimize.
-      9. Provide a text explanation of what you did alongside the tool call.
       `;
 
         try {
@@ -683,7 +711,7 @@ export default function App() {
                 contents: fullPrompt,
                 config: {
                     systemInstruction,
-                    tools: [{ functionDeclarations: [updateCodeFunction, renameFileFunction, deleteFileFunction] }]
+                    tools: [{ functionDeclarations: [createFileFunction, connectFilesFunction, updateCodeFunction, renameFileFunction, deleteFileFunction] }]
                 }
             });
 
@@ -704,7 +732,7 @@ export default function App() {
             let toolOutputText = '';
             
             // Map to track filename changes within this single turn to ensure chaining works
-            // e.g. rename 'a.js' -> 'b.js', then update 'b.js'
+            // e.g. create 'a.js' -> connect 'a.js' to 'b.html'
             const filenameMap = new Map<string, string>(); // currentName -> nodeId
             
             // Initialize map with current state
@@ -716,7 +744,64 @@ export default function App() {
 
             if (functionCalls.length > 0) {
                 for (const call of functionCalls) {
-                    if (call.name === 'updateFile') {
+                    if (call.name === 'createFile') {
+                        const args = call.args as { filename: string, content: string, fileType?: string };
+                        // Create Node
+                        const newId = `node-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+                        const defaults = NODE_DEFAULTS.CODE;
+                        
+                        // Position logic: Stagger near the chat node or center
+                        const chatPos = node.position;
+                        const offset = (filenameMap.size + 1) * 30;
+                        const position = { x: chatPos.x - 400, y: chatPos.y + offset };
+
+                        const newNode: NodeData = {
+                            id: newId,
+                            type: 'CODE',
+                            title: args.filename,
+                            content: args.content || '// New file',
+                            position,
+                            size: { width: defaults.width, height: defaults.height },
+                            autoHeight: false
+                        };
+
+                        dispatchLocal({ type: 'ADD_NODE', payload: newNode });
+                        filenameMap.set(args.filename, newId); // Add to local map for chaining
+                        toolOutputText += `\n[Created ${args.filename}]`;
+                        
+                        // Animate visual creation
+                        dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: newId, isLoading: true } });
+                        setTimeout(() => dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: newId, isLoading: false } }), 1000);
+
+                    } else if (call.name === 'connectFiles') {
+                        const args = call.args as { sourceFilename: string, targetFilename: string };
+                        const sourceId = filenameMap.get(args.sourceFilename);
+                        const targetId = filenameMap.get(args.targetFilename);
+
+                        if (sourceId && targetId) {
+                            // Determine ports based on standard convention
+                            // Source (e.g. style.css) -> Output: dom/file
+                            // Target (e.g. index.html) -> Input: file
+                            
+                            const sourcePortId = `${sourceId}-out-dom`;
+                            const targetPortId = `${targetId}-in-file`;
+
+                            dispatchLocal({
+                                type: 'CONNECT',
+                                payload: {
+                                    id: `conn-${Date.now()}-${Math.random()}`,
+                                    sourceNodeId: sourceId,
+                                    sourcePortId: sourcePortId,
+                                    targetNodeId: targetId,
+                                    targetPortId: targetPortId
+                                }
+                            });
+                            toolOutputText += `\n[Connected ${args.sourceFilename} -> ${args.targetFilename}]`;
+                        } else {
+                             toolOutputText += `\n[Error: Could not connect ${args.sourceFilename} to ${args.targetFilename} - File not found]`;
+                        }
+
+                    } else if (call.name === 'updateFile') {
                         const args = call.args as { filename: string, code: string };
                         const nodeId = filenameMap.get(args.filename);
 
@@ -725,6 +810,8 @@ export default function App() {
                             toolOutputText += `\n[Updated ${args.filename}]`;
                             handleHighlightNode(nodeId);
                         } else {
+                            // If file doesn't exist, maybe create it?
+                            // For now, error
                             toolOutputText += `\n[Error: Could not find file ${args.filename}]`;
                         }
                     } else if (call.name === 'renameFile') {
