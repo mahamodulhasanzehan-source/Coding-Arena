@@ -970,6 +970,31 @@ export default function App() {
         dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
     };
 
+    const animateCamera = (targetX: number, targetY: number) => {
+        const startX = state.pan.x;
+        const startY = state.pan.y;
+        const startTime = performance.now();
+        const duration = 600; // ms
+
+        const animate = (currentTime: number) => {
+            const elapsed = currentTime - startTime;
+            const progress = Math.min(elapsed / duration, 1);
+            
+            // Ease out cubic
+            const ease = 1 - Math.pow(1 - progress, 3);
+
+            const currentX = startX + (targetX - startX) * ease;
+            const currentY = startY + (targetY - startY) * ease;
+
+            dispatch({ type: 'PAN', payload: { x: currentX, y: currentY } });
+
+            if (progress < 1) {
+                requestAnimationFrame(animate);
+            }
+        };
+        requestAnimationFrame(animate);
+    };
+
     const handleFindNearest = () => {
         if (state.nodes.length === 0) {
             dispatch({ type: 'PAN', payload: { x: 0, y: 0 } });
@@ -1001,10 +1026,15 @@ export default function App() {
         const nodeCx = closestNode.position.x + closestNode.size.width / 2;
         const nodeCy = closestNode.position.y + closestNode.size.height / 2;
         
+        // Calculate target Pan to center this node
         const newPanX = (viewportW / 2) - nodeCx * state.zoom;
         const newPanY = (viewportH / 2) - nodeCy * state.zoom;
         
-        dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
+        // Animate
+        animateCamera(newPanX, newPanY);
+        
+        // Highlight
+        handleHighlightNode(closestNode.id);
     };
 
     const handleDownloadZip = async () => {
@@ -1086,6 +1116,16 @@ export default function App() {
         window.URL.revokeObjectURL(url);
     };
 
+    const handleReset = () => {
+        const pwd = prompt("Enter password to reset:");
+        if (pwd === 'password') {
+            localStorage.removeItem('nodecode-studio-v1');
+            window.location.reload();
+        } else if (pwd !== null) {
+            alert("Incorrect password");
+        }
+    };
+
     // Memoize display nodes to inject remote dragging/editing visualizations
     const displayNodes = useMemo(() => {
         return state.nodes.map(node => {
@@ -1119,13 +1159,16 @@ export default function App() {
             </div>
 
             <div className="absolute top-4 right-4 z-50 flex flex-col gap-2 items-end">
+                {/* Desktop Buttons (Hidden on mobile) */}
                 <button
-                    onClick={() => { if (confirm('Reset?')) { localStorage.removeItem('nodecode-studio-v1'); window.location.reload(); } }}
-                    className="px-3 py-1.5 bg-zinc-900/80 hover:bg-red-900/50 text-xs text-zinc-400 border border-zinc-800 rounded flex items-center gap-2 transition-colors pointer-events-auto cursor-pointer"
+                    onClick={handleReset}
+                    className="hidden md:flex px-3 py-1.5 bg-zinc-900/80 hover:bg-red-900/50 text-xs text-zinc-400 border border-zinc-800 rounded items-center gap-2 transition-colors pointer-events-auto cursor-pointer"
                     onPointerDown={(e) => e.stopPropagation()}
                 >
                     <Trash2 size={12} /> Reset
                 </button>
+                
+                {/* Menu Button (Visible on both) */}
                 <button
                     onClick={() => setIsSidebarOpen(true)}
                     className="px-3 py-2 bg-zinc-900/80 hover:bg-zinc-800 text-xs text-zinc-400 border border-zinc-800 rounded flex items-center justify-center transition-colors pointer-events-auto cursor-pointer"
@@ -1133,10 +1176,12 @@ export default function App() {
                 >
                     <Menu size={16} />
                 </button>
+                
                 <div className="flex flex-col gap-1 mt-2">
+                     {/* Mobile Only: Zoom In/Out */}
                     <button
                         onClick={handleZoomIn}
-                        className="px-2 py-2 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-400 border border-zinc-800 rounded flex items-center justify-center transition-colors pointer-events-auto cursor-pointer"
+                        className="md:hidden px-2 py-2 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-400 border border-zinc-800 rounded flex items-center justify-center transition-colors pointer-events-auto cursor-pointer"
                         onPointerDown={(e) => e.stopPropagation()}
                         title="Zoom In"
                     >
@@ -1144,12 +1189,14 @@ export default function App() {
                     </button>
                     <button
                         onClick={handleZoomOut}
-                        className="px-2 py-2 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-400 border border-zinc-800 rounded flex items-center justify-center transition-colors pointer-events-auto cursor-pointer"
+                        className="md:hidden px-2 py-2 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-400 border border-zinc-800 rounded flex items-center justify-center transition-colors pointer-events-auto cursor-pointer"
                         onPointerDown={(e) => e.stopPropagation()}
                         title="Zoom Out"
                     >
                         <Minus size={16} />
                     </button>
+
+                    {/* Find Nearest (Visible on both) */}
                     <button
                         onClick={handleFindNearest}
                         className="px-2 py-2 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-400 border border-zinc-800 rounded flex items-center justify-center transition-colors pointer-events-auto cursor-pointer"
@@ -1158,9 +1205,11 @@ export default function App() {
                     >
                         <Search size={16} />
                     </button>
+
+                    {/* Desktop Only: Download */}
                     <button
                         onClick={handleDownloadZip}
-                        className="px-2 py-2 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-400 border border-zinc-800 rounded flex items-center justify-center transition-colors pointer-events-auto cursor-pointer"
+                        className="hidden md:flex px-2 py-2 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-400 border border-zinc-800 rounded items-center justify-center transition-colors pointer-events-auto cursor-pointer"
                         onPointerDown={(e) => e.stopPropagation()}
                         title="Download Project (ZIP)"
                     >
