@@ -469,7 +469,6 @@ export default function App() {
 
   // LIVE UPDATE LOOP
   useEffect(() => {
-      // Standard update for all running previews
       state.runningPreviewIds.forEach(previewId => {
           const iframe = document.getElementById(`preview-iframe-${previewId}`) as HTMLIFrameElement;
           const node = state.nodes.find(n => n.id === previewId);
@@ -498,7 +497,6 @@ export default function App() {
            const iframe = document.getElementById(`preview-iframe-${maximizedNodeId}`) as HTMLIFrameElement;
            if (iframe) {
                 const compiled = compilePreview(maximizedNodeId, state.nodes, state.connections, false);
-                // Force update if empty or mismatched
                 if (!iframe.srcdoc || iframe.srcdoc !== compiled) {
                    iframe.srcdoc = compiled;
                 }
@@ -661,10 +659,8 @@ export default function App() {
                               toolOutput += `\n[Created ${args.filename}]`;
 
                               // AUTO-CONNECT LOGIC
-                              // If chatting inside a code node (which acts as context), try to connect to it.
                               const contextNode = state.nodes.find(n => n.id === nodeId);
                               if (contextNode && contextNode.type === 'CODE') {
-                                  // Determine direction: Dependency (new) -> Consumer (context) usually
                                   dispatchLocal({
                                       type: 'CONNECT',
                                       payload: {
@@ -707,14 +703,10 @@ export default function App() {
       const startNode = state.nodes.find(n => n.id === nodeId);
       if (!startNode || startNode.type !== 'CODE') return;
 
-      // 1. Identify Cluster: Find all connected code nodes
       const relatedNodes = getRelatedNodes(nodeId, state.nodes, state.connections);
       const codeCluster = relatedNodes.filter(n => n.type === 'CODE');
-      
-      // Fallback: If no connections, just use the single node
       const targetNodes = codeCluster.length > 0 ? codeCluster : [startNode];
 
-      // 2. Set Loading for ALL nodes in cluster (visual feedback)
       targetNodes.forEach(n => dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: n.id, isLoading: true } }));
 
       try {
@@ -745,7 +737,6 @@ export default function App() {
                userPrompt = `Request: ${promptText}\n\n(Focus on ${startNode.title} but update/delete/create others only if strictly necessary per rules)`;
           }
 
-          // 3. API Call with Fallback
           await performGeminiCall(async (ai) => {
                const result = await ai.models.generateContent({
                   model: 'gemini-3-flash-preview',
@@ -756,8 +747,7 @@ export default function App() {
                   }
                });
                
-               // 4. Process Response
-               const response = result;
+               const response = result; // Correct access: generateContent returns the response directly in new SDK
                const functionCalls = response.functionCalls;
                
                if (functionCalls && functionCalls.length > 0) {
@@ -769,7 +759,6 @@ export default function App() {
                                dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: target.id, content: args.code } });
                                handleHighlightNode(target.id);
                            } else {
-                               // Create New File
                                const newNodeId = `node-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
                                const pos = { x: startNode.position.x + 50, y: startNode.position.y + 50 };
                                
@@ -786,9 +775,6 @@ export default function App() {
                                   }
                               });
 
-                              // AUTO-CONNECT LOGIC
-                              // When generating, we typically have a 'startNode' (the one the prompt was on).
-                              // Connect NewNode -> StartNode
                               dispatchLocal({
                                   type: 'CONNECT',
                                   payload: {
@@ -809,7 +795,6 @@ export default function App() {
                        }
                    }
                } else if (response.text) {
-                   // Fallback for text-only response (assume it's for the start node if it looks like code)
                    const clean = cleanAiOutput(response.text);
                    dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: nodeId, content: clean } });
                    handleHighlightNode(nodeId);
@@ -819,7 +804,6 @@ export default function App() {
       } catch (e: any) {
           alert(`AI Error: ${e.message}`);
       } finally {
-          // Reset loading for all
           targetNodes.forEach(n => dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: n.id, isLoading: false } }));
       }
   };
