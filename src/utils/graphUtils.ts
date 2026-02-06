@@ -148,9 +148,7 @@ export const compilePreview = (
       .filter(n => n.id !== rootNode.id); 
 
   let finalContent = rootNode.content;
-  const connectedFilenames = new Set(uniqueDeps.map(d => d.title));
-  const missingDependencies: string[] = [];
-
+  
   // Wrap content based on STRICT file extension
   const lowerTitle = rootNode.title.toLowerCase();
   
@@ -179,36 +177,36 @@ export const compilePreview = (
   }
 
   // 3. Inject Dependencies based on Filenames (Only if the root is HTML-like)
+  // We replace missing dependencies with a script that logs the error, preventing browser 404s.
   if (lowerTitle.endsWith('.html') || lowerTitle.endsWith('.htm')) {
       // Check CSS imports <link href="style.css">
       finalContent = finalContent.replace(/<link[^>]+href=["']([^"']+)["'][^>]*>/gi, (match, filename) => {
+        if (filename.match(/^(https?:\/\/|\/\/)/i)) return match; // Ignore remote URLs
+        
         const depNode = uniqueDeps.find(d => d.title === filename);
         if (depNode) {
             return `<style>\n/* Source: ${filename} */\n${depNode.content}\n</style>`;
         } else {
-            missingDependencies.push(filename);
-            return match; 
+            // Replace with explicit error logging to prevent browser 404 and scope error to terminal
+            return `<script>console.error('Dependency Error: "${filename}" is referenced but not connected via wires.');</script>`; 
         }
       });
 
       // Check JS imports <script src="script.js">
       finalContent = finalContent.replace(/<script[^>]+src=["']([^"']+)["'][^>]*><\/script>/gi, (match, filename) => {
+        if (filename.match(/^(https?:\/\/|\/\/)/i)) return match; // Ignore remote URLs
+
         const depNode = uniqueDeps.find(d => d.title === filename);
         if (depNode) {
             return `<script>\n/* Source: ${filename} */\n${depNode.content}\n</script>`;
         } else {
-            missingDependencies.push(filename);
-            return match; 
+            // Replace with explicit error logging to prevent browser 404 and scope error to terminal
+            return `<script>console.error('Dependency Error: "${filename}" is referenced but not connected via wires.');</script>`; 
         }
       });
   }
 
-
   // 4. Inject Console Interceptor & Multiplayer Bridge & Force Reload Timestamp
-  const errorInjections = missingDependencies.map(file => 
-    `console.error('Dependency Error: "${file}" is referenced in code but not connected via wires.');`
-  ).join('\n');
-
   const interceptor = `
     <script>
       (function() {
@@ -226,6 +224,7 @@ export const compilePreview = (
                 return String(arg);
             }).join(' ');
             
+            // Strictly target the parent window
             window.parent.postMessage({
               source: 'preview-iframe',
               nodeId: '${previewNodeId}',
@@ -275,15 +274,12 @@ export const compilePreview = (
                 timestamp: Date.now()
             }, '*');
         });
-
-        // Report Missing Dependencies immediately
-        ${errorInjections}
       })();
     </script>
     ${forceReload ? `<!-- Force Reload: ${Date.now()} -->` : ''}
   `;
 
-  // Only inject interceptor into HTML pages
+  // Only inject interceptor into HTML pages or wrapped content
   if (lowerTitle.endsWith('.html') || lowerTitle.endsWith('.htm')) {
        return `
         <!DOCTYPE html>
