@@ -2,7 +2,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { NodeData, Position, Size } from '../types';
 import { getPortsForNode } from '../constants';
-import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles, X, Image as ImageIcon, Square, Minus } from 'lucide-react';
+import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles, X, Image as ImageIcon, Square, Minus, Maximize2, Minimize2 } from 'lucide-react';
 import Editor, { useMonaco } from '@monaco-editor/react';
 
 interface NodeProps {
@@ -10,6 +10,7 @@ interface NodeProps {
   isSelected: boolean;
   isHighlighted?: boolean;
   isRunning?: boolean;
+  isMaximized?: boolean; // New Prop
   scale: number;
   isConnected: (portId: string) => boolean;
   onMove: (id: string, pos: Position) => void;
@@ -21,16 +22,17 @@ interface NodeProps {
   onPortContextMenu: (e: React.MouseEvent, portId: string) => void;
   onUpdateTitle: (id: string, title: string) => void;
   onUpdateContent?: (id: string, content: string) => void;
-  onSendMessage?: (id: string, text: string) => void; // For AI Chat
-  onStartContextSelection?: (id: string) => void; // For AI Chat
+  onSendMessage?: (id: string, text: string) => void; 
+  onStartContextSelection?: (id: string) => void; 
   onAiAction?: (nodeId: string, action: 'optimize' | 'prompt', prompt?: string) => void;
   onCancelAi?: (nodeId: string) => void; 
-  onInjectImport?: (sourceNodeId: string, packageName: string) => void; // For NPM
-  onFixError?: (nodeId: string, error: string) => void; // For Terminal AI Fix
+  onInjectImport?: (sourceNodeId: string, packageName: string) => void; 
+  onFixError?: (nodeId: string, error: string) => void; 
   onInteraction?: (nodeId: string, type: 'drag' | 'edit' | null) => void;
   onToggleMinimize?: (id: string) => void;
+  onToggleMaximize?: (id: string) => void; // New Prop
   onDragEnd?: (id: string) => void; 
-  onSelect?: (id: string, multi: boolean) => void; // New prop for selection
+  onSelect?: (id: string, multi: boolean) => void; 
   collaboratorInfo?: { name: string; color: string; action: 'dragging' | 'editing' };
   logs?: any[]; 
   children?: React.ReactNode;
@@ -41,6 +43,7 @@ export const Node: React.FC<NodeProps> = ({
   isSelected,
   isHighlighted,
   isRunning = false,
+  isMaximized = false,
   scale,
   isConnected,
   onMove,
@@ -60,6 +63,7 @@ export const Node: React.FC<NodeProps> = ({
   onFixError,
   onInteraction,
   onToggleMinimize,
+  onToggleMaximize,
   onDragEnd,
   onSelect,
   collaboratorInfo,
@@ -77,7 +81,7 @@ export const Node: React.FC<NodeProps> = ({
   const editorRef = useRef<any>(null);
   const contentHeightRef = useRef<number>(0);
   
-  // Track data in ref to avoid stale closures in callbacks (like Editor onDidContentSizeChange)
+  // Track data in ref to avoid stale closures in callbacks
   const nodeDataRef = useRef(data);
   useEffect(() => {
       nodeDataRef.current = data;
@@ -129,7 +133,6 @@ export const Node: React.FC<NodeProps> = ({
   // Handle NPM Search Debounce/Content Update
   useEffect(() => {
       if (data.type === 'NPM') {
-          // If content changes externally (loading state), sync query
           if (data.content !== npmQuery) {
               setNpmQuery(data.content);
           }
@@ -137,8 +140,8 @@ export const Node: React.FC<NodeProps> = ({
   }, [data.content, data.type]);
 
   const handlePointerDown = (e: React.PointerEvent) => {
+    if (isMaximized) return; // Disable dragging if maximized
     if (data.isLoading) {
-        // Allow clicking the cancel button even if loading, but block drag
         if ((e.target as HTMLElement).closest('.cancel-btn')) return;
         return; 
     }
@@ -151,9 +154,6 @@ export const Node: React.FC<NodeProps> = ({
 
     // Selection Logic
     if (onSelect) {
-        // If Ctrl is pressed, toggle multi-select
-        // If not pressed, and node NOT selected, select only this.
-        // If not pressed, and node IS selected, do nothing (dragging group).
         if (e.ctrlKey) {
             onSelect(data.id, true);
         } else if (!isSelected) {
@@ -166,12 +166,11 @@ export const Node: React.FC<NodeProps> = ({
     dragStartRef.current = { x: e.clientX, y: e.clientY };
     initialPosRef.current = { ...data.position };
 
-    // Close prompt if dragging starts
     if (!isPromptOpen) setIsPromptOpen(false);
   };
 
   const handleResizePointerDown = (e: React.PointerEvent) => {
-    if (data.isLoading || data.isMinimized) return; // Disable resize if minimized
+    if (data.isLoading || data.isMinimized || isMaximized) return; 
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     setIsResizing(true);
@@ -185,8 +184,6 @@ export const Node: React.FC<NodeProps> = ({
     if (isDragging) {
       const dx = (e.clientX - dragStartRef.current.x) / scale;
       const dy = (e.clientY - dragStartRef.current.y) / scale;
-      // Pass the *absolute* position based on this node's start.
-      // App.tsx handles delta for group moving.
       onMove(data.id, {
         x: initialPosRef.current.x + dx,
         y: initialPosRef.current.y + dy,
@@ -200,13 +197,11 @@ export const Node: React.FC<NodeProps> = ({
       const newWidth = Math.max(250, initialSizeRef.current.width + dx);
       let newHeight = Math.max(150, initialSizeRef.current.height + dy);
 
-      // RESTRICTION: Code modules cannot be longer than their content
       if (data.type === 'CODE' && contentHeightRef.current > 0) {
           const HEADER_HEIGHT = 40;
           const PADDING = 20; 
           const maxAllowedHeight = Math.max(150, contentHeightRef.current + HEADER_HEIGHT + PADDING);
           
-          // Clamp the height. You can shrink it (create scrollbar), but you cannot expand past content.
           if (newHeight > maxAllowedHeight) {
               newHeight = maxAllowedHeight;
           }
@@ -261,7 +256,6 @@ export const Node: React.FC<NodeProps> = ({
       if (onCancelAi) onCancelAi(data.id);
   };
 
-  // AI Actions - SIMPLIFIED
   const handleAiClick = (e: React.MouseEvent) => {
       e.stopPropagation();
       if (data.isLoading) {
@@ -302,6 +296,11 @@ export const Node: React.FC<NodeProps> = ({
       onToggleMinimize?.(data.id);
   };
 
+  const handleToggleMaximize = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      onToggleMaximize?.(data.id);
+  };
+
   const handleEditorMount = (editor: any) => {
       editorRef.current = editor;
       editor.onDidFocusEditorText(() => {
@@ -311,29 +310,21 @@ export const Node: React.FC<NodeProps> = ({
           onInteraction?.(data.id, null);
       });
 
-      // Auto-Size & Auto-Shrink Logic for Code Nodes
+      // Auto-Size Logic
       if (data.type === 'CODE') {
           editor.onDidContentSizeChange((e: any) => {
               contentHeightRef.current = e.contentHeight;
-              
-              // Use Ref to get the latest data state without closure staleness
               const currentNode = nodeDataRef.current;
-              
               const HEADER_HEIGHT = 40;
               const MIN_HEIGHT = 150;
               const PADDING = 20; 
-              // The ideal height to fit all code without empty space
               const fitHeight = Math.max(MIN_HEIGHT, e.contentHeight + HEADER_HEIGHT + PADDING);
               
               if (currentNode.autoHeight) {
-                  // Standard Auto-Grow (Initial creation state)
                   if (Math.abs(fitHeight - currentNode.size.height) > 3) {
                       onResize(currentNode.id, { width: currentNode.size.width, height: fitHeight });
                   }
               } else {
-                  // Manual Mode Enforcement:
-                  // If the current box is LARGER than the content (extended parts), snap it shut.
-                  // We add a small buffer (5px) to prevent jitter during resize operations.
                   if (currentNode.size.height > fitHeight + 5) {
                       onResize(currentNode.id, { width: currentNode.size.width, height: fitHeight });
                   }
@@ -375,7 +366,6 @@ export const Node: React.FC<NodeProps> = ({
       }
   };
 
-  // Image Drag & Drop Logic
   const handleDragOver = (e: React.DragEvent) => {
       e.preventDefault();
       setIsDragOver(true);
@@ -395,7 +385,7 @@ export const Node: React.FC<NodeProps> = ({
               const img = new Image();
               img.onload = () => {
                   const canvas = document.createElement('canvas');
-                  const MAX_SIZE = 800; // Resize to max 800px to keep firestore happy
+                  const MAX_SIZE = 800; 
                   let width = img.width;
                   let height = img.height;
                   
@@ -415,8 +405,6 @@ export const Node: React.FC<NodeProps> = ({
                   canvas.height = height;
                   const ctx = canvas.getContext('2d');
                   ctx?.drawImage(img, 0, 0, width, height);
-                  
-                  // Compress
                   const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
                   onUpdateContent(data.id, dataUrl);
                   onUpdateTitle(data.id, file.name);
@@ -429,12 +417,10 @@ export const Node: React.FC<NodeProps> = ({
       }
   };
 
-
   // Styles
   let borderClass = 'border-panelBorder';
   let shadowClass = '';
   
-  // Shimmer effect for AI loading
   const shimmerOverlay = data.isLoading ? (
       <div className="absolute inset-0 z-50 pointer-events-none rounded-lg overflow-hidden">
           <div className="absolute inset-0 bg-gradient-to-r from-transparent via-indigo-500/20 to-transparent animate-shimmer" style={{ width: '200%' }} />
@@ -455,6 +441,23 @@ export const Node: React.FC<NodeProps> = ({
       borderClass = 'border-indigo-500/50';
   }
 
+  // Maximized Style Override
+  const maximizedStyle = isMaximized ? {
+      position: 'fixed' as const,
+      top: 0,
+      left: 0,
+      width: '100vw',
+      height: '100vh',
+      zIndex: 9999,
+      transform: 'none',
+      borderRadius: 0,
+      borderWidth: 0,
+  } : {
+      transform: `translate(${data.position.x}px, ${data.position.y}px)`,
+      width: data.isMinimized ? '250px' : data.size.width,
+      height: data.isMinimized ? '40px' : data.size.height,
+  };
+
   const dynamicStyle = collaboratorInfo ? {
       borderColor: collaboratorInfo.color,
       boxShadow: `0 0 15px ${collaboratorInfo.color}40`
@@ -464,13 +467,10 @@ export const Node: React.FC<NodeProps> = ({
     <div
       ref={nodeRef}
       data-node-id={data.id}
-      className={`absolute flex flex-col bg-panel border rounded-lg shadow-2xl animate-in fade-in zoom-in-95 pointer-events-auto ${!collaboratorInfo && borderClass} ${!collaboratorInfo && shadowClass}`}
+      className={`absolute flex flex-col bg-panel border rounded-lg shadow-2xl animate-in fade-in zoom-in-95 pointer-events-auto ${!collaboratorInfo && !isMaximized && borderClass} ${!collaboratorInfo && !isMaximized && shadowClass}`}
       style={{
-        transform: `translate(${data.position.x}px, ${data.position.y}px)`,
-        width: data.isMinimized ? '250px' : data.size.width,
-        height: data.isMinimized ? '40px' : data.size.height,
-        // Add width/height to transition property for smooth resizing
-        transitionProperty: 'box-shadow, border-color, transform, width, height', 
+        ...maximizedStyle,
+        transitionProperty: isMaximized ? 'all' : 'box-shadow, border-color, transform, width, height', 
         transitionDuration: (isDragging || isResizing) ? '0s' : '0.2s',
         transitionTimingFunction: 'ease-out',
         ...dynamicStyle
@@ -482,8 +482,8 @@ export const Node: React.FC<NodeProps> = ({
     >
       {shimmerOverlay}
 
-      {/* Collaborator Badge */}
-      {collaboratorInfo && (
+      {/* Collaborator Badge (Hidden if Maximized) */}
+      {collaboratorInfo && !isMaximized && (
           <div 
             className="absolute -top-6 right-0 px-2 py-0.5 rounded text-[10px] font-bold text-white shadow-md flex items-center gap-1 z-50 animate-in fade-in slide-in-from-bottom-2"
             style={{ backgroundColor: collaboratorInfo.color }}
@@ -495,9 +495,9 @@ export const Node: React.FC<NodeProps> = ({
 
       {/* Header */}
       <div className="h-10 flex items-center justify-between px-3 border-b border-panelBorder bg-zinc-900/50 rounded-t-lg select-none shrink-0 relative z-10">
-        <div className="flex items-center gap-2 text-zinc-400 font-medium text-sm flex-1 min-w-0">
-          <GripVertical size={14} className="opacity-50 shrink-0" />
-          {isEditingTitle ? (
+        <div className="flex items-center gap-2 text-zinc-300 font-semibold text-sm flex-1 min-w-0">
+          {!isMaximized && <GripVertical size={14} className="opacity-50 shrink-0" />}
+          {isEditingTitle && !isMaximized ? (
             <input 
               type="text" 
               value={tempTitle}
@@ -505,7 +505,7 @@ export const Node: React.FC<NodeProps> = ({
               onBlur={finishEditing}
               onKeyDown={(e) => e.key === 'Enter' && finishEditing()}
               onPointerDown={(e) => e.stopPropagation()} 
-              className="bg-black border border-zinc-700 rounded px-1 py-0.5 text-xs w-full nodrag text-white focus:outline-none focus:border-accent select-text"
+              className="bg-black border border-zinc-700 rounded px-1 py-0.5 text-xs w-full nodrag text-white focus:outline-none focus:border-accent select-text font-medium"
               autoFocus
             />
           ) : (
@@ -514,14 +514,16 @@ export const Node: React.FC<NodeProps> = ({
                 {data.type === 'NPM' && <Package size={14} className="text-red-500" />}
                 {data.type === 'IMAGE' && <ImageIcon size={14} className="text-purple-400" />}
                 <span className={data.isMinimized ? 'whitespace-nowrap' : 'truncate'}>{data.title}</span>
-                <button 
-                    onClick={(e) => { e.stopPropagation(); setIsEditingTitle(true); }}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    className="opacity-0 group-hover/title:opacity-100 p-1 hover:bg-zinc-800 rounded text-zinc-500 hover:text-zinc-300 transition-all nodrag shrink-0"
-                    disabled={data.isLoading}
-                >
-                    <Pencil size={12} />
-                </button>
+                {!isMaximized && (
+                    <button 
+                        onClick={(e) => { e.stopPropagation(); setIsEditingTitle(true); }}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        className="opacity-0 group-hover/title:opacity-100 p-1 hover:bg-zinc-800 rounded text-zinc-500 hover:text-zinc-300 transition-all nodrag shrink-0"
+                        disabled={data.isLoading}
+                    >
+                        <Pencil size={12} />
+                    </button>
+                )}
              </div>
           )}
         </div>
@@ -529,7 +531,6 @@ export const Node: React.FC<NodeProps> = ({
         <div className="flex items-center gap-1 shrink-0">
            {data.type === 'CODE' && (
               <div className="flex items-center gap-1">
-                 {/* Minimize/Expand Button */}
                  <button
                     onClick={handleToggleMinimize}
                     onPointerDown={(e) => e.stopPropagation()}
@@ -591,12 +592,20 @@ export const Node: React.FC<NodeProps> = ({
               >
                   {isRunning ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
               </button>
+              {/* Maximize Button */}
+              <button 
+                  onClick={handleToggleMaximize}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  className="nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 text-zinc-400 hover:text-white hover:bg-zinc-800"
+                  title={isMaximized ? "Minimize" : "Maximize"}
+              >
+                  {isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+              </button>
             </div>
           )}
         </div>
       </div>
 
-       {/* Floating Prompt Input */}
        {isPromptOpen && (
           <div className="px-2 pt-2 pb-1 bg-zinc-900/95 backdrop-blur border-b border-panelBorder animate-in slide-in-from-top-2 duration-200 z-30 nodrag shadow-xl">
               <div className="relative">
@@ -606,7 +615,7 @@ export const Node: React.FC<NodeProps> = ({
                     onChange={(e) => setPromptText(e.target.value)}
                     onKeyDown={handlePromptKeyDown}
                     placeholder="Describe how to change this code..."
-                    className="w-full bg-zinc-950 border border-blue-500/30 rounded-md p-2 text-xs text-zinc-200 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none custom-scrollbar"
+                    className="w-full bg-zinc-950 border border-blue-500/30 rounded-md p-2 text-xs font-medium text-zinc-200 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none custom-scrollbar"
                     style={{ minHeight: '60px' }}
                     onPointerDown={(e) => e.stopPropagation()}
                   />
@@ -630,7 +639,6 @@ export const Node: React.FC<NodeProps> = ({
 
       {/* Content Area */}
       <div className={`flex-1 relative group nodrag flex flex-col min-h-0 overflow-hidden ${data.isLoading ? 'pointer-events-none opacity-80' : ''} ${data.isMinimized ? 'hidden' : ''}`}>
-        {/* ... (Existing CODE, IMAGE, NPM, AI_CHAT cases remain the same) ... */}
         {data.type === 'CODE' ? (
             <div className="w-full h-full bg-[#1e1e1e]" onPointerDown={(e) => e.stopPropagation()}>
                  <Editor
@@ -645,6 +653,7 @@ export const Node: React.FC<NodeProps> = ({
                         minimap: { enabled: true, scale: 0.5 },
                         fontSize: 13,
                         fontFamily: '"JetBrains Mono", monospace',
+                        fontWeight: '500', // Bolder font
                         lineNumbers: 'on',
                         scrollBeyondLastLine: false,
                         automaticLayout: true,
@@ -676,7 +685,7 @@ export const Node: React.FC<NodeProps> = ({
                         className="w-full h-full object-contain pointer-events-none select-none"
                     />
                 ) : (
-                    <div className="flex flex-col items-center gap-2 text-zinc-600 pointer-events-none">
+                    <div className="flex flex-col items-center gap-2 text-zinc-500 font-medium pointer-events-none">
                         <ImageIcon size={32} />
                         <span className="text-xs">Drag image here</span>
                     </div>
@@ -684,13 +693,12 @@ export const Node: React.FC<NodeProps> = ({
              </div>
         ) : data.type === 'NPM' ? (
              <div className="flex flex-col h-full bg-zinc-900/50">
-                 {/* ... NPM Content ... */}
                  <div className="p-3 border-b border-panelBorder flex gap-2">
                      <div className="relative flex-1">
                         <Search size={14} className="absolute left-2.5 top-2.5 text-zinc-500" />
                         <input 
                             type="text" 
-                            className="w-full bg-zinc-950 border border-zinc-700 rounded pl-8 pr-2 py-2 text-xs text-white focus:outline-none focus:border-red-500"
+                            className="w-full bg-zinc-950 border border-zinc-700 rounded pl-8 pr-2 py-2 text-xs font-medium text-white focus:outline-none focus:border-red-500"
                             placeholder="Search npm..."
                             value={npmQuery}
                             onChange={(e) => setNpmQuery(e.target.value)}
@@ -712,7 +720,7 @@ export const Node: React.FC<NodeProps> = ({
                          <div key={pkg.package.name} className="bg-zinc-800 p-2 rounded border border-zinc-700 hover:border-zinc-500 transition-colors flex justify-between items-start group">
                              <div>
                                  <div className="font-bold text-zinc-200 text-xs">{pkg.package.name}</div>
-                                 <div className="text-[10px] text-zinc-500 truncate max-w-[160px]">{pkg.package.description}</div>
+                                 <div className="text-[10px] text-zinc-500 font-medium truncate max-w-[160px]">{pkg.package.description}</div>
                              </div>
                              <button 
                                 onClick={() => handleInjectPackage(pkg.package.name)}
@@ -725,7 +733,7 @@ export const Node: React.FC<NodeProps> = ({
                          </div>
                      ))}
                      {npmResults.length === 0 && !isSearchingNpm && (
-                         <div className="text-center text-zinc-600 text-xs mt-10 italic">
+                         <div className="text-center text-zinc-600 text-xs font-medium mt-10 italic">
                              Search for packages to add imports.
                          </div>
                      )}
@@ -734,7 +742,7 @@ export const Node: React.FC<NodeProps> = ({
         ) : data.type === 'TERMINAL' ? (
              <div 
                 ref={terminalContainerRef}
-                className="w-full h-full bg-black p-2 font-mono text-xs overflow-y-auto custom-scrollbar select-text nodrag"
+                className="w-full h-full bg-black p-2 font-mono text-xs font-medium overflow-y-auto custom-scrollbar select-text nodrag"
                 onPointerDown={(e) => e.stopPropagation()} 
              >
                 {(!logs || logs.length === 0) ? (
@@ -750,7 +758,6 @@ export const Node: React.FC<NodeProps> = ({
                                 <span className="text-zinc-600 mr-2">[{new Date(log.timestamp).toLocaleTimeString()}]</span>
                                 {log.message}
                             </div>
-                            {/* AI Fix Button for Errors */}
                             {log.type === 'error' && onFixError && (
                                 <button
                                     onClick={() => onFixError(data.id, log.message)}
@@ -768,10 +775,9 @@ export const Node: React.FC<NodeProps> = ({
              </div>
         ) : data.type === 'AI_CHAT' ? (
              <div className="flex flex-col h-full bg-zinc-950">
-                 {/* ... AI Chat Content ... */}
                  <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-3 space-y-3 custom-scrollbar">
                      {(!data.messages || data.messages.length === 0) && (
-                         <div className="text-center text-zinc-600 text-xs mt-10">
+                         <div className="text-center text-zinc-600 text-xs font-medium mt-10">
                              <Bot size={24} className="mx-auto mb-2 opacity-50" />
                              <p>Ask me anything about your code.</p>
                          </div>
@@ -783,7 +789,7 @@ export const Node: React.FC<NodeProps> = ({
                              }`}>
                                  {msg.role === 'user' ? <User size={14} /> : <Bot size={14} />}
                              </div>
-                             <div className={`p-2 rounded-lg text-xs whitespace-pre-wrap max-w-[85%] ${
+                             <div className={`p-2 rounded-lg text-xs font-medium whitespace-pre-wrap max-w-[85%] ${
                                  msg.role === 'user' 
                                     ? 'bg-zinc-800 text-zinc-200' 
                                     : 'bg-indigo-900/30 text-indigo-100 border border-indigo-500/20'
@@ -812,7 +818,7 @@ export const Node: React.FC<NodeProps> = ({
                      {(data.contextNodeIds?.length || 0) > 0 && (
                          <div className="flex flex-wrap gap-1 mb-2 px-1">
                              {data.contextNodeIds!.map(nodeId => (
-                                 <div key={nodeId} className="flex items-center gap-1 bg-amber-500/10 text-amber-500 text-[10px] px-1.5 py-0.5 rounded border border-amber-500/20">
+                                 <div key={nodeId} className="flex items-center gap-1 bg-amber-500/10 text-amber-500 text-[10px] font-bold px-1.5 py-0.5 rounded border border-amber-500/20">
                                      <FileCode size={10} />
                                      <span>File Selected</span> 
                                  </div>
@@ -836,7 +842,7 @@ export const Node: React.FC<NodeProps> = ({
                             onChange={(e) => setChatInput(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && handleSendChat()}
                             placeholder={data.isLoading ? "Thinking..." : "Ask Gemini..."}
-                            className="flex-1 bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 transition-colors nodrag select-text disabled:opacity-50"
+                            className="flex-1 bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-xs font-medium text-white focus:outline-none focus:border-indigo-500 transition-colors nodrag select-text disabled:opacity-50"
                             onPointerDown={(e) => e.stopPropagation()}
                             disabled={data.isLoading}
                         />
@@ -864,7 +870,8 @@ export const Node: React.FC<NodeProps> = ({
         )}
       </div>
 
-      {/* Inputs (Left) */}
+      {/* Inputs (Left) - Hidden when maximized */}
+      {!isMaximized && (
       <div 
         className={`absolute -left-3 flex flex-col gap-[28px] pointer-events-none transition-all duration-200 ease-out`}
         style={{ top: data.isMinimized ? '14px' : '52px' }}
@@ -880,15 +887,17 @@ export const Node: React.FC<NodeProps> = ({
                   data-port-id={port.id}
                   data-node-id={data.id}
                 />
-                <span className="absolute left-4 text-[10px] text-zinc-500 uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity bg-black/80 px-1 rounded pointer-events-none whitespace-nowrap z-50">
+                <span className="absolute left-4 text-[10px] font-bold text-zinc-400 uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity bg-black/90 border border-zinc-800 px-1.5 py-0.5 rounded pointer-events-none whitespace-nowrap z-50">
                   {port.label}
                 </span>
               </div>
             );
         })}
       </div>
+      )}
       
-      {/* Outputs (Right) */}
+      {/* Outputs (Right) - Hidden when maximized */}
+      {!isMaximized && (
       <div 
         className={`absolute -right-3 flex flex-col gap-[28px] pointer-events-none transition-all duration-200 ease-out`}
         style={{ top: data.isMinimized ? '14px' : '52px' }}
@@ -897,7 +906,7 @@ export const Node: React.FC<NodeProps> = ({
             const connected = isConnected(port.id);
             return (
               <div key={port.id} className="relative group flex items-center justify-end h-3 pointer-events-auto" title={port.label}>
-                 <span className="absolute right-4 text-[10px] text-zinc-500 uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity bg-black/80 px-1 rounded pointer-events-none whitespace-nowrap z-50">
+                 <span className="absolute right-4 text-[10px] font-bold text-zinc-400 uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity bg-black/90 border border-zinc-800 px-1.5 py-0.5 rounded pointer-events-none whitespace-nowrap z-50">
                   {port.label}
                 </span>
                 <div 
@@ -911,8 +920,9 @@ export const Node: React.FC<NodeProps> = ({
             );
         })}
       </div>
+      )}
       
-      {!data.isMinimized && (
+      {!data.isMinimized && !isMaximized && (
           <div 
             className={`absolute bottom-0 right-0 w-4 h-4 flex items-center justify-center opacity-50 hover:opacity-100 nodrag z-20 cursor-se-resize`}
             onPointerDown={handleResizePointerDown}

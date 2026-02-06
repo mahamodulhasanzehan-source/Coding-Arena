@@ -1,3 +1,4 @@
+
 import React, { useReducer, useState, useRef, useEffect, useMemo } from 'react';
 import { Node } from './components/Node';
 import { Wire } from './components/Wire';
@@ -217,6 +218,18 @@ const updateCodeFunction: FunctionDeclaration = {
     }
 };
 
+const deleteFileFunction: FunctionDeclaration = {
+    name: 'deleteFile',
+    description: 'Delete a file (node) from the project when it is no longer needed or requested by the user.',
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            filename: { type: Type.STRING, description: 'The exact name of the file to delete (e.g., old_script.js).' }
+        },
+        required: ['filename']
+    }
+};
+
 type SyncStatus = 'synced' | 'saving' | 'offline' | 'error';
 
 const getRandomColor = () => {
@@ -275,6 +288,7 @@ export default function App() {
   const [userUid, setUserUid] = useState<string | null>(null);
   const [userColor] = useState(getRandomColor());
   const [snapLines, setSnapLines] = useState<{x1: number, y1: number, x2: number, y2: number}[]>([]);
+  const [maximizedNodeId, setMaximizedNodeId] = useState<string | null>(null);
   
   // Selection Box State
   const [selectionBox, setSelectionBox] = useState<{ x: number, y: number, w: number, h: number, startX: number, startY: number } | null>(null);
@@ -289,6 +303,17 @@ export default function App() {
 
   const longPressTimer = useRef<any>(null);
   const touchStartPos = useRef<{ x: number, y: number } | null>(null);
+
+  // Handle Escape to exit maximize
+  useEffect(() => {
+      const handleKeyDown = (e: KeyboardEvent) => {
+          if (e.key === 'Escape' && maximizedNodeId) {
+              setMaximizedNodeId(null);
+          }
+      };
+      window.addEventListener('keydown', handleKeyDown);
+      return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [maximizedNodeId]);
 
   // Use state.nodes for display
   const displayNodes = useMemo(() => {
@@ -633,6 +658,7 @@ export default function App() {
           You are working on a project with multiple files.
           You can edit ANY file in the project using the 'updateFile' tool.
           Always provide the FULL new content for the file in 'updateFile'.
+          You can DELETE files that are unused or explicitly requested to be deleted using the 'deleteFile' tool.
           Do not use placeholders like // ... rest of code.
           
           Project Files:
@@ -643,22 +669,22 @@ export default function App() {
           if (action === 'optimize') {
                userPrompt = `Optimize the file ${startNode.title}.`;
           } else {
-               userPrompt = `Request: ${promptText}\n\n(Focus on ${startNode.title} but update others if needed)`;
+               userPrompt = `Request: ${promptText}\n\n(Focus on ${startNode.title} but update/delete others if needed)`;
           }
 
           // 3. API Call with Fallback
           await performGeminiCall(async (ai) => {
-               const result = await ai.models.generateContent({
+               const response = await ai.models.generateContent({
                   model: 'gemini-3-flash-preview',
                   contents: userPrompt,
                   config: { 
                       systemInstruction,
-                      tools: [{ functionDeclarations: [updateCodeFunction] }]
+                      tools: [{ functionDeclarations: [updateCodeFunction, deleteFileFunction] }]
                   }
                });
                
                // 4. Process Response
-               const functionCalls = result.functionCalls;
+               const functionCalls = response.functionCalls;
                
                if (functionCalls && functionCalls.length > 0) {
                    for (const call of functionCalls) {
@@ -669,11 +695,17 @@ export default function App() {
                                dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: target.id, content: args.code } });
                                handleHighlightNode(target.id);
                            }
+                       } else if (call.name === 'deleteFile') {
+                           const args = call.args as any;
+                           const target = state.nodes.find(n => n.type === 'CODE' && n.title === args.filename);
+                           if (target) {
+                               dispatchLocal({ type: 'DELETE_NODE', payload: target.id });
+                           }
                        }
                    }
-               } else if (result.text) {
+               } else if (response.text) {
                    // Fallback for text-only response (assume it's for the start node if it looks like code)
-                   const clean = cleanAiOutput(result.text);
+                   const clean = cleanAiOutput(response.text);
                    dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: nodeId, content: clean } });
                    handleHighlightNode(nodeId);
                }
@@ -903,6 +935,7 @@ export default function App() {
   };
 
   const handleNodeMove = (id: string, newPos: Position) => {
+    if (maximizedNodeId) return; // Disable move if a node is maximized
     const node = state.nodes.find(n => n.id === id);
     if (!node) return;
 
@@ -1030,6 +1063,7 @@ export default function App() {
 
   const handleContextMenu = (e: React.MouseEvent, nodeId?: string) => {
     e.preventDefault();
+    if (maximizedNodeId) return; // No context menu when maximized
     const node = nodeId ? state.nodes.find(n => n.id === nodeId) : undefined;
     
     // Check Feasibility for Alignment & Distribution
@@ -1186,6 +1220,7 @@ export default function App() {
 
   const handleBgPointerDown = (e: React.PointerEvent) => {
       e.preventDefault(); 
+      if (maximizedNodeId) return; // Block panning if maximized
       if (isPinching.current) return;
       
       if (e.ctrlKey) {
@@ -1208,6 +1243,7 @@ export default function App() {
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
+    if (maximizedNodeId) return;
     if (isPinching.current) return;
 
     if (selectionBox && containerRef.current) {
@@ -1349,6 +1385,7 @@ export default function App() {
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
+      if (maximizedNodeId) return;
       if (e.touches.length === 2) {
           isPinching.current = true;
           setIsPanning(false); 
@@ -1385,6 +1422,7 @@ export default function App() {
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
+      if (maximizedNodeId) return;
       if (e.touches.length === 2 && lastTouchDist.current !== null && containerRef.current) {
           e.preventDefault(); 
           const t1 = e.touches[0];
@@ -1433,6 +1471,7 @@ export default function App() {
   };
 
   const handleWheel = (e: React.WheelEvent) => {
+        if (maximizedNodeId) return;
         if ((e.target as HTMLElement).closest('.custom-scrollbar') || (e.target as HTMLElement).closest('.monaco-editor')) return;
         
         const rect = containerRef.current?.getBoundingClientRect();
@@ -1502,7 +1541,7 @@ export default function App() {
       <div className="absolute top-4 left-4 z-50 pointer-events-none select-none flex items-center gap-3">
         <div>
             <h1 className="text-xl font-bold tracking-tight text-white drop-shadow-md">Coding Arena</h1>
-            <p className="text-xs text-zinc-500">Global Collaborative Session</p>
+            <p className="text-xs font-medium text-zinc-500">Global Collaborative Session</p>
         </div>
         <div className="flex items-center gap-1.5 px-3 py-1 bg-zinc-900/80 border border-zinc-800 rounded-full backdrop-blur-sm pointer-events-auto" title="Cloud Sync Status">
             {syncStatus === 'synced' && <Cloud size={14} className="text-emerald-500" />}
@@ -1524,7 +1563,7 @@ export default function App() {
       <div className="absolute top-4 right-4 z-50 flex flex-col gap-2 items-end">
         <button 
             onClick={() => { if(confirm('Reset?')) { localStorage.removeItem('coding-arena-v1'); window.location.reload(); } }}
-            className="px-3 py-1.5 bg-zinc-900/80 hover:bg-red-900/50 text-xs text-zinc-400 border border-zinc-800 rounded flex items-center gap-2 transition-colors pointer-events-auto cursor-pointer"
+            className="px-3 py-1.5 bg-zinc-900/80 hover:bg-red-900/50 text-xs font-medium text-zinc-400 border border-zinc-800 rounded flex items-center gap-2 transition-colors pointer-events-auto cursor-pointer"
             onPointerDown={(e) => e.stopPropagation()}
         >
             <Trash2 size={12} /> Reset
@@ -1671,6 +1710,7 @@ export default function App() {
                                 isSelected={state.selectedNodeIds.includes(node.id)}
                                 isHighlighted={node.id === highlightedNodeId}
                                 isRunning={state.runningPreviewIds.includes(node.id)}
+                                isMaximized={node.id === maximizedNodeId}
                                 scale={state.zoom}
                                 isConnected={isConnected}
                                 onMove={handleNodeMove}
@@ -1691,6 +1731,7 @@ export default function App() {
                                 onFixError={handleFixError}
                                 onInteraction={(id, type) => dispatch({ type: 'SET_NODE_INTERACTION', payload: { nodeId: id, type } })}
                                 onToggleMinimize={(id) => dispatchLocal({ type: 'TOGGLE_MINIMIZE', payload: { id } })}
+                                onToggleMaximize={(id) => setMaximizedNodeId(maximizedNodeId === id ? null : id)}
                                 onSelect={handleToggleSelectNode}
                                 collaboratorInfo={collabInfo}
                                 logs={logs}

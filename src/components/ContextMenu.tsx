@@ -53,7 +53,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
       >
          <button
           onClick={() => onDisconnect(targetPortId)}
-          className="w-full text-left px-4 py-2 text-sm text-yellow-500 hover:bg-zinc-800 transition-colors flex items-center gap-2"
+          className="w-full text-left px-4 py-2 text-sm font-medium text-yellow-500 hover:bg-zinc-800 transition-colors flex items-center gap-2"
         >
           <Unplug size={14} />
           Disconnect
@@ -72,7 +72,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         style={{ left: position.x, top: position.y }}
         onContextMenu={(e) => e.preventDefault()}
       >
-        <div className="px-2 py-1.5 text-xs font-semibold text-zinc-500 uppercase tracking-wider bg-zinc-900/50">
+        <div className="px-2 py-1.5 text-xs font-bold text-zinc-500 uppercase tracking-wider bg-zinc-900/50">
           Node Actions
         </div>
         
@@ -81,7 +81,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
                 <button
                     onClick={() => onAlign('horizontal')}
                     disabled={!canAlignHorizontal}
-                    className={`w-full text-left px-4 py-2 text-sm flex items-center gap-2 transition-colors ${
+                    className={`w-full text-left px-4 py-2 text-sm font-medium flex items-center gap-2 transition-colors ${
                         canAlignHorizontal ? 'text-zinc-300 hover:bg-zinc-800 hover:text-white' : 'text-zinc-600 cursor-not-allowed'
                     }`}
                 >
@@ -91,7 +91,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
                 <button
                     onClick={() => onAlign('vertical')}
                     disabled={!canAlignVertical}
-                    className={`w-full text-left px-4 py-2 text-sm flex items-center gap-2 transition-colors border-b border-panelBorder ${
+                    className={`w-full text-left px-4 py-2 text-sm font-medium flex items-center gap-2 transition-colors border-b border-panelBorder ${
                         canAlignVertical ? 'text-zinc-300 hover:bg-zinc-800 hover:text-white' : 'text-zinc-600 cursor-not-allowed'
                     }`}
                 >
@@ -102,7 +102,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
                 <button
                     onClick={() => onDistribute('horizontal')}
                     disabled={!canDistributeHorizontal}
-                    className={`w-full text-left px-4 py-2 text-sm flex items-center gap-2 transition-colors ${
+                    className={`w-full text-left px-4 py-2 text-sm font-medium flex items-center gap-2 transition-colors ${
                         canDistributeHorizontal ? 'text-zinc-300 hover:bg-zinc-800 hover:text-white' : 'text-zinc-600 cursor-not-allowed'
                     }`}
                 >
@@ -112,7 +112,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
                 <button
                     onClick={() => onDistribute('vertical')}
                     disabled={!canDistributeVertical}
-                    className={`w-full text-left px-4 py-2 text-sm flex items-center gap-2 transition-colors border-b border-panelBorder ${
+                    className={`w-full text-left px-4 py-2 text-sm font-medium flex items-center gap-2 transition-colors border-b border-panelBorder ${
                         canDistributeVertical ? 'text-zinc-300 hover:bg-zinc-800 hover:text-white' : 'text-zinc-600 cursor-not-allowed'
                     }`}
                 >
@@ -125,7 +125,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         {targetNode?.type === 'IMAGE' && onClearImage && (
              <button
                 onClick={() => onClearImage(targetNodeId)}
-                className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white transition-colors flex items-center gap-2"
+                className="w-full text-left px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800 hover:text-white transition-colors flex items-center gap-2"
             >
                 <Eraser size={14} />
                 Clear Image
@@ -134,14 +134,14 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
 
         <button
           onClick={() => onDuplicateNode(targetNodeId)}
-          className="w-full text-left px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white transition-colors flex items-center gap-2"
+          className="w-full text-left px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800 hover:text-white transition-colors flex items-center gap-2"
         >
           <Copy size={14} />
           Duplicate
         </button>
         <button
           onClick={() => onDeleteNode(targetNodeId)}
-          className="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-red-900/20 hover:text-red-300 transition-colors flex items-center gap-2"
+          className="w-full text-left px-4 py-2 text-sm font-medium text-red-400 hover:bg-red-900/20 hover:text-red-300 transition-colors flex items-center gap-2"
         >
           <Trash2 size={14} />
           Delete
@@ -165,14 +165,14 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
       style={{ left: position.x, top: position.y }}
       onContextMenu={(e) => e.preventDefault()}
     >
-      <div className="px-2 py-1.5 text-xs font-semibold text-zinc-500 uppercase tracking-wider bg-zinc-900/50">
+      <div className="px-2 py-1.5 text-xs font-bold text-zinc-500 uppercase tracking-wider bg-zinc-900/50">
         Add Node
       </div>
       {items.map((item) => (
         <button
           key={item.type}
           onClick={() => onAdd(item.type)}
-          className="w-full text-left px-4 py-2.5 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white transition-colors flex items-center gap-3"
+          className="w-full text-left px-4 py-2.5 text-sm font-medium text-zinc-300 hover:bg-zinc-800 hover:text-white transition-colors flex items-center gap-3"
         >
           {item.icon}
           {item.label}
