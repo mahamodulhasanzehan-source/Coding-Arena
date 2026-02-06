@@ -60,8 +60,7 @@ export const getAllConnectedSources = (
         .filter((n): n is NodeData => !!n);
 };
 
-// Find all nodes in the connected component of the startNode (Undirected Traversal)
-// This is crucial for "Scene 2": If I edit CSS, the AI needs to know about the connected HTML.
+// NEW: Traverse the undirected graph to find all nodes in the connected component
 export const getRelatedNodes = (
   startNodeId: string,
   nodes: NodeData[],
@@ -70,31 +69,29 @@ export const getRelatedNodes = (
 ): NodeData[] => {
   const visited = new Set<string>();
   const queue = [startNodeId];
-  const related: NodeData[] = [];
+  const relatedIds = new Set<string>();
 
   while (queue.length > 0) {
     const currentId = queue.shift()!;
     if (visited.has(currentId)) continue;
     visited.add(currentId);
+    relatedIds.add(currentId);
 
-    const node = nodes.find(n => n.id === currentId);
-    if (node) {
-       if (!typeFilter || node.type === typeFilter) {
-           related.push(node);
-       }
-    }
-
-    // Find all neighbors (Input OR Output)
-    const neighbors = connections
-      .filter(c => c.sourceNodeId === currentId || c.targetNodeId === currentId)
-      .map(c => c.sourceNodeId === currentId ? c.targetNodeId : c.sourceNodeId);
-    
-    neighbors.forEach(nid => {
-        if (!visited.has(nid)) queue.push(nid);
+    // Find neighbors via connections (both source and target directions)
+    const neighbors: string[] = [];
+    connections.forEach(c => {
+        if (c.sourceNodeId === currentId) neighbors.push(c.targetNodeId);
+        if (c.targetNodeId === currentId) neighbors.push(c.sourceNodeId);
     });
+
+    for (const nid of neighbors) {
+        if (!visited.has(nid)) {
+            queue.push(nid);
+        }
+    }
   }
   
-  return related;
+  return nodes.filter(n => relatedIds.has(n.id) && (!typeFilter || n.type === typeFilter));
 };
 
 // Helper to recursively collect all code dependencies
