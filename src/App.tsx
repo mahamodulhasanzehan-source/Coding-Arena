@@ -242,8 +242,6 @@ function graphReducer(state: GraphState, action: Action): GraphState {
     }
 }
 
-// --- Tool Definitions ---
-
 const updateCodeFunction: FunctionDeclaration = {
     name: 'updateFile',
     description: 'Update the code content of a specific file. Use this to write code or make changes. ALWAYS provide the FULL content of the file, not just the diff.',
@@ -260,40 +258,6 @@ const updateCodeFunction: FunctionDeclaration = {
             }
         },
         required: ['filename', 'code']
-    }
-};
-
-const renameFileFunction: FunctionDeclaration = {
-    name: 'renameFile',
-    description: 'Rename a specific file node. Use this to change file extensions (e.g., .js to .html) or rename files entirely.',
-    parameters: {
-        type: Type.OBJECT,
-        properties: {
-            oldFilename: {
-                type: Type.STRING,
-                description: 'The current name of the file.'
-            },
-            newFilename: {
-                type: Type.STRING,
-                description: 'The new name for the file.'
-            }
-        },
-        required: ['oldFilename', 'newFilename']
-    }
-};
-
-const deleteFileFunction: FunctionDeclaration = {
-    name: 'deleteFile',
-    description: 'Delete a specific file/node from the workspace. Use this to remove useless, redundant, or incorrect code modules.',
-    parameters: {
-        type: Type.OBJECT,
-        properties: {
-            filename: {
-                type: Type.STRING,
-                description: 'The name of the file to delete.'
-            }
-        },
-        required: ['filename']
     }
 };
 
@@ -650,10 +614,8 @@ export default function App() {
       2. When asked to code, ALWAYS check if you should edit an existing file.
       3. To edit a file, you MUST use the 'updateFile' tool.
       4. The 'updateFile' tool requires the FULL content of the file.
-      5. To rename a file or change its extension (e.g. .js to .html), use 'renameFile'.
-      6. To delete a file, use 'deleteFile'. Only delete files if the user asks or if they are truly redundant.
-      7. Do not reduce code size or functionality unless explicitly asked to optimize.
-      8. Provide a text explanation of what you did alongside the tool call.
+      5. Do not reduce code size or functionality unless explicitly asked to optimize.
+      6. Provide a text explanation of what you did alongside the tool call.
       `;
 
         try {
@@ -674,7 +636,7 @@ export default function App() {
                 contents: fullPrompt,
                 config: {
                     systemInstruction,
-                    tools: [{ functionDeclarations: [updateCodeFunction, renameFileFunction, deleteFileFunction] }]
+                    tools: [{ functionDeclarations: [updateCodeFunction] }]
                 }
             });
 
@@ -693,56 +655,18 @@ export default function App() {
             }
 
             let toolOutputText = '';
-            
-            // Map to track filename changes within this single turn to ensure chaining works
-            // e.g. rename 'a.js' -> 'b.js', then update 'b.js'
-            const filenameMap = new Map<string, string>(); // currentName -> nodeId
-            
-            // Initialize map with current state
-            state.nodes.forEach(n => {
-                if (n.type === 'CODE') {
-                    filenameMap.set(n.title, n.id);
-                }
-            });
-
             if (functionCalls.length > 0) {
                 for (const call of functionCalls) {
                     if (call.name === 'updateFile') {
                         const args = call.args as { filename: string, code: string };
-                        const nodeId = filenameMap.get(args.filename);
+                        const targetNode = state.nodes.find(n => n.type === 'CODE' && n.title === args.filename);
 
-                        if (nodeId) {
-                            dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: nodeId, content: args.code } });
+                        if (targetNode) {
+                            dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: targetNode.id, content: args.code } });
                             toolOutputText += `\n[Updated ${args.filename}]`;
-                            handleHighlightNode(nodeId);
+                            handleHighlightNode(targetNode.id);
                         } else {
                             toolOutputText += `\n[Error: Could not find file ${args.filename}]`;
-                        }
-                    } else if (call.name === 'renameFile') {
-                        const args = call.args as { oldFilename: string, newFilename: string };
-                        const nodeId = filenameMap.get(args.oldFilename);
-                        
-                        if (nodeId) {
-                            dispatchLocal({ type: 'UPDATE_NODE_TITLE', payload: { id: nodeId, title: args.newFilename } });
-                            toolOutputText += `\n[Renamed ${args.oldFilename} to ${args.newFilename}]`;
-                            handleHighlightNode(nodeId);
-                            
-                            // Update local map for subsequent calls in this turn
-                            filenameMap.delete(args.oldFilename);
-                            filenameMap.set(args.newFilename, nodeId);
-                        } else {
-                            toolOutputText += `\n[Error: Could not find file ${args.oldFilename} to rename]`;
-                        }
-                    } else if (call.name === 'deleteFile') {
-                        const args = call.args as { filename: string };
-                        const nodeId = filenameMap.get(args.filename);
-                        
-                        if (nodeId) {
-                            dispatchLocal({ type: 'DELETE_NODE', payload: nodeId });
-                            toolOutputText += `\n[Deleted ${args.filename}]`;
-                            filenameMap.delete(args.filename);
-                        } else {
-                            toolOutputText += `\n[Error: Could not find file ${args.filename} to delete]`;
                         }
                     }
                 }
