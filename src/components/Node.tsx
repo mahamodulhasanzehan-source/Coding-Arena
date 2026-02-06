@@ -207,7 +207,9 @@ export const Node: React.FC<NodeProps> = ({
   };
 
   const handleResizePointerDown = (e: React.PointerEvent) => {
+    // Prevent resizing if Minimized
     if (data.isLoading || data.isMinimized || isMaximized) return; 
+    
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     setIsResizing(true);

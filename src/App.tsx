@@ -29,12 +29,12 @@ const initialState: GraphState = {
 
 // Helper to calculate width of a minimized node based on title
 const calculateMinimizedWidth = (title: string): number => {
-    // Approx width calculations based on font and padding
-    // Base chrome (icons, grips, buttons) approx 140px
-    const baseWidth = 140; 
-    const charWidth = 9; // Approx 9px per char for text-sm font-semibold
-    const width = baseWidth + (title.length * charWidth);
-    return Math.max(250, Math.min(600, width));
+    // Base chrome (icons, grips, buttons) approx 140px + padding
+    const BASE_WIDTH = 150; 
+    const CHAR_WIDTH = 9; // Approx 9px per char for text-sm font-semibold
+    const width = BASE_WIDTH + (title.length * CHAR_WIDTH);
+    // Min width 200 to accommodate basic icons, Max reasonable width
+    return Math.max(200, Math.min(600, width));
 };
 
 function graphReducer(state: GraphState, action: Action): GraphState {
@@ -77,13 +77,14 @@ function graphReducer(state: GraphState, action: Action): GraphState {
             if (n.isMinimized) {
                 const oldWidth = n.size.width;
                 const newWidth = calculateMinimizedWidth(newTitle);
-                const center = n.position.x + oldWidth / 2;
+                const widthDiff = oldWidth - newWidth;
                 
                 return { 
                     ...n, 
                     title: newTitle,
                     size: { ...n.size, width: newWidth },
-                    position: { x: center - newWidth / 2, y: n.position.y }
+                    // Shift X by half the difference to maintain center alignment
+                    position: { x: n.position.x + widthDiff / 2, y: n.position.y }
                 };
             }
             
@@ -233,27 +234,36 @@ function graphReducer(state: GraphState, action: Action): GraphState {
             nodes: state.nodes.map(n => {
                 if (n.id !== action.payload.id) return n;
 
-                const isMinimizing = !n.isMinimized;
-                const center = n.position.x + n.size.width / 2;
+                const shouldMinimize = !n.isMinimized;
+                
+                if (shouldMinimize) {
+                     // Minimizing: Calculate width and center
+                     const oldWidth = n.size.width;
+                     const newWidth = calculateMinimizedWidth(n.title);
+                     const widthDiff = oldWidth - newWidth;
 
-                if (isMinimizing) {
-                     const minWidth = calculateMinimizedWidth(n.title);
                      return {
                          ...n,
                          isMinimized: true,
                          expandedSize: n.size, // Save current full size
-                         size: { width: minWidth, height: 40 },
-                         position: { x: center - minWidth / 2, y: n.position.y }
+                         size: { width: newWidth, height: 40 },
+                         // Adjust position to center
+                         position: { x: n.position.x + widthDiff / 2, y: n.position.y }
                      };
                 } else {
                      // Maximizing (Un-minimizing)
-                     const restoredSize = n.expandedSize || { width: 450, height: 300 }; // Fallback default
+                     const restoredSize = n.expandedSize || NODE_DEFAULTS[n.type]; // Fallback default
+                     const oldWidth = n.size.width;
+                     const newWidth = restoredSize.width;
+                     const widthDiff = oldWidth - newWidth;
+
                      return {
                          ...n,
                          isMinimized: false,
                          expandedSize: undefined,
                          size: restoredSize,
-                         position: { x: center - restoredSize.width / 2, y: n.position.y }
+                         // Adjust position to center
+                         position: { x: n.position.x + widthDiff / 2, y: n.position.y }
                      };
                 }
             })
