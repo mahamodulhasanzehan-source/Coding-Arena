@@ -29,12 +29,13 @@ const initialState: GraphState = {
 
 // Helper to calculate width of a minimized node based on title
 const calculateMinimizedWidth = (title: string): number => {
-    // Base chrome (icons, grips, buttons) approx 140px + padding
-    const BASE_WIDTH = 150; 
-    const CHAR_WIDTH = 9; // Approx 9px per char for text-sm font-semibold
-    const width = BASE_WIDTH + (title.length * CHAR_WIDTH);
-    // Min width 200 to accommodate basic icons, Max reasonable width
-    return Math.max(200, Math.min(600, width));
+    // Tighter calculation for "bare minimum" width
+    // Chrome (Buttons + Icons + Padding) is approx 125px
+    const BASE_CHROME = 125; 
+    const CHAR_WIDTH = 8; // Narrower char width estimate
+    const width = BASE_CHROME + (title.length * CHAR_WIDTH);
+    // Lower floor to 160px (was 200px) to accommodate short names like 'db.js' without excess space
+    return Math.max(160, Math.min(500, width));
 };
 
 function graphReducer(state: GraphState, action: Action): GraphState {
