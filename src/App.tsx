@@ -11,8 +11,7 @@ import { compilePreview, calculatePortPosition, getRelatedNodes, getAllConnected
 import { Trash2, Menu, Cloud, CloudOff, UploadCloud, Users, Download, Search } from 'lucide-react';
 import Prism from 'prismjs';
 import { GoogleGenAI, FunctionDeclaration, Type } from "@google/genai";
-import { signIn, db } from './firebase';
-import { doc, getDoc, setDoc, onSnapshot, collection, deleteDoc, QuerySnapshot, DocumentData } from 'firebase/firestore';
+import { signIn } from './firebase'; // Local mock
 import JSZip from 'jszip';
 
 const initialState: GraphState = {
@@ -204,7 +203,6 @@ function graphReducer(state: GraphState, action: Action): GraphState {
   }
 }
 
-// ... (Gemini Tool Definitions) ...
 const updateCodeFunction: FunctionDeclaration = {
     name: 'updateFile',
     description: 'Create or Update a file. If the file does not exist, it will be created. Use this to write code, split code into new files, or make changes. ALWAYS provide the FULL content.',
@@ -361,91 +359,45 @@ export default function App() {
 
   useEffect(() => {
     const init = async () => {
-      try {
-        setSyncStatus('saving'); 
-        const user = await signIn();
-        setUserUid(user.uid);
-        
-        const docRef = doc(db, 'nodecode_projects', 'global_project_room'); 
-        
-        const unsubscribeProject = onSnapshot(docRef, (docSnap) => {
-             if (docSnap.metadata.hasPendingWrites) return;
-
-             if (docSnap.exists()) {
-                const data = docSnap.data() as { state: string } | undefined;
-                if (data && data.state) {
-                    const loadedState = JSON.parse(data.state);
-                    dispatch({ 
-                        type: 'LOAD_STATE', 
-                        payload: { 
-                            nodes: loadedState.nodes, 
-                            connections: loadedState.connections,
-                            runningPreviewIds: loadedState.runningPreviewIds
-                        } 
-                    });
-                }
-             } else {
-                 const codeDefaults = NODE_DEFAULTS.CODE;
-                 const previewDefaults = NODE_DEFAULTS.PREVIEW;
-                 const defaultNodes: NodeData[] = [
-                    { id: 'node-1', type: 'CODE', position: { x: 100, y: 100 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'index.html', content: '<h1>Hello World</h1>\n<link href="style.css" rel="stylesheet">\n<script src="app.js"></script>', autoHeight: true },
-                    { id: 'node-2', type: 'CODE', position: { x: 100, y: 450 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'style.css', content: 'body { background: #222; color: #fff; font-family: sans-serif; }', autoHeight: true },
-                    { id: 'node-3', type: 'PREVIEW', position: { x: 600, y: 100 }, size: { width: previewDefaults.width, height: previewDefaults.height }, title: previewDefaults.title, content: previewDefaults.content }
-                 ];
-                 const defaultState = {
-                    nodes: defaultNodes,
-                    connections: [],
-                    pan: { x: 0, y: 0 },
-                    zoom: 1
-                 };
-                 setDoc(docRef, { 
-                     state: JSON.stringify(defaultState),
-                     updatedAt: new Date().toISOString()
-                 });
-                 dispatch({ type: 'LOAD_STATE', payload: defaultState });
-             }
-             setSyncStatus('synced');
-        }, (error) => {
-            console.error("Project sync error:", error);
-            setSyncStatus('error');
-        });
-
-        const presenceRef = collection(db, 'nodecode_projects', 'global_project_room', 'presence');
-        const unsubscribePresence = onSnapshot(presenceRef, (snapshot: QuerySnapshot<DocumentData>) => {
-            const activeUsers: UserPresence[] = [];
-            const now = Date.now();
-            snapshot.forEach(doc => {
-                const data = doc.data() as UserPresence;
-                if (data.id !== sessionId && (now - data.lastActive < 30000)) { 
-                    activeUsers.push(data);
-                }
+      setSyncStatus('saving');
+      
+      const saved = localStorage.getItem('nodecode_project_local');
+      if (saved) {
+          try {
+             const loadedState = JSON.parse(saved);
+             dispatch({ 
+                type: 'LOAD_STATE', 
+                payload: { 
+                    nodes: loadedState.nodes, 
+                    connections: loadedState.connections,
+                    runningPreviewIds: loadedState.runningPreviewIds
+                } 
             });
-            dispatch({ type: 'UPDATE_COLLABORATORS', payload: activeUsers });
-        });
-
-        return () => {
-            unsubscribeProject();
-            unsubscribePresence();
-            deleteDoc(doc(db, 'nodecode_projects', 'global_project_room', 'presence', sessionId));
-        };
-
-      } catch (err) {
-        console.error("Failed to connect", err);
-        setSyncStatus('error');
+          } catch(e) { console.error(e); }
+      } else {
+         // Load defaults
+         const codeDefaults = NODE_DEFAULTS.CODE;
+         const previewDefaults = NODE_DEFAULTS.PREVIEW;
+         const defaultNodes: NodeData[] = [
+            { id: 'node-1', type: 'CODE', position: { x: 100, y: 100 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'index.html', content: '<h1>Hello World</h1>\n<link href="style.css" rel="stylesheet">\n<script src="app.js"></script>', autoHeight: true },
+            { id: 'node-2', type: 'CODE', position: { x: 100, y: 450 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'style.css', content: 'body { background: #222; color: #fff; font-family: sans-serif; }', autoHeight: true },
+            { id: 'node-3', type: 'PREVIEW', position: { x: 600, y: 100 }, size: { width: previewDefaults.width, height: previewDefaults.height }, title: previewDefaults.title, content: previewDefaults.content }
+         ];
+         dispatch({ type: 'LOAD_STATE', payload: { nodes: defaultNodes, connections: [], pan: {x:0, y:0}, zoom: 1 } });
       }
+      setSyncStatus('synced');
+      setUserUid('local-user');
     };
 
     init();
-  }, [sessionId]);
+  }, []); // Remove sessionId dep as we don't use it for loading
 
   useEffect(() => {
     if (!userUid) return;
     
     if (isLocalChange.current) {
         setSyncStatus('saving');
-        const saveData = setTimeout(async () => {
-          try {
-             const docRef = doc(db, 'nodecode_projects', 'global_project_room');
+        const saveData = setTimeout(() => {
              const stateToSave = {
                 nodes: state.nodes, 
                 connections: state.connections,
@@ -453,16 +405,9 @@ export default function App() {
                 pan: {x:0, y:0}, 
                 zoom: 1
              };
-             await setDoc(docRef, { 
-                 state: JSON.stringify(stateToSave),
-                 updatedAt: new Date().toISOString()
-             });
+             localStorage.setItem('nodecode_project_local', JSON.stringify(stateToSave));
              setSyncStatus('synced');
              isLocalChange.current = false; 
-          } catch (e) {
-              console.error("Save failed", e);
-              setSyncStatus('error');
-          }
         }, 800); 
 
         return () => clearTimeout(saveData);
@@ -1411,32 +1356,6 @@ export default function App() {
     if (isPanning) {
         dispatch({ type: 'PAN', payload: { x: state.pan.x + e.movementX, y: state.pan.y + e.movementY } });
     }
-
-    // Presence Logic
-    if (userUid && containerRef.current) {
-        const now = Date.now();
-        if (now - throttleRef.current > 60) { 
-            throttleRef.current = now;
-            const rect = containerRef.current.getBoundingClientRect();
-            const x = (e.clientX - rect.left - state.pan.x) / state.zoom;
-            const y = (e.clientY - rect.top - state.pan.y) / state.zoom;
-
-            const draggingNodeId = Object.keys(state.nodeInteractions).find(id => state.nodeInteractions[id] === 'drag');
-            const draggingPosition = draggingNodeId ? state.nodes.find(n => n.id === draggingNodeId)?.position : undefined;
-            const editingNodeId = Object.keys(state.nodeInteractions).find(id => state.nodeInteractions[id] === 'edit');
-
-            setDoc(doc(db, 'nodecode_projects', 'global_project_room', 'presence', sessionId), {
-                id: sessionId,
-                x,
-                y,
-                color: userColor,
-                lastActive: now,
-                draggingNodeId: draggingNodeId || null,
-                draggingPosition: draggingPosition || null,
-                editingNodeId: editingNodeId || null
-            }, { merge: true });
-        }
-    }
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
@@ -1684,7 +1603,7 @@ export default function App() {
       <div className="absolute top-4 left-4 z-50 pointer-events-none select-none flex items-center gap-3">
         <div>
             <h1 className="text-xl font-bold tracking-tight text-white drop-shadow-md">Coding Arena</h1>
-            <p className="text-xs font-medium text-zinc-500">Global Collaborative Session</p>
+            <p className="text-xs font-medium text-zinc-500">Local Session</p>
         </div>
         <div className="flex items-center gap-1.5 px-3 py-1 bg-zinc-900/80 border border-zinc-800 rounded-full backdrop-blur-sm pointer-events-auto" title="Cloud Sync Status">
             {syncStatus === 'synced' && <Cloud size={14} className="text-emerald-500" />}
@@ -1695,17 +1614,11 @@ export default function App() {
                 {syncStatus === 'synced' ? 'Live' : syncStatus === 'saving' ? 'Syncing...' : 'Offline'}
             </span>
         </div>
-        <div className="flex items-center gap-1.5 px-3 py-1 bg-zinc-900/80 border border-zinc-800 rounded-full backdrop-blur-sm">
-             <Users size={14} className="text-indigo-400" />
-             <span className="text-[10px] font-bold text-zinc-400">
-                 {state.collaborators.length + 1} Online
-             </span>
-        </div>
       </div>
 
       <div className="absolute top-4 right-4 z-50 flex flex-col gap-2 items-end">
         <button 
-            onClick={() => { if(confirm('Reset?')) { localStorage.removeItem('coding-arena-v1'); window.location.reload(); } }}
+            onClick={() => { if(confirm('Reset?')) { localStorage.removeItem('nodecode_project_local'); window.location.reload(); } }}
             className="px-3 py-1.5 bg-zinc-900/80 hover:bg-red-900/50 text-xs font-medium text-zinc-400 border border-zinc-800 rounded flex items-center gap-2 transition-colors pointer-events-auto cursor-pointer"
             onPointerDown={(e) => e.stopPropagation()}
         >
@@ -1779,19 +1692,6 @@ export default function App() {
             }}
         >
             <div className="pointer-events-none w-full h-full relative">
-                {/* Collaborator Cursors Layer */}
-                <div className="absolute inset-0 z-[999] pointer-events-none overflow-visible">
-                    {state.collaborators.map(user => (
-                        <CollaboratorCursor 
-                            key={user.id} 
-                            x={user.x} 
-                            y={user.y} 
-                            color={user.color} 
-                            name={''} 
-                        />
-                    ))}
-                </div>
-
                 {/* Selection Box */}
                 {selectionBox && (
                     <div 
@@ -1837,15 +1737,6 @@ export default function App() {
                          logs = sources.flatMap(sid => state.logs[sid] || []).sort((a, b) => a.timestamp - b.timestamp);
                     }
                     
-                    const activeCollaborator = state.collaborators.find(c => 
-                        (c.draggingNodeId === node.id || c.editingNodeId === node.id) && c.id !== sessionId
-                    );
-                    const collabInfo = activeCollaborator ? {
-                        name: '', 
-                        color: activeCollaborator.color,
-                        action: (activeCollaborator.editingNodeId === node.id ? 'editing' : 'dragging') as 'editing' | 'dragging'
-                    } : undefined;
-
                     return (
                         <div key={node.id} onContextMenu={(e) => { e.stopPropagation(); handleContextMenu(e, node.id); }}>
                             <Node
@@ -1877,7 +1768,6 @@ export default function App() {
                                 onToggleMinimize={(id) => dispatchLocal({ type: 'TOGGLE_MINIMIZE', payload: { id } })}
                                 onToggleMaximize={(id) => setMaximizedNodeId(maximizedNodeId === id ? null : id)}
                                 onSelect={handleToggleSelectNode}
-                                collaboratorInfo={collabInfo}
                                 logs={logs}
                             >
                             </Node>
