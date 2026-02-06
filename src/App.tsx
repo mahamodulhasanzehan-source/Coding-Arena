@@ -1,4 +1,3 @@
-
 import React, { useReducer, useState, useRef, useEffect, useMemo } from 'react';
 import { Node } from './components/Node';
 import { Wire } from './components/Wire';
@@ -684,7 +683,7 @@ export default function App() {
 
         const fileContext = contextFiles.map(n => `Filename: ${n!.title}\nContent:\n${n!.content}`).join('\n\n');
 
-        const systemInstruction = `You are an expert coding architect in NodeCode Studio.
+        const systemInstruction = `You are an expert coding architect in Coding Arena.
       You control a visual node-based programming environment.
       
       CAPABILITIES:
@@ -700,6 +699,7 @@ export default function App() {
       - When you create a file, you MUST write its initial content immediately using 'updateFile' or 'createFile' content arg.
       - Connect files automatically (e.g. connect game.js to index.html).
       - Execute multiple tools in one turn to build complete systems instantly.
+      - NEVER write code inside the chat response message. The chat response is for text only. Code goes into tools.
       
       Current Context Files:
       ${contextFiles.length > 0 ? contextFiles.map(f => f?.title).join(', ') : 'No files selected.'}
@@ -885,25 +885,32 @@ export default function App() {
         const previewNodeId = connectionsToTerminal[0].sourceNodeId;
         const connectionsToPreview = state.connections.filter(c => c.targetNodeId === previewNodeId);
         
-        // Find sources
-        const sources = connectionsToPreview.map(c => state.nodes.find(n => n.id === c.sourceNodeId)).filter(n => n && n.type === 'CODE');
+        // Find sources (Recursively via Preview Dependencies)
+        // We use getRelatedNodes starting from the preview input
+        const sources: NodeData[] = [];
+        connectionsToPreview.forEach(c => {
+            const deps = getRelatedNodes(c.sourceNodeId, state.nodes, state.connections, 'CODE');
+            sources.push(...deps);
+        });
         
-        if (sources.length === 0) return;
-
-        const fileContext = sources.map(n => `Filename: ${n!.title}\nContent:\n${n!.content}`).join('\n\n');
+        // Deduplicate
+        const uniqueSources = Array.from(new Set(sources.map(n => n.id))).map(id => state.nodes.find(n => n.id === id)!);
         
-        // Use a chat node to display the fix or create one? 
-        // For simplicity, we'll try to update the code directly or use an existing chat node.
-        // Let's create a temporary prompt in the background using the same AI logic.
+        if (uniqueSources.length === 0) return;
 
-        // We'll highlight the source file that likely has the error
-        sources.forEach(s => handleHighlightNode(s!.id));
+        const fileContext = uniqueSources.map(n => `Filename: ${n!.title}\nContent:\n${n!.content}`).join('\n\n');
+        
+        // We'll highlight the source files that likely have the error
+        uniqueSources.forEach(s => {
+             handleHighlightNode(s!.id);
+             dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: s.id, isLoading: true } });
+        });
 
         const apiKey = process.env.API_KEY;
         if (!apiKey) return;
 
         const ai = new GoogleGenAI({ apiKey });
-        const systemInstruction = `You are an automated error fixer.
+        const systemInstruction = `You are an automated error fixer for Coding Arena.
         Analyze the error message and the provided code.
         Use 'updateFile' to fix the error in the appropriate file.
         If you cannot fix it, do nothing.
@@ -932,6 +939,9 @@ export default function App() {
                  }
              }
         } catch (e) { console.error(e); }
+        finally {
+             uniqueSources.forEach(s => dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: s.id, isLoading: false } }));
+        }
     };
 
 
@@ -1347,7 +1357,7 @@ export default function App() {
         >
             <div className="absolute top-4 left-4 z-50 pointer-events-none select-none flex items-center gap-3">
                 <div>
-                    <h1 className="text-xl font-bold tracking-tight text-white drop-shadow-md">NodeCode Studio</h1>
+                    <h1 className="text-xl font-bold tracking-tight text-white drop-shadow-md">Coding Arena</h1>
                     <p className="text-xs text-zinc-500">Global Collaborative Session</p>
                 </div>
                 <div className="flex items-center gap-1.5 px-3 py-1 bg-zinc-900/80 border border-zinc-800 rounded-full backdrop-blur-sm pointer-events-auto" title="Cloud Sync Status">

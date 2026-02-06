@@ -1,4 +1,3 @@
-
 import React, { useRef, useEffect, useState } from 'react';
 import { NodeData, Position, Size } from '../types';
 import { getPortsForNode } from '../constants';
@@ -180,21 +179,6 @@ export const Node: React.FC<NodeProps> = ({
       
       const newWidth = Math.max(250, initialSizeRef.current.width + dx);
       let newHeight = Math.max(150, initialSizeRef.current.height + dy);
-
-      // RESTRICTION: Code modules cannot be longer than their content
-      if (data.type === 'CODE' && contentHeightRef.current > 0) {
-          const HEADER_HEIGHT = 40;
-          const PADDING = 20; 
-          const maxAllowedHeight = Math.max(150, contentHeightRef.current + HEADER_HEIGHT + PADDING);
-          
-          // Clamp the height if user tries to resize past content height, 
-          // BUT only enforce this if we are trying to grow *larger* than content.
-          // We allow shrinking (which enables scrollbars).
-          // Actually, for "AutoHeight", we force it. For manual, we allow scrollbars.
-          
-          // Let's just allow free resizing for manual mode, enabling scrollbars.
-          // No restriction here.
-      }
 
       onResize(data.id, {
         width: newWidth,
@@ -733,7 +717,7 @@ export const Node: React.FC<NodeProps> = ({
                             {log.type === 'error' && onFixError && (
                                 <button
                                     onClick={() => onFixError(data.id, log.message)}
-                                    className="opacity-0 group-hover:opacity-100 p-1 bg-zinc-800 hover:bg-blue-600 text-zinc-400 hover:text-white rounded ml-2 transition-all flex items-center gap-1 shrink-0"
+                                    className="opacity-0 group-hover:opacity-100 p-1 bg-zinc-800 hover:bg-blue-600 text-zinc-400 hover:text-white rounded ml-2 transition-all flex items-center gap-1 shrink-0 cursor-pointer"
                                     title="Fix with AI"
                                     onPointerDown={(e) => e.stopPropagation()}
                                 >

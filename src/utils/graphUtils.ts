@@ -1,4 +1,3 @@
-
 import { Connection, NodeData, NodeType, Port } from '../types';
 import { getPortsForNode } from '../constants';
 
@@ -61,7 +60,8 @@ export const getAllConnectedSources = (
         .filter((n): n is NodeData => !!n);
 };
 
-// Find all nodes in the connected component of the startNode
+// Find all nodes in the connected component of the startNode (Undirected Traversal)
+// This is crucial for "Scene 2": If I edit CSS, the AI needs to know about the connected HTML.
 export const getRelatedNodes = (
   startNodeId: string,
   nodes: NodeData[],
@@ -84,7 +84,7 @@ export const getRelatedNodes = (
        }
     }
 
-    // Find all neighbors
+    // Find all neighbors (Input OR Output)
     const neighbors = connections
       .filter(c => c.sourceNodeId === currentId || c.targetNodeId === currentId)
       .map(c => c.sourceNodeId === currentId ? c.targetNodeId : c.sourceNodeId);
@@ -149,7 +149,6 @@ export const compilePreview = (
       .filter(n => n.id !== rootNode.id); 
 
   let finalContent = rootNode.content;
-  const connectedFilenames = new Set(uniqueDeps.map(d => d.title));
   const missingDependencies: string[] = [];
 
   // Wrap content based on STRICT file extension
@@ -164,7 +163,7 @@ export const compilePreview = (
       // CSS: Wrap in style
       finalContent = `<style>\n${finalContent}\n</style>`;
   } else {
-      // Everything else (txt, md, no extension): Render as plain text
+      // Everything else: Render as plain text
       const escaped = finalContent
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")
