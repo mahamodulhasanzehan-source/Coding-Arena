@@ -27,7 +27,8 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       rollupOptions: {
-        external: ['markdown-to-jsx']
+        // markdown-to-jsx removed from external to ensure it is bundled with the local React version
+        external: []
       }
     }
   }
