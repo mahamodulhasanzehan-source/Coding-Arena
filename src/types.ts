@@ -29,8 +29,6 @@ export interface NodeData {
   contextNodeIds?: string[]; // IDs of files selected for AI context
   isLoading?: boolean; // For AI loading state
   sharedState?: any; // For multiplayer state synchronization
-  isMinimized?: boolean; // Minimization state
-  expandedSize?: Size; // Store original size when minimized
 }
 
 export interface Port {
@@ -105,5 +103,4 @@ export type Action =
   | { type: 'LOAD_STATE'; payload: Partial<GraphState> }
   | { type: 'UPDATE_COLLABORATORS'; payload: UserPresence[] }
   | { type: 'SET_NODE_INTERACTION'; payload: { nodeId: string; type: 'drag' | 'edit' | null } }
-  | { type: 'UPDATE_NODE_SHARED_STATE'; payload: { nodeId: string; state: any } }
-  | { type: 'TOGGLE_MINIMIZE'; payload: string };
+  | { type: 'UPDATE_NODE_SHARED_STATE'; payload: { nodeId: string; state: any } };
