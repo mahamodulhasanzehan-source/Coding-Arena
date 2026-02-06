@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Code2, Monitor, TerminalSquare, Trash2, Copy, Unplug, Package, Image as ImageIcon, Eraser, AlignHorizontalJustifyCenter, AlignVerticalJustifyCenter, StretchHorizontal, StretchVertical, Minimize2, StickyNote } from 'lucide-react';
+import { Code2, Monitor, TerminalSquare, Trash2, Copy, Unplug, Package, Image as ImageIcon, Eraser, AlignHorizontalJustifyCenter, AlignVerticalJustifyCenter, StretchHorizontal, StretchVertical, Minimize2, StickyNote, Lock, Unlock } from 'lucide-react';
 import { NodeType, Position } from '../types';
 
 interface ContextMenuProps {
@@ -9,6 +9,7 @@ interface ContextMenuProps {
   targetNode?: any; // To check if it's an image node
   targetPortId?: string; 
   selectedNodeIds?: string[];
+  currentUser?: { uid: string; displayName: string } | null;
   onAdd: (type: NodeType) => void;
   onDeleteNode: (id: string) => void;
   onDuplicateNode: (id: string) => void;
@@ -17,6 +18,7 @@ interface ContextMenuProps {
   onAlign?: (type: 'horizontal' | 'vertical') => void;
   onDistribute?: (type: 'horizontal' | 'vertical') => void;
   onCompact?: (type: 'horizontal' | 'vertical') => void;
+  onToggleLock?: (id: string) => void;
   canAlignHorizontal?: boolean;
   canAlignVertical?: boolean;
   canDistributeHorizontal?: boolean;
@@ -32,6 +34,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   targetNode, 
   targetPortId,
   selectedNodeIds = [],
+  currentUser,
   onAdd, 
   onDeleteNode,
   onDuplicateNode,
@@ -40,6 +43,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onAlign,
   onDistribute,
   onCompact,
+  onToggleLock,
   canAlignHorizontal = false,
   canAlignVertical = false,
   canDistributeHorizontal = false,
@@ -71,6 +75,15 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   // Node Context Menu
   if (targetNodeId) {
     const isMultiSelect = selectedNodeIds.length > 1 && selectedNodeIds.includes(targetNodeId);
+    
+    // Lock Status Logic
+    const isLocked = !!targetNode?.lockedBy;
+    const isLockedByMe = currentUser && targetNode?.lockedBy?.uid === currentUser.uid;
+    
+    // Can Lock: Signed in AND Not Locked
+    const showLock = currentUser && !isLocked;
+    // Can Unlock: Signed in AND Locked by Me
+    const showUnlock = currentUser && isLockedByMe;
 
     return (
       <div 
@@ -82,6 +95,30 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           Node Actions
         </div>
         
+        {/* Lock/Unlock Actions */}
+        {(showLock || showUnlock) && onToggleLock && (
+            <div className="border-b border-panelBorder pb-1 mb-1">
+                {showLock && (
+                    <button
+                        onClick={() => onToggleLock(targetNodeId)}
+                        className="w-full text-left px-4 py-2 text-sm font-medium text-amber-500 hover:bg-zinc-800 transition-colors flex items-center gap-2"
+                    >
+                        <Lock size={14} />
+                        Lock {isMultiSelect ? 'Selected' : ''}
+                    </button>
+                )}
+                {showUnlock && (
+                    <button
+                        onClick={() => onToggleLock(targetNodeId)}
+                        className="w-full text-left px-4 py-2 text-sm font-medium text-emerald-500 hover:bg-zinc-800 transition-colors flex items-center gap-2"
+                    >
+                        <Unlock size={14} />
+                        Unlock {isMultiSelect ? 'Selected' : ''}
+                    </button>
+                )}
+            </div>
+        )}
+
         {isMultiSelect && onAlign && onDistribute && onCompact && (
             <>
                 <button

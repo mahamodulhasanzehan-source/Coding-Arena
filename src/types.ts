@@ -30,6 +30,10 @@ export interface NodeData {
   isLoading?: boolean; // For AI loading state
   sharedState?: any; // For multiplayer state synchronization
   isMinimized?: boolean; // Visual state for minimization
+  lockedBy?: { // NEW: Locking mechanism
+      uid: string;
+      displayName: string;
+  }; 
 }
 
 export interface Port {
@@ -107,4 +111,5 @@ export type Action =
   | { type: 'SET_NODE_INTERACTION'; payload: { nodeId: string; type: 'drag' | 'edit' | null } }
   | { type: 'UPDATE_NODE_SHARED_STATE'; payload: { nodeId: string; state: any } }
   | { type: 'TOGGLE_MINIMIZE'; payload: { id: string } }
-  | { type: 'SET_SELECTED_NODES'; payload: string[] };
+  | { type: 'SET_SELECTED_NODES'; payload: string[] }
+  | { type: 'LOCK_NODES'; payload: { ids: string[]; user: { uid: string; displayName: string } | undefined } };
