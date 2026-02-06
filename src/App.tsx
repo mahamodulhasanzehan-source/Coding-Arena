@@ -1,4 +1,3 @@
-
 import React, { useReducer, useState, useRef, useEffect, useMemo } from 'react';
 import { Node } from './components/Node';
 import { Wire } from './components/Wire';
@@ -207,12 +206,12 @@ function graphReducer(state: GraphState, action: Action): GraphState {
 // ... (Gemini Tool Definitions) ...
 const updateCodeFunction: FunctionDeclaration = {
     name: 'updateFile',
-    description: 'Update the code content of a specific file. Use this for CHAT responses or simple edits.',
+    description: 'Update the code content of a specific file. Use this to write code or make changes. ALWAYS provide the FULL content of the file, not just the diff.',
     parameters: {
         type: Type.OBJECT,
         properties: {
-            filename: { type: Type.STRING, description: 'The exact name of the file to update.' },
-            code: { type: Type.STRING, description: 'The NEW full content of the file.' }
+            filename: { type: Type.STRING, description: 'The exact name of the file to update (e.g., script.js, index.html).' },
+            code: { type: Type.STRING, description: 'The NEW full content of the file. Do not reduce code size unless optimizing. Maintain existing functionality.' }
         },
         required: ['filename', 'code']
     }
@@ -225,9 +224,49 @@ const getRandomColor = () => {
     return colors[Math.floor(Math.random() * colors.length)];
 };
 
+const cleanAiOutput = (text: string): string => {
+    return text.replace(/^```[\w]*\n/, '').replace(/\n```$/, '');
+};
+
+// Helper for Automatic API Key Switching
+async function performGeminiCall<T>(operation: (ai: GoogleGenAI) => Promise<T>): Promise<T> {
+    const keys = [process.env.API_KEY, process.env.GEMINI_API_KEY_4, process.env.GEMINI_API_KEY_5].filter((k): k is string => !!k && k.length > 0);
+    
+    if (keys.length === 0) throw new Error("No Gemini API Keys configured.");
+
+    let lastError: any;
+
+    for (const apiKey of keys) {
+        try {
+            const ai = new GoogleGenAI({ apiKey });
+            return await operation(ai);
+        } catch (error: any) {
+            lastError = error;
+            // Check for 429 (Too Many Requests) or 503 (Service Unavailable)
+            if (error.status === 429 || error.message?.includes('429') || error.status === 503) {
+                console.warn(`API Key ${apiKey.slice(0,5)}... rate limited or unavailable. Switching...`);
+                continue; // Try next key
+            }
+            throw error; // Other errors should fail immediately
+        }
+    }
+    throw lastError; // All keys failed
+}
+
 export default function App() {
   const [state, dispatch] = useReducer(graphReducer, initialState);
-  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, targetNodeId?: string, targetPortId?: string, targetNode?: NodeData } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ 
+      x: number; 
+      y: number; 
+      targetNodeId?: string; 
+      targetPortId?: string; 
+      targetNode?: NodeData;
+      canAlignHorizontal?: boolean;
+      canAlignVertical?: boolean;
+      canDistributeHorizontal?: boolean;
+      canDistributeVertical?: boolean;
+  } | null>(null);
+
   const [isPanning, setIsPanning] = useState(false);
   const [dragWire, setDragWire] = useState<{ x1: number, y1: number, x2: number, y2: number, startPortId: string, startNodeId: string, isInput: boolean } | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -251,10 +290,21 @@ export default function App() {
   const longPressTimer = useRef<any>(null);
   const touchStartPos = useRef<{ x: number, y: number } | null>(null);
 
-  const activeAiOperations = useRef<Record<string, { id: string }>>({});
-  
   // Use state.nodes for display
-  const displayNodes = state.nodes;
+  const displayNodes = useMemo(() => {
+    return state.nodes.map(node => {
+        const collaborator = state.collaborators.find(c => c.draggingNodeId === node.id && c.id !== sessionId);
+        
+        if (collaborator && collaborator.draggingPosition) {
+            return { 
+                ...node, 
+                position: collaborator.draggingPosition,
+                _remoteDrag: true 
+            };
+        }
+        return node;
+    });
+  }, [state.nodes, state.collaborators, sessionId]);
 
   const dispatchLocal = (action: Action) => {
       if ([
@@ -390,7 +440,6 @@ export default function App() {
 
   // LIVE UPDATE LOOP
   useEffect(() => {
-      // 1. Handle Running Previews
       state.runningPreviewIds.forEach(previewId => {
           const iframe = document.getElementById(`preview-iframe-${previewId}`) as HTMLIFrameElement;
           const node = state.nodes.find(n => n.id === previewId);
@@ -413,19 +462,6 @@ export default function App() {
                }
           }
       });
-
-      // 2. Handle Stopped Previews (Fix desync)
-      const previewNodes = state.nodes.filter(n => n.type === 'PREVIEW');
-      previewNodes.forEach(node => {
-          if (!state.runningPreviewIds.includes(node.id)) {
-              const iframe = document.getElementById(`preview-iframe-${node.id}`) as HTMLIFrameElement;
-              
-              if (iframe && iframe.srcdoc && !iframe.srcdoc.includes("STOPPED")) {
-                  // Only update if it doesn't already show stopped to avoid loop
-              }
-          }
-      });
-
   }, [state.nodes, state.connections, state.runningPreviewIds]);
 
 
@@ -459,6 +495,9 @@ export default function App() {
     return () => window.removeEventListener('message', handleMessage);
   }, [state.nodes]);
 
+  // --- Handlers ---
+
+  // Hoisted Helper Handler to prevent ReferenceError
   const handleHighlightNode = (id: string) => {
       setHighlightedNodeId(id);
       setTimeout(() => {
@@ -466,16 +505,29 @@ export default function App() {
       }, 2000);
   };
 
-  const handleToggleSelection = (id: string) => {
+  const handleStartContextSelection = (nodeId: string) => {
+      const node = state.nodes.find(n => n.id === nodeId);
+      dispatch({ 
+          type: 'SET_SELECTION_MODE', 
+          payload: { 
+              isActive: true, 
+              requestingNodeId: nodeId, 
+              selectedIds: node?.contextNodeIds || [] 
+          } 
+      });
+      setIsSidebarOpen(true);
+  };
+
+  const handleToggleSelection = (nodeId: string) => {
       if (!state.selectionMode?.isActive) return;
       const current = state.selectionMode.selectedIds;
-      const next = current.includes(id) ? current.filter(nid => nid !== id) : [...current, id];
+      const next = current.includes(nodeId) ? current.filter(id => id !== nodeId) : [...current, nodeId];
       dispatch({ type: 'SET_SELECTION_MODE', payload: { ...state.selectionMode, selectedIds: next } });
   };
 
   const handleConfirmSelection = () => {
       if (!state.selectionMode?.isActive) return;
-      dispatchLocal({ 
+      dispatch({ 
           type: 'UPDATE_CONTEXT_NODES', 
           payload: { 
               id: state.selectionMode.requestingNodeId, 
@@ -484,65 +536,6 @@ export default function App() {
       });
       dispatch({ type: 'SET_SELECTION_MODE', payload: { isActive: false } });
       setIsSidebarOpen(false);
-  };
-
-  const handleWheel = (e: React.WheelEvent) => {
-    if ((e.target as HTMLElement).closest('.custom-scrollbar') || (e.target as HTMLElement).closest('.monaco-editor')) return;
-    
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-
-    const worldX = (mouseX - state.pan.x) / state.zoom;
-    const worldY = (mouseY - state.pan.y) / state.zoom;
-
-    const zoomIntensity = 0.001;
-    const newZoom = Math.min(Math.max(0.1, state.zoom - e.deltaY * zoomIntensity), 3);
-
-    const newPanX = mouseX - worldX * newZoom;
-    const newPanY = mouseY - worldY * newZoom;
-
-    if (!isNaN(newZoom) && !isNaN(newPanX) && !isNaN(newPanY)) {
-        dispatch({ type: 'ZOOM', payload: { zoom: newZoom } });
-        dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
-    }
-  };
-
-  const isConnected = (portId: string) => {
-      return state.connections.some(c => c.sourcePortId === portId || c.targetPortId === portId);
-  };
-
-  const handleToggleRun = (id: string) => {
-      const isRunning = state.runningPreviewIds.includes(id);
-      dispatchLocal({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: !isRunning } });
-      
-      if (isRunning) {
-           const iframe = document.getElementById(`preview-iframe-${id}`) as HTMLIFrameElement;
-           if (iframe) {
-               iframe.srcdoc = '<body style="background-color: #000; color: #555; height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; font-family: sans-serif;">STOPPED</body>';
-           }
-           dispatchLocal({ type: 'CLEAR_LOGS', payload: { nodeId: id } });
-      }
-  };
-
-  const handleRefresh = (id: string) => {
-     const iframe = document.getElementById(`preview-iframe-${id}`) as HTMLIFrameElement;
-     if (iframe) {
-          const compiled = compilePreview(id, state.nodes, state.connections, true);
-          iframe.srcdoc = compiled;
-     }
-  };
-
-  const handlePortDown = (e: React.PointerEvent, portId: string, nodeId: string, isInput: boolean) => {
-    e.stopPropagation();
-    e.preventDefault();
-    const node = state.nodes.find(n => n.id === nodeId);
-    if (!node) return;
-    const pos = calculatePortPosition(node, portId, isInput ? 'input' : 'output');
-    setDragWire({ x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y, startPortId: portId, startNodeId: nodeId, isInput });
-    e.currentTarget.setPointerCapture(e.pointerId);
   };
 
   const handleSendMessage = async (nodeId: string, text: string) => {
@@ -563,48 +556,54 @@ export default function App() {
       ${contextFiles.length > 0 ? contextFiles.map(f => f?.title).join(', ') : 'No files selected.'}
       If asked to edit code, you MUST use the 'updateFile' tool with the full content.`;
 
-      const apiKey = process.env.API_KEY; 
-      if (!apiKey) {
-           dispatchLocal({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: 'API Key missing.' } } });
-           dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } });
-           return;
-      }
-
       try {
-          const ai = new GoogleGenAI({ apiKey });
           dispatchLocal({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: '' } } });
 
-          const result = await ai.models.generateContentStream({
-              model: 'gemini-3-flash-preview',
-              contents: [{ role: 'user', parts: [{ text: `Query: ${text}\n\n${fileContext}` }] }],
-              config: {
-                  systemInstruction,
-                  tools: [{ functionDeclarations: [updateCodeFunction] }]
+          await performGeminiCall(async (ai) => {
+              const result = await ai.models.generateContentStream({
+                  model: 'gemini-3-flash-preview',
+                  contents: [{ role: 'user', parts: [{ text: `Query: ${text}\n\n${fileContext}` }] }],
+                  config: {
+                      systemInstruction,
+                      tools: [{ functionDeclarations: [updateCodeFunction] }]
+                  }
+              });
+
+              let fullText = '';
+              const functionCalls: any[] = [];
+
+              for await (const chunk of result) {
+                  if (chunk.text) {
+                      fullText += chunk.text;
+                      dispatchLocal({ type: 'UPDATE_LAST_MESSAGE', payload: { id: nodeId, text: fullText } });
+                  }
+                  if (chunk.functionCalls) {
+                      functionCalls.push(...chunk.functionCalls);
+                  }
+              }
+
+              // Handle Function Calls
+              if (functionCalls.length > 0) {
+                  let toolOutput = '';
+                  for (const call of functionCalls) {
+                      if (call.name === 'updateFile') {
+                          const args = call.args as any;
+                          const target = state.nodes.find(n => n.title === args.filename && n.type === 'CODE');
+                          if (target) {
+                              dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: target.id, content: args.code } });
+                              toolOutput += `\n[Updated ${args.filename}]`;
+                              handleHighlightNode(target.id);
+                          } else {
+                              toolOutput += `\n[Error: ${args.filename} not found]`;
+                          }
+                      }
+                  }
+                  if (toolOutput) {
+                      dispatchLocal({ type: 'UPDATE_LAST_MESSAGE', payload: { id: nodeId, text: fullText + toolOutput } });
+                  }
               }
           });
 
-          let fullText = '';
-          
-          for await (const chunk of result) {
-              if (chunk.text) {
-                  fullText += chunk.text;
-                  dispatchLocal({ type: 'UPDATE_LAST_MESSAGE', payload: { id: nodeId, text: fullText } });
-              }
-              if (chunk.functionCalls) {
-                   for (const call of chunk.functionCalls) {
-                       if (call.name === 'updateFile') {
-                           const args = call.args as any;
-                           const target = state.nodes.find(n => n.title === args.filename && n.type === 'CODE');
-                           if (target) {
-                               dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: target.id, content: args.code } });
-                               fullText += `\n[Updated ${args.filename}]`;
-                               dispatchLocal({ type: 'UPDATE_LAST_MESSAGE', payload: { id: nodeId, text: fullText } });
-                               handleHighlightNode(target.id);
-                           }
-                       }
-                   }
-              }
-          }
       } catch (error: any) {
           dispatchLocal({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: `Error: ${error.message}` } } });
       } finally {
@@ -612,56 +611,101 @@ export default function App() {
       }
   };
 
-  const handleStartContextSelection = (nodeId: string) => {
-      const node = state.nodes.find(n => n.id === nodeId);
-      dispatch({ 
-          type: 'SET_SELECTION_MODE', 
-          payload: { 
-              isActive: true, 
-              requestingNodeId: nodeId, 
-              selectedIds: node?.contextNodeIds || [] 
-          } 
-      });
-      setIsSidebarOpen(true);
-  };
-
+  // --- Multi-File Vibe Coding Logic ---
   const handleAiGenerate = async (nodeId: string, action: 'optimize' | 'prompt', promptText?: string) => {
-      const node = state.nodes.find(n => n.id === nodeId);
-      if (!node || node.type !== 'CODE') return;
+      const startNode = state.nodes.find(n => n.id === nodeId);
+      if (!startNode || startNode.type !== 'CODE') return;
 
-      dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: true } });
+      // 1. Identify Cluster: Find all connected code nodes
+      const relatedNodes = getRelatedNodes(nodeId, state.nodes, state.connections);
+      const codeCluster = relatedNodes.filter(n => n.type === 'CODE');
+      
+      // Fallback: If no connections, just use the single node
+      const targetNodes = codeCluster.length > 0 ? codeCluster : [startNode];
+
+      // 2. Set Loading for ALL nodes in cluster (visual feedback)
+      targetNodes.forEach(n => dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: n.id, isLoading: true } }));
 
       try {
-          const apiKey = process.env.API_KEY; 
-          if (!apiKey) throw new Error('API Key missing');
-
-          const ai = new GoogleGenAI({ apiKey });
-          const systemInstruction = action === 'optimize' 
-            ? "Optimize the code. Return ONLY the full optimized code." 
-            : "Modify the code based on the request. Return ONLY the full code.";
+          const fileContext = targetNodes.map(n => `Filename: ${n.title}\nContent:\n${n.content}`).join('\n\n');
           
-          const prompt = action === 'optimize' ? node.content : `${promptText}\n\nCode:\n${node.content}`;
+          const systemInstruction = `You are an expert developer.
+          You are working on a project with multiple files.
+          You can edit ANY file in the project using the 'updateFile' tool.
+          Always provide the FULL new content for the file in 'updateFile'.
+          Do not use placeholders like // ... rest of code.
+          
+          Project Files:
+          ${fileContext}
+          `;
 
-          const response = await ai.models.generateContent({
-              model: 'gemini-3-flash-preview',
-              contents: prompt,
-              config: { systemInstruction }
+          let userPrompt = '';
+          if (action === 'optimize') {
+               userPrompt = `Optimize the file ${startNode.title}.`;
+          } else {
+               userPrompt = `Request: ${promptText}\n\n(Focus on ${startNode.title} but update others if needed)`;
+          }
+
+          // 3. API Call with Fallback
+          await performGeminiCall(async (ai) => {
+               const result = await ai.models.generateContent({
+                  model: 'gemini-3-flash-preview',
+                  contents: userPrompt,
+                  config: { 
+                      systemInstruction,
+                      tools: [{ functionDeclarations: [updateCodeFunction] }]
+                  }
+               });
+               
+               // 4. Process Response
+               const functionCalls = result.functionCalls;
+               
+               if (functionCalls && functionCalls.length > 0) {
+                   for (const call of functionCalls) {
+                       if (call.name === 'updateFile') {
+                           const args = call.args as any;
+                           const target = state.nodes.find(n => n.type === 'CODE' && n.title === args.filename);
+                           if (target) {
+                               dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: target.id, content: args.code } });
+                               handleHighlightNode(target.id);
+                           }
+                       }
+                   }
+               } else if (result.text) {
+                   // Fallback for text-only response (assume it's for the start node if it looks like code)
+                   const clean = cleanAiOutput(result.text);
+                   dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: nodeId, content: clean } });
+                   handleHighlightNode(nodeId);
+               }
           });
 
-          const clean = response.text?.replace(/^```[\w]*\n/, '').replace(/\n```$/, '');
-          if (clean) {
-              dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: nodeId, content: clean } });
-              handleHighlightNode(nodeId);
-          }
       } catch (e: any) {
-          alert(e.message);
+          alert(`AI Error: ${e.message}`);
       } finally {
-          dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } });
+          // Reset loading for all
+          targetNodes.forEach(n => dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: n.id, isLoading: false } }));
       }
   };
 
   const handleCancelAi = (nodeId: string) => {
       dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } });
+  };
+
+  const handleFixError = (nodeId: string, error: string) => {
+      // Find connected source
+      const node = state.nodes.find(n => n.id === nodeId);
+      if (!node) return;
+      
+      // Simple lookup for connected code nodes via Preview
+      // Terminal -> (in-logs) -- (out-logs) -> Preview -> (in-dom) -- (out-dom) -> Code
+      const connectedPreview = getConnectedSource(nodeId, 'logs', state.nodes, state.connections);
+      if (!connectedPreview) return;
+
+      const connectedCode = getConnectedSource(connectedPreview.id, 'dom', state.nodes, state.connections);
+      if (!connectedCode) return;
+
+      // Trigger standard AI Generate on the code node
+      handleAiGenerate(connectedCode.id, 'prompt', `Fix this error: ${error}`);
   };
 
   const handleInjectImport = (sourceNodeId: string, packageName: string) => {
@@ -676,18 +720,6 @@ export default function App() {
               }
           }
       });
-  };
-
-  const handleFixError = (nodeId: string, error: string) => {
-      // Find connected source
-      const node = state.nodes.find(n => n.id === nodeId);
-      if (!node) return;
-      
-      const sources = getAllConnectedSources(nodeId, 'file', state.nodes, state.connections);
-      if (sources.length === 0) return;
-
-      const sourceNode = sources[0]; // Take first source for now
-      handleAiGenerate(sourceNode.id, 'prompt', `Fix this error: ${error}`);
   };
 
   const handleToggleSelectNode = (id: string, multi: boolean) => {
@@ -757,8 +789,6 @@ export default function App() {
   const handleDownloadZip = async () => {
     const zip = new JSZip();
     const codeNodes = state.nodes.filter(n => n.type === 'CODE');
-    
-    // Simple Graph Traversal for Bundling
     const adj = new Map<string, string[]>();
     codeNodes.forEach(n => adj.set(n.id, []));
     
@@ -774,18 +804,15 @@ export default function App() {
     const visited = new Set<string>();
     const clusters: NodeData[][] = [];
 
-    // Find Connected Components
     for (const node of codeNodes) {
         if (!visited.has(node.id)) {
             const cluster: NodeData[] = [];
             const queue = [node.id];
             visited.add(node.id);
-            
             while(queue.length) {
                 const currId = queue.shift()!;
                 const currNode = state.nodes.find(n => n.id === currId);
                 if (currNode) cluster.push(currNode);
-                
                 const neighbors = adj.get(currId) || [];
                 for (const nId of neighbors) {
                     if (!visited.has(nId)) {
@@ -1017,27 +1044,22 @@ export default function App() {
         const targetCenterY = targetNode.position.y + (targetNode.isMinimized ? 40 : targetNode.size.height) / 2;
         const targetCenterX = targetNode.position.x + (targetNode.isMinimized ? 250 : targetNode.size.width) / 2;
 
-        // Alignment Checks (Same as before)
+        // Alignment Checks
         const wouldOverlapH = selectedNodes.some((n1, i) => {
-            const h1 = n1.isMinimized ? 40 : n1.size.height;
             const w1 = n1.isMinimized ? 250 : n1.size.width;
             return selectedNodes.some((n2, j) => {
                 if (i === j) return false;
-                const h2 = n2.isMinimized ? 40 : n2.size.height;
-                const w2 = n2.isMinimized ? 250 : n2.size.width;
                 // If aligned horizontally (same Y center), do X ranges overlap?
-                return (n1.position.x < n2.position.x + w2) && (n1.position.x + w1 > n2.position.x);
+                return (n1.position.x < n2.position.x + w1) && (n1.position.x + w1 > n2.position.x);
             });
         });
         canAlignHorizontal = !wouldOverlapH;
 
         const wouldOverlapV = selectedNodes.some((n1, i) => {
             const h1 = n1.isMinimized ? 40 : n1.size.height;
-            const w1 = n1.isMinimized ? 250 : n1.size.width;
             return selectedNodes.some((n2, j) => {
                 if (i === j) return false;
                 const h2 = n2.isMinimized ? 40 : n2.size.height;
-                const w2 = n2.isMinimized ? 250 : n2.size.width;
                 // If aligned vertically (same X center), do Y ranges overlap?
                 return (n1.position.y < n2.position.y + h2) && (n1.position.y + h1 > n2.position.y);
             });
@@ -1046,7 +1068,7 @@ export default function App() {
 
         // Distribution Checks (Equal Spacing)
         if (selectedNodes.length >= 3) {
-            // Horizontal Distribution
+            // Horizontal
             const sortedX = [...selectedNodes].sort((a, b) => a.position.x - b.position.x);
             const firstX = sortedX[0];
             const lastX = sortedX[sortedX.length - 1];
@@ -1055,7 +1077,7 @@ export default function App() {
             const gapX = (totalSpanX - sumInnerWidths) / (sortedX.length - 1);
             canDistributeHorizontal = gapX >= 0;
 
-            // Vertical Distribution
+            // Vertical
             const sortedY = [...selectedNodes].sort((a, b) => a.position.y - b.position.y);
             const firstY = sortedY[0];
             const lastY = sortedY[sortedY.length - 1];
@@ -1070,19 +1092,12 @@ export default function App() {
         x: e.clientX, 
         y: e.clientY, 
         targetNodeId: nodeId, 
-        targetNode: node 
-    });
-    (setContextMenu as any)(prev => ({ 
-        ...prev, 
-        x: e.clientX, 
-        y: e.clientY, 
-        targetNodeId: nodeId, 
         targetNode: node, 
         canAlignHorizontal, 
         canAlignVertical,
         canDistributeHorizontal,
         canDistributeVertical
-    }));
+    });
   };
 
   const handleAlign = (type: 'horizontal' | 'vertical') => {
@@ -1415,6 +1430,68 @@ export default function App() {
           isPinching.current = false;
           lastTouchDist.current = null;
       }
+  };
+
+  const handleWheel = (e: React.WheelEvent) => {
+        if ((e.target as HTMLElement).closest('.custom-scrollbar') || (e.target as HTMLElement).closest('.monaco-editor')) return;
+        
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (!rect) return;
+
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        const worldX = (mouseX - state.pan.x) / state.zoom;
+        const worldY = (mouseY - state.pan.y) / state.zoom;
+
+        const zoomIntensity = 0.001;
+        const newZoom = Math.min(Math.max(0.1, state.zoom - e.deltaY * zoomIntensity), 3);
+
+        const newPanX = mouseX - worldX * newZoom;
+        const newPanY = mouseY - worldY * newZoom;
+
+        if (!isNaN(newZoom) && !isNaN(newPanX) && !isNaN(newPanY)) {
+            dispatch({ type: 'ZOOM', payload: { zoom: newZoom } });
+            dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
+        }
+    };
+
+    const handleToggleRun = (id: string) => {
+        const isRunning = state.runningPreviewIds.includes(id);
+        const iframe = document.getElementById(`preview-iframe-${id}`) as HTMLIFrameElement;
+        
+        if (isRunning) {
+             dispatchLocal({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: false } });
+             dispatchLocal({ type: 'CLEAR_LOGS', payload: { nodeId: id } });
+             if (iframe) {
+                 iframe.srcdoc = '<body style="background-color: #000; color: #555; height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; font-family: sans-serif;">STOPPED</body>';
+             }
+        } else {
+             dispatchLocal({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: true } });
+             dispatchLocal({ type: 'CLEAR_LOGS', payload: { nodeId: id } });
+        }
+    };
+
+    const handleRefresh = (id: string) => {
+         const iframe = document.getElementById(`preview-iframe-${id}`) as HTMLIFrameElement;
+         if (iframe) {
+              const compiled = compilePreview(id, state.nodes, state.connections, true);
+              iframe.srcdoc = compiled;
+         }
+    };
+
+    const handlePortDown = (e: React.PointerEvent, portId: string, nodeId: string, isInput: boolean) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const node = state.nodes.find(n => n.id === nodeId);
+        if (!node) return;
+        const pos = calculatePortPosition(node, portId, isInput ? 'input' : 'output');
+        setDragWire({ x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y, startPortId: portId, startNodeId: nodeId, isInput });
+        e.currentTarget.setPointerCapture(e.pointerId);
+    };
+
+  const isConnected = (portId: string) => {
+      return state.connections.some(c => c.sourcePortId === portId || c.targetPortId === portId);
   };
 
   return (
