@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Code2, Monitor, TerminalSquare, Trash2, Copy, Unplug, Package, Image as ImageIcon, Eraser, AlignHorizontalJustifyCenter, AlignVerticalJustifyCenter } from 'lucide-react';
+import { Code2, Monitor, TerminalSquare, Trash2, Copy, Unplug, Package, Image as ImageIcon, Eraser, AlignHorizontalJustifyCenter, AlignVerticalJustifyCenter, StretchHorizontal, StretchVertical } from 'lucide-react';
 import { NodeType, Position } from '../types';
 
 interface ContextMenuProps {
@@ -15,8 +15,11 @@ interface ContextMenuProps {
   onDisconnect: (portId: string) => void;
   onClearImage?: (id: string) => void;
   onAlign?: (type: 'horizontal' | 'vertical') => void;
+  onDistribute?: (type: 'horizontal' | 'vertical') => void;
   canAlignHorizontal?: boolean;
   canAlignVertical?: boolean;
+  canDistributeHorizontal?: boolean;
+  canDistributeVertical?: boolean;
   onClose: () => void;
 }
 
@@ -32,8 +35,11 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onDisconnect,
   onClearImage,
   onAlign,
+  onDistribute,
   canAlignHorizontal = false,
   canAlignVertical = false,
+  canDistributeHorizontal = false,
+  canDistributeVertical = false,
   onClose 
 }) => {
   
@@ -62,7 +68,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
 
     return (
       <div 
-        className="fixed z-50 bg-panel border border-panelBorder rounded-lg shadow-2xl overflow-hidden min-w-[180px] animate-in fade-in zoom-in-95 duration-100"
+        className="fixed z-50 bg-panel border border-panelBorder rounded-lg shadow-2xl overflow-hidden min-w-[200px] animate-in fade-in zoom-in-95 duration-100"
         style={{ left: position.x, top: position.y }}
         onContextMenu={(e) => e.preventDefault()}
       >
@@ -70,7 +76,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           Node Actions
         </div>
         
-        {isMultiSelect && onAlign && (
+        {isMultiSelect && onAlign && onDistribute && (
             <>
                 <button
                     onClick={() => onAlign('horizontal')}
@@ -91,6 +97,27 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
                 >
                     <AlignHorizontalJustifyCenter size={14} className={canAlignVertical ? "" : "opacity-50"} />
                     Align Vertically
+                </button>
+                
+                <button
+                    onClick={() => onDistribute('horizontal')}
+                    disabled={!canDistributeHorizontal}
+                    className={`w-full text-left px-4 py-2 text-sm flex items-center gap-2 transition-colors ${
+                        canDistributeHorizontal ? 'text-zinc-300 hover:bg-zinc-800 hover:text-white' : 'text-zinc-600 cursor-not-allowed'
+                    }`}
+                >
+                    <StretchHorizontal size={14} className={canDistributeHorizontal ? "" : "opacity-50"} />
+                    Equal Spacing (H)
+                </button>
+                <button
+                    onClick={() => onDistribute('vertical')}
+                    disabled={!canDistributeVertical}
+                    className={`w-full text-left px-4 py-2 text-sm flex items-center gap-2 transition-colors border-b border-panelBorder ${
+                        canDistributeVertical ? 'text-zinc-300 hover:bg-zinc-800 hover:text-white' : 'text-zinc-600 cursor-not-allowed'
+                    }`}
+                >
+                    <StretchVertical size={14} className={canDistributeVertical ? "" : "opacity-50"} />
+                    Equal Spacing (V)
                 </button>
             </>
         )}
