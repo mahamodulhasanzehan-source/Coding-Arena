@@ -191,6 +191,11 @@ function graphReducer(state: GraphState, action: Action): GraphState {
             ...state,
             nodes: state.nodes.map(n => n.id === action.payload.nodeId ? { ...n, sharedState: action.payload.state } : n)
         };
+    case 'TOGGLE_MINIMIZE':
+        return {
+            ...state,
+            nodes: state.nodes.map(n => n.id === action.payload.id ? { ...n, isMinimized: !n.isMinimized } : n)
+        };
     default:
       return state;
   }
@@ -332,7 +337,8 @@ export default function App() {
           'DISCONNECT',
           'TOGGLE_PREVIEW',
           'SET_NODE_LOADING',
-          'UPDATE_NODE_SHARED_STATE' 
+          'UPDATE_NODE_SHARED_STATE',
+          'TOGGLE_MINIMIZE'
       ].includes(action.type)) {
           isLocalChange.current = true;
       }
@@ -1566,6 +1572,7 @@ export default function App() {
                                 onInjectImport={handleInjectImport}
                                 onFixError={handleFixError}
                                 onInteraction={(id, type) => dispatch({ type: 'SET_NODE_INTERACTION', payload: { nodeId: id, type } })}
+                                onToggleMinimize={(id) => dispatchLocal({ type: 'TOGGLE_MINIMIZE', payload: { id } })}
                                 collaboratorInfo={collabInfo}
                                 logs={logs}
                             >

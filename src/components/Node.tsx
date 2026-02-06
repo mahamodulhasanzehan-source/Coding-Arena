@@ -28,6 +28,7 @@ interface NodeProps {
   onInjectImport?: (sourceNodeId: string, packageName: string) => void; // For NPM
   onFixError?: (nodeId: string, error: string) => void; // For Terminal AI Fix
   onInteraction?: (nodeId: string, type: 'drag' | 'edit' | null) => void;
+  onToggleMinimize?: (id: string) => void;
   collaboratorInfo?: { name: string; color: string; action: 'dragging' | 'editing' };
   logs?: any[]; 
   children?: React.ReactNode;
@@ -56,6 +57,7 @@ export const Node: React.FC<NodeProps> = ({
   onInjectImport,
   onFixError,
   onInteraction,
+  onToggleMinimize,
   collaboratorInfo,
   logs,
   children
@@ -82,9 +84,6 @@ export const Node: React.FC<NodeProps> = ({
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [tempTitle, setTempTitle] = useState(data.title);
   const [chatInput, setChatInput] = useState('');
-  
-  // Minimize State
-  const [isMinimized, setIsMinimized] = useState(false);
   
   // AI States
   const [isPromptOpen, setIsPromptOpen] = useState(false);
@@ -155,7 +154,7 @@ export const Node: React.FC<NodeProps> = ({
   };
 
   const handleResizePointerDown = (e: React.PointerEvent) => {
-    if (data.isLoading || isMinimized) return; // Disable resize if minimized
+    if (data.isLoading || data.isMinimized) return; // Disable resize if minimized
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     setIsResizing(true);
@@ -280,7 +279,7 @@ export const Node: React.FC<NodeProps> = ({
 
   const handleToggleMinimize = (e: React.MouseEvent) => {
       e.stopPropagation();
-      setIsMinimized(!isMinimized);
+      onToggleMinimize?.(data.id);
   };
 
   const handleEditorMount = (editor: any) => {
@@ -448,14 +447,12 @@ export const Node: React.FC<NodeProps> = ({
       className={`absolute flex flex-col bg-panel border rounded-lg shadow-2xl animate-in fade-in zoom-in-95 pointer-events-auto ${!collaboratorInfo && borderClass} ${!collaboratorInfo && shadowClass}`}
       style={{
         transform: `translate(${data.position.x}px, ${data.position.y}px)`,
-        width: isMinimized ? 'auto' : data.size.width,
-        height: isMinimized ? '40px' : data.size.height,
+        width: data.isMinimized ? '250px' : data.size.width,
+        height: data.isMinimized ? '40px' : data.size.height,
         // Add width/height to transition property for smooth resizing
         transitionProperty: 'box-shadow, border-color, transform, width, height', 
         transitionDuration: (isDragging || isResizing) ? '0s' : '0.2s',
         transitionTimingFunction: 'ease-out',
-        minWidth: isMinimized ? 'fit-content' : undefined,
-        maxWidth: isMinimized ? '400px' : undefined,
         ...dynamicStyle
       }}
       onPointerDown={handlePointerDown}
@@ -492,11 +489,11 @@ export const Node: React.FC<NodeProps> = ({
               autoFocus
             />
           ) : (
-             <div className={`flex items-center gap-2 group/title ${isMinimized ? '' : 'truncate'}`}>
+             <div className={`flex items-center gap-2 group/title ${data.isMinimized ? '' : 'truncate'}`}>
                 {data.type === 'AI_CHAT' && <Bot size={14} className="text-indigo-400" />}
                 {data.type === 'NPM' && <Package size={14} className="text-red-500" />}
                 {data.type === 'IMAGE' && <ImageIcon size={14} className="text-purple-400" />}
-                <span className={isMinimized ? 'whitespace-nowrap' : 'truncate'}>{data.title}</span>
+                <span className={data.isMinimized ? 'whitespace-nowrap' : 'truncate'}>{data.title}</span>
                 <button 
                     onClick={(e) => { e.stopPropagation(); setIsEditingTitle(true); }}
                     onPointerDown={(e) => e.stopPropagation()}
@@ -517,9 +514,9 @@ export const Node: React.FC<NodeProps> = ({
                     onClick={handleToggleMinimize}
                     onPointerDown={(e) => e.stopPropagation()}
                     className="nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 text-zinc-400 hover:text-white hover:bg-zinc-800"
-                    title={isMinimized ? "Expand" : "Minimize"}
+                    title={data.isMinimized ? "Expand" : "Minimize"}
                  >
-                     {isMinimized ? <Square size={14} /> : <Minus size={14} />}
+                     {data.isMinimized ? <Square size={14} /> : <Minus size={14} />}
                  </button>
 
                  <button
@@ -612,7 +609,7 @@ export const Node: React.FC<NodeProps> = ({
       )}
 
       {/* Content Area */}
-      <div className={`flex-1 relative group nodrag flex flex-col min-h-0 overflow-hidden ${data.isLoading ? 'pointer-events-none opacity-80' : ''} ${isMinimized ? 'hidden' : ''}`}>
+      <div className={`flex-1 relative group nodrag flex flex-col min-h-0 overflow-hidden ${data.isLoading ? 'pointer-events-none opacity-80' : ''} ${data.isMinimized ? 'hidden' : ''}`}>
         {/* ... (Existing CODE, IMAGE, NPM, AI_CHAT cases remain the same) ... */}
         {data.type === 'CODE' ? (
             <div className="w-full h-full bg-[#1e1e1e]" onPointerDown={(e) => e.stopPropagation()}>
@@ -636,8 +633,8 @@ export const Node: React.FC<NodeProps> = ({
                         padding: { top: 10, bottom: 10 },
                         readOnly: data.isLoading,
                         scrollbar: {
-                            vertical: 'hidden',
-                            handleMouseWheel: false,
+                            vertical: 'auto',
+                            handleMouseWheel: true,
                         },
                         overviewRulerLanes: 0,
                         hideCursorInOverviewRuler: true,
@@ -847,8 +844,11 @@ export const Node: React.FC<NodeProps> = ({
         )}
       </div>
 
-      {/* Inputs/Outputs/Resize ... (Keep existing) */}
-      <div className="absolute top-[52px] -left-3 flex flex-col gap-[28px] pointer-events-none">
+      {/* Inputs (Left) */}
+      <div 
+        className={`absolute -left-3 flex flex-col gap-[28px] pointer-events-none transition-all duration-200 ease-out`}
+        style={{ top: data.isMinimized ? '14px' : '52px' }}
+      >
         {inputs.map((port) => {
             const connected = isConnected(port.id);
             return (
@@ -867,7 +867,12 @@ export const Node: React.FC<NodeProps> = ({
             );
         })}
       </div>
-      <div className="absolute top-[52px] -right-3 flex flex-col gap-[28px] pointer-events-none">
+      
+      {/* Outputs (Right) */}
+      <div 
+        className={`absolute -right-3 flex flex-col gap-[28px] pointer-events-none transition-all duration-200 ease-out`}
+        style={{ top: data.isMinimized ? '14px' : '52px' }}
+      >
         {outputs.map((port) => {
             const connected = isConnected(port.id);
             return (
@@ -887,7 +892,7 @@ export const Node: React.FC<NodeProps> = ({
         })}
       </div>
       
-      {!isMinimized && (
+      {!data.isMinimized && (
           <div 
             className={`absolute bottom-0 right-0 w-4 h-4 flex items-center justify-center opacity-50 hover:opacity-100 nodrag z-20 cursor-se-resize`}
             onPointerDown={handleResizePointerDown}

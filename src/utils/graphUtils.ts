@@ -19,12 +19,15 @@ export const calculatePortPosition = (
 
   if (portIndex === -1) return { x: node.position.x, y: node.position.y };
 
-  const yRelative = PORT_START_Y + 6 + (portIndex * PORT_STRIDE);
+  const startY = node.isMinimized ? 14 : PORT_START_Y;
+  const yRelative = startY + 6 + (portIndex * PORT_STRIDE);
   const y = node.position.y + yRelative;
+
+  const width = node.isMinimized ? 250 : node.size.width;
 
   const x = type === 'input' 
     ? node.position.x - 6 
-    : node.position.x + node.size.width + 6;
+    : node.position.x + width + 6;
 
   return { x, y };
 };
