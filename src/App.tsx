@@ -333,15 +333,43 @@ export default function App() {
       }
   };
 
+  // --- Folder Minimization Logic ---
+  const hiddenNodeIds = useMemo(() => {
+      const ids = new Set<string>();
+      
+      // Recursive helper to hide children of minimized folders
+      const hideChildren = (folderId: string) => {
+          const children = getAllConnectedSources(folderId, 'files', state.nodes, state.connections);
+          children.forEach(child => {
+              if (!ids.has(child.id)) {
+                  ids.add(child.id);
+                  // Recursively hide nested folders
+                  if (child.type === 'FOLDER') {
+                      hideChildren(child.id);
+                  }
+              }
+          });
+      };
+
+      state.nodes.forEach(node => {
+          if (node.type === 'FOLDER' && node.isMinimized) {
+              hideChildren(node.id);
+          }
+      });
+      return ids;
+  }, [state.nodes, state.connections]);
+
   const displayNodes = useMemo(() => {
-    return state.nodes.map(node => {
-        const collaborator = state.collaborators.find(c => c.draggingNodeId === node.id && c.id !== sessionId);
-        if (collaborator && collaborator.draggingPosition) {
-            return { ...node, position: collaborator.draggingPosition, _remoteDrag: true };
-        }
-        return node;
-    });
-  }, [state.nodes, state.collaborators, sessionId]);
+    return state.nodes
+        .filter(n => !hiddenNodeIds.has(n.id)) // HIDE IF IN MINIMIZED FOLDER
+        .map(node => {
+            const collaborator = state.collaborators.find(c => c.draggingNodeId === node.id && c.id !== sessionId);
+            if (collaborator && collaborator.draggingPosition) {
+                return { ...node, position: collaborator.draggingPosition, _remoteDrag: true };
+            }
+            return node;
+        });
+  }, [state.nodes, state.collaborators, sessionId, hiddenNodeIds]);
 
   const regularNodes = useMemo(() => displayNodes.filter(n => n.id !== maximizedNodeId), [displayNodes, maximizedNodeId]);
   const maximizedNode = useMemo(() => displayNodes.find(n => n.id === maximizedNodeId), [displayNodes, maximizedNodeId]);
@@ -545,7 +573,8 @@ export default function App() {
     let nearestNode: NodeData | null = null;
     let minDist = Infinity;
     
-    state.nodes.forEach(n => {
+    // Search only in currently displayed (non-hidden) nodes
+    regularNodes.forEach(n => {
         const nW = n.size.width;
         const nH = n.isMinimized ? 40 : n.size.height;
         const nCenterX = n.position.x + nW / 2;
@@ -564,10 +593,6 @@ export default function App() {
         const nH = target.isMinimized ? 40 : target.size.height;
         const targetCenterX = target.position.x + nW / 2;
         const targetCenterY = target.position.y + nH / 2;
-        
-        // Formula: ScreenX = WorldX * Zoom + PanX
-        // We want ScreenX to be ViewportCenterX
-        // PanX = ViewportCenterX - (WorldX * Zoom)
         
         const newPanX = viewportCenterX - (targetCenterX * state.zoom);
         const newPanY = viewportCenterY - (targetCenterY * state.zoom);
@@ -600,8 +625,8 @@ export default function App() {
       
       // Snap Lines Logic
       const SNAP_THRESHOLD = 5;
-      const otherNodes = state.nodes.filter(n => n.id !== id && !state.selectedNodeIds.includes(n.id));
-      const myNode = state.nodes.find(n => n.id === id);
+      const otherNodes = regularNodes.filter(n => n.id !== id && !state.selectedNodeIds.includes(n.id));
+      const myNode = regularNodes.find(n => n.id === id);
       if (!myNode) return;
       
       // Re-fetch current position (it might have drifted due to raw events vs react state)
@@ -914,7 +939,7 @@ export default function App() {
     if (dragWire) { 
         if (dragWire.isInput) {
             // Dragging FROM input TO output
-            const target = state.nodes.find(n => {
+            const target = regularNodes.find(n => {
                 const ports = getPortsForNode(n.id, n.type).filter(p => p.type === 'output');
                 return ports.some(p => {
                     const pos = calculatePortPosition(n, p.id, 'output');
@@ -929,7 +954,7 @@ export default function App() {
             }
         } else {
              // Dragging FROM output TO input
-             const target = state.nodes.find(n => {
+             const target = regularNodes.find(n => {
                 const ports = getPortsForNode(n.id, n.type).filter(p => p.type === 'input');
                 return ports.some(p => {
                     const pos = calculatePortPosition(n, p.id, 'input');
@@ -1184,6 +1209,9 @@ export default function App() {
                     ))}
 
                     {state.connections.map(conn => {
+                        // Don't render wires if nodes are hidden in a folder
+                        if (hiddenNodeIds.has(conn.sourceNodeId) || hiddenNodeIds.has(conn.targetNodeId)) return null;
+
                         const sourceNode = regularNodes.find(n => n.id === conn.sourceNodeId);
                         const targetNode = regularNodes.find(n => n.id === conn.targetNodeId);
                         if (!sourceNode || !targetNode) return null;

@@ -14,15 +14,15 @@ RULES:
    - You can specify a path like 'folder/file.ext'.
    - If a folder path is provided, the file will be automatically wired into that folder.
    - If the file exists, its content is updated.
-2. To MOVE a file (Structure), use 'moveFile(filename, folderName)'. 
+2. To MOVE or REWIRE a file into a folder, use 'moveFile(filename, folderName)'. 
    - This operates on EXISTING files.
-   - It REWIRES the structural connection (File -> Folder).
-   - It PRESERVES code dependencies (File -> File).
-   - To move to root, leave targetFolderName empty (this removes it from any folder).
+   - It performs a "Cut and Paste" in the graph: it UNPLUGS the file from its current code/folder parents and PLUGS it into the new target folder.
+   - Use this for requests like "Move JS files to components" or "Rewire these to the folder".
+   - To move to root, leave targetFolderName empty.
    - You can call this multiple times to move multiple files.
-3. To WIRE dependencies, use 'connectFiles(sourceName, targetName)'.
+3. To WIRE dependencies manually, use 'connectFiles(sourceName, targetName)'.
    - Use this to link a file (source) to another file (target) that imports it.
-   - Example: connectFiles('style.css', 'index.html').
+   - IMPORTANT: If targetName is a FOLDER, this acts like a Move: it disconnects the source from old parents.
 4. To RENAME a file, use 'renameFile(oldName, newName)'.
    - Renaming only changes the Title.
 5. BATCH OPERATIONS:
@@ -62,7 +62,7 @@ const deleteFileFunction: FunctionDeclaration = {
 
 const moveFileFunction: FunctionDeclaration = {
     name: 'moveFile',
-    description: 'Move an EXISTING file into a folder or to root. Changes parent folder connections only.',
+    description: 'Rewire an EXISTING file into a folder or root. Disconnects old parents and connects to new.',
     parameters: {
         type: Type.OBJECT,
         properties: {
@@ -80,7 +80,7 @@ const connectFilesFunction: FunctionDeclaration = {
         type: Type.OBJECT,
         properties: {
             sourceName: { type: Type.STRING, description: 'Name of the source node (e.g. style.css).' },
-            targetName: { type: Type.STRING, description: 'Name of the target node (e.g. index.html).' }
+            targetName: { type: Type.STRING, description: 'Name of the target node (e.g. index.html or components).' }
         },
         required: ['sourceName', 'targetName']
     }
@@ -242,20 +242,15 @@ const processToolCalls = (
                     toolOutput += `\n[Created Folder '${folderName}']`;
                 }
 
-                // Check existing folder connection
-                const currentFolderConn = state.connections.find(c => 
+                // Disconnect old parents to prevent duplicate wiring
+                const oldConns = state.connections.filter(c => 
                     c.sourceNodeId === target!.id && 
-                    tempNodes.find(n => n.id === c.targetNodeId)?.type === 'FOLDER'
+                    (tempNodes.find(n => n.id === c.targetNodeId)?.type === 'FOLDER' || tempNodes.find(n => n.id === c.targetNodeId)?.type === 'CODE')
                 );
+                oldConns.forEach(c => dispatch({ type: 'DISCONNECT', payload: c.id }));
 
-                if (currentFolderConn && tempNodes.find(n => n.id === currentFolderConn.targetNodeId)?.title !== folderName) {
-                    dispatch({ type: 'DISCONNECT', payload: currentFolderConn.id });
-                    dispatch({ type: 'CONNECT', payload: { id: `conn-folder-${Date.now()}`, sourceNodeId: target.id, sourcePortId: `${target.id}-out-dom`, targetNodeId: folderNode.id, targetPortId: `${folderNode.id}-in-files` }});
-                    toolOutput += `\n[Moved ${fileName} to ${folderName}]`;
-                } else if (!currentFolderConn) {
-                    dispatch({ type: 'CONNECT', payload: { id: `conn-folder-${Date.now()}`, sourceNodeId: target.id, sourcePortId: `${target.id}-out-dom`, targetNodeId: folderNode.id, targetPortId: `${folderNode.id}-in-files` }});
-                    toolOutput += `\n[Wired ${fileName} to ${folderName}]`;
-                }
+                dispatch({ type: 'CONNECT', payload: { id: `conn-folder-${Date.now()}`, sourceNodeId: target.id, sourcePortId: `${target.id}-out-dom`, targetNodeId: folderNode.id, targetPortId: `${folderNode.id}-in-files` }});
+                toolOutput += `\n[Moved ${fileName} to ${folderName}]`;
             }
 
         } else if (call.name === 'moveFile') {
@@ -264,13 +259,17 @@ const processToolCalls = (
             const targetNode = tempNodes.find(n => n.title === filename && (n.type === 'CODE' || n.type === 'IMAGE' || n.type === 'TEXT'));
             
             if (targetNode && checkPermission(targetNode.id)) {
-                // 1. Remove ONLY Folder connections (Structural Move)
-                // We do NOT remove code dependencies here.
-                const existingFolderConns = state.connections.filter(c => 
-                    c.sourceNodeId === targetNode.id && 
-                    tempNodes.find(n => n.id === c.targetNodeId)?.type === 'FOLDER'
-                );
-                existingFolderConns.forEach(c => dispatch({ type: 'DISCONNECT', payload: c.id }));
+                // 1. AGGRESSIVE DISCONNECT
+                // Remove connections to any FOLDER or CODE node (structural parents)
+                // We keep connections to PREVIEW or TERMINAL (outputs)
+                const outgoingConns = state.connections.filter(c => {
+                    if (c.sourceNodeId !== targetNode.id) return false;
+                    const target = tempNodes.find(n => n.id === c.targetNodeId);
+                    // Disconnect from Folders or Code inputs (parents)
+                    return target && (target.type === 'FOLDER' || target.type === 'CODE');
+                });
+                
+                outgoingConns.forEach(c => dispatch({ type: 'DISCONNECT', payload: c.id }));
 
                 if (targetFolderName) {
                     let folderNode = tempNodes.find(n => n.type === 'FOLDER' && n.title === targetFolderName);
@@ -302,6 +301,14 @@ const processToolCalls = (
             
             if (source && target) {
                 if (target.type === 'FOLDER') {
+                     // Aggressive disconnect for folders (Move behavior)
+                     const parentConns = state.connections.filter(c => 
+                        c.sourceNodeId === source.id && 
+                        (tempNodes.find(n => n.id === c.targetNodeId)?.type === 'CODE' || 
+                         tempNodes.find(n => n.id === c.targetNodeId)?.type === 'FOLDER')
+                     );
+                     parentConns.forEach(c => dispatch({ type: 'DISCONNECT', payload: c.id }));
+
                      dispatch({ type: 'CONNECT', payload: { id: `conn-man-${Date.now()}`, sourceNodeId: source.id, sourcePortId: `${source.id}-out-dom`, targetNodeId: target.id, targetPortId: `${target.id}-in-files` } });
                      toolOutput += `\n[Connected ${sourceName} -> ${targetName}]`;
                 } else if (target.type === 'CODE') {
