@@ -431,9 +431,19 @@ export default function App() {
 
   // --- Handlers ---
 
-  const handleContextMenu = (e: React.MouseEvent, nodeId?: string, portId?: string) => {
+  const handleContextMenu = (e: React.MouseEvent | React.TouchEvent | React.PointerEvent, nodeId?: string, portId?: string) => {
     e.preventDefault();
     if (isPanning) return;
+
+    let clientX, clientY;
+    if ('touches' in e) {
+        const touch = e.touches[0] || e.changedTouches[0];
+        clientX = touch.clientX;
+        clientY = touch.clientY;
+    } else {
+        clientX = (e as React.MouseEvent).clientX;
+        clientY = (e as React.MouseEvent).clientY;
+    }
 
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -444,8 +454,8 @@ export default function App() {
     const canDistribute = selectedCount > 2;
 
     setContextMenu({
-        x: e.clientX,
-        y: e.clientY,
+        x: clientX,
+        y: clientY,
         targetNodeId: nodeId,
         targetPortId: portId,
         targetNode: nodeId ? state.nodes.find(n => n.id === nodeId) : undefined,

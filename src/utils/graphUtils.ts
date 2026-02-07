@@ -142,6 +142,12 @@ const collectDependencies = (
     return allDeps;
 };
 
+// Helper: Sanitize filename to valid identifier
+const toIdentifier = (filename: string) => {
+    const base = filename.replace(/\.[^/.]+$/, "");
+    return base.replace(/[^a-zA-Z0-9_$]/g, "_");
+};
+
 export const compilePreview = (
   previewNodeId: string,
   nodes: NodeData[],
@@ -189,9 +195,32 @@ export const compilePreview = (
       const lower = node.title.toLowerCase();
       if (lower.endsWith('.js') || lower.endsWith('.jsx') || lower.endsWith('.ts') || lower.endsWith('.tsx')) {
           try {
+              let content = node.content;
+
+              // AUTO-IMPORT INJECTION
+              // If a node is connected to this node via "Imports", inject the import statement if missing
+              const imports = getAllConnectedSources(node.id, 'file', nodes, connections);
+              imports.forEach(imp => {
+                  if (imp.type === 'CODE' || imp.type === 'NPM') {
+                      const identifier = toIdentifier(imp.title);
+                      // Look for usage of identifier, but ignore if already imported
+                      const hasImport = new RegExp(`import\\s+.*?['"](.*/)?${imp.title}['"]`).test(content);
+                      
+                      // Also check if they imported using the identifier logic (e.g. import Header from './Header')
+                      const hasIdentifierImport = new RegExp(`import\\s+.*?\\b${identifier}\\b`).test(content);
+
+                      if (!hasImport && !hasIdentifierImport) {
+                          // Inject default import. 
+                          // NOTE: We use the EXACT filename as path so Import Map can pick it up.
+                          // We prefix with ./ to ensure it looks like a relative path
+                          content = `import ${identifier} from './${imp.title}';\n` + content;
+                      }
+                  }
+              });
+
               // Transpile using Babel
               // @ts-ignore
-              const transformed = Babel.transform(node.content, {
+              const transformed = Babel.transform(content, {
                   presets: ['react', 'env'],
                   filename: node.title
               }).code;
@@ -254,8 +283,6 @@ export const compilePreview = (
       htmlBody = htmlBody.replace(/<link[^>]+rel=["']stylesheet["'][^>]*>/gi, '');
       
       // INTELLIGENT SCRIPT REPLACEMENT
-      // This finds <script src="..."> and replaces the SRC with the BLOB URL.
-      // This forces the browser to load our transpiled blob instead of 404ing on the server.
       htmlBody = htmlBody.replace(/<script\s+([^>]*?)src=["']([^"']+)["']([^>]*)><\/script>/gi, (match, p1, src, p3) => {
           // Clean src path (remove ./ or /)
           const cleanSrc = src.replace(/^(\.\/|\/)/, '');
@@ -288,6 +315,19 @@ export const compilePreview = (
         <style>
             ${cssContent}
         </style>
+
+        <!-- Import Map -->
+        <script type="importmap">
+            ${JSON.stringify(importMap)}
+        </script>
+
+        <!-- Global React Injection (Fixes "React is not defined") -->
+        <script type="module">
+            import React from 'react';
+            import ReactDOM from 'react-dom/client';
+            window.React = React;
+            window.ReactDOM = ReactDOM;
+        </script>
 
         <!-- Console Interceptor -->
         <script>
@@ -327,17 +367,29 @@ export const compilePreview = (
             };
           })();
         </script>
-
-        <!-- Import Map -->
-        <script type="importmap">
-            ${JSON.stringify(importMap)}
-        </script>
       </head>
       <body>
         ${htmlBody}
 
         <!-- Entry Point Execution (if Root is JS) -->
-        ${!isHtmlRoot ? `<script type="module">import '${pathToBlobUrl[rootNode.title] || rootNode.title}';</script>` : ''}
+        ${!isHtmlRoot ? `
+        <script type="module">
+            import Entry from '${pathToBlobUrl[rootNode.title] || rootNode.title}';
+            
+            // Auto-Mount React if default export is a component and root is empty
+            const rootEl = document.getElementById('root');
+            if (rootEl && rootEl.innerHTML.trim() === '' && Entry) {
+                if (typeof Entry === 'function') {
+                    try {
+                        const root = window.ReactDOM.createRoot(rootEl);
+                        root.render(window.React.createElement(Entry));
+                        console.log('Auto-mounted default export from ${rootNode.title}');
+                    } catch(e) {
+                        console.error("Auto-mount failed:", e);
+                    }
+                }
+            }
+        </script>` : ''}
         
         ${forceReload ? `<!-- Force Reload: ${Date.now()} -->` : ''}
       </body>
