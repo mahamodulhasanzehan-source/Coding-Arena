@@ -1,4 +1,3 @@
-
 import { Connection, NodeData, NodeType, Port } from '../types';
 import { getPortsForNode } from '../constants';
 // @ts-ignore: Externalized in vite.config.ts, types not needed for build
@@ -219,8 +218,14 @@ export const compilePreview = (
               });
 
               // Transpile using Babel
+              let transformFn = (Babel as any).transform;
+              // Handle default export wrapping that occurs in some environments
+              if (!transformFn && (Babel as any).default && (Babel as any).default.transform) {
+                  transformFn = (Babel as any).default.transform;
+              }
+
               // @ts-ignore
-              const transformed = Babel.transform(content, {
+              const transformed = transformFn(content, {
                   presets: ['react', 'env'],
                   filename: node.title
               }).code;
