@@ -1,45 +1,34 @@
 
-import { initializeApp } from "firebase/app";
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged as firebaseOnAuthStateChanged } from "firebase/auth";
-import { getFirestore, doc, getDoc, setDoc, deleteDoc } from "firebase/firestore";
-
-const firebaseConfig = {
-  apiKey: "AIzaSyBllwH83gpDoLAeo_XnnMDu4mmWVzBJOkA",
-  authDomain: "tacotyper.firebaseapp.com",
-  projectId: "tacotyper",
-  storageBucket: "tacotyper.firebasestorage.app",
-  messagingSenderId: "781290974991",
-  appId: "1:781290974991:web:9be3718a10fc11c9a5187a",
-  measurementId: "G-P0VZGCB036"
+export const auth = {
+  currentUser: { uid: 'local-user', isAnonymous: true, photoURL: null, displayName: 'Local User' }
 };
 
-const app = initializeApp(firebaseConfig);
-export const auth = getAuth(app);
-export const db = getFirestore(app);
-export const googleProvider = new GoogleAuthProvider();
+export const db = {};
 
 export const signInWithGoogle = async () => {
-  try {
-    const result = await signInWithPopup(auth, googleProvider);
-    return result.user;
-  } catch (error) {
-    console.error("Error signing in with Google:", error);
-    throw error;
-  }
+  return { uid: 'local-user', isAnonymous: false, photoURL: null, displayName: 'Local User' };
 };
 
 export const logOut = async () => {
-  try {
-    await signOut(auth);
-  } catch (error) {
-    console.error("Error signing out:", error);
-  }
+  console.log('Logged out');
 };
 
-// Wrapper to match the interface expected by components
 export const onAuthStateChanged = (authInstance: any, callback: (user: any) => void) => {
-    return firebaseOnAuthStateChanged(authInstance, callback);
+    // Simulate auth state change immediately
+    const user = { uid: 'local-user', isAnonymous: true, photoURL: null, displayName: 'Local User' };
+    callback(user);
+    return () => {};
 };
 
-export { doc, getDoc, setDoc, deleteDoc };
-export type { User } from "firebase/auth";
+// Mock Firestore functions
+export const doc = (db: any, col: string, id: string) => ({});
+export const getDoc = async (ref: any) => ({ exists: () => false, data: () => ({}) });
+export const setDoc = async (ref: any, data: any, opts?: any) => {};
+export const deleteDoc = async (ref: any) => {};
+
+export interface User {
+    uid: string;
+    isAnonymous: boolean;
+    photoURL?: string | null;
+    displayName?: string | null;
+}
