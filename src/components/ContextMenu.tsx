@@ -19,6 +19,7 @@ interface ContextMenuProps {
   onDistribute?: (type: 'horizontal' | 'vertical') => void;
   onCompact?: (type: 'horizontal' | 'vertical') => void;
   onToggleLock?: (id: string) => void;
+  onForceUnlock?: (id: string) => void; // New prop for emergency unlock
   canAlignHorizontal?: boolean;
   canAlignVertical?: boolean;
   canDistributeHorizontal?: boolean;
@@ -44,6 +45,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onDistribute,
   onCompact,
   onToggleLock,
+  onForceUnlock,
   canAlignHorizontal = false,
   canAlignVertical = false,
   canDistributeHorizontal = false,
@@ -84,6 +86,9 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     const showLock = currentUser && !isLocked;
     // Can Unlock: Signed in AND Locked by Me
     const showUnlock = currentUser && isLockedByMe;
+    
+    // Force Unlock: Show if locked by SOMEONE ELSE, to allow recovery
+    const showForceUnlock = isLocked && !isLockedByMe;
 
     return (
       <div 
@@ -96,9 +101,9 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         </div>
         
         {/* Lock/Unlock Actions */}
-        {(showLock || showUnlock) && onToggleLock && (
+        {(showLock || showUnlock || showForceUnlock) && (onToggleLock || onForceUnlock) && (
             <div className="border-b border-panelBorder pb-1 mb-1">
-                {showLock && (
+                {showLock && onToggleLock && (
                     <button
                         onClick={() => onToggleLock(targetNodeId)}
                         className="w-full text-left px-4 py-2 text-sm font-medium text-amber-500 hover:bg-zinc-800 transition-colors flex items-center gap-2"
@@ -107,13 +112,23 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
                         Lock {isMultiSelect ? 'Selected' : ''}
                     </button>
                 )}
-                {showUnlock && (
+                {showUnlock && onToggleLock && (
                     <button
                         onClick={() => onToggleLock(targetNodeId)}
                         className="w-full text-left px-4 py-2 text-sm font-medium text-emerald-500 hover:bg-zinc-800 transition-colors flex items-center gap-2"
                     >
                         <Unlock size={14} />
                         Unlock {isMultiSelect ? 'Selected' : ''}
+                    </button>
+                )}
+                {showForceUnlock && onForceUnlock && (
+                    <button
+                        onClick={() => onForceUnlock(targetNodeId)}
+                        className="w-full text-left px-4 py-2 text-sm font-medium text-red-500 hover:bg-zinc-800 transition-colors flex items-center gap-2"
+                        title="Emergency unlock (overrides owner)"
+                    >
+                        <Unlock size={14} />
+                        Force Unlock
                     </button>
                 )}
             </div>
@@ -214,7 +229,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     );
   }
 
-  // Canvas Context Menu
+  // Canvas Context Menu (Default)
   const items = [
     { label: 'Code Canvas', type: 'CODE', icon: <Code2 size={16} /> },
     { label: 'Folder Group', type: 'FOLDER', icon: <Folder size={16} /> },

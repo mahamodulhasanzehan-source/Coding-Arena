@@ -864,6 +864,12 @@ export default function App() {
       setContextMenu(null);
   };
 
+  const handleForceUnlock = (nodeId: string) => {
+      if (!confirm("Force unlock this node? This will remove the lock for everyone.")) return;
+      dispatchLocal({ type: 'LOCK_NODES', payload: { ids: [nodeId], user: undefined } }); // undefined removes lock
+      setContextMenu(null);
+  };
+
   const handleDownloadZip = async () => {
     const zip = new JSZip();
     const folder = zip.folder("project");
@@ -1690,6 +1696,7 @@ export default function App() {
                 onDistribute={handleDistribute}
                 onCompact={handleCompact}
                 onToggleLock={handleToggleLock}
+                onForceUnlock={handleForceUnlock} // Added Handler
                 currentUser={currentUser}
                 canAlignHorizontal={(contextMenu as any).canAlignHorizontal}
                 canAlignVertical={(contextMenu as any).canAlignVertical}
