@@ -1,6 +1,7 @@
 
 import { Connection, NodeData, NodeType, Port } from '../types';
 import { getPortsForNode } from '../constants';
+// @ts-ignore: Externalized in vite.config.ts, types not needed for build
 import * as Babel from '@babel/standalone';
 
 // ---- Port Calculation Math ----
@@ -121,9 +122,7 @@ const collectDependencies = (
     const directDeps = getAllConnectedSources(rootNode.id, 'file', nodes, connections);
     let allDeps: NodeData[] = [];
 
-    // Also check for folder inputs if this node is connected to a folder? 
-    // No, usually dependencies are wired TO the code node.
-    // But if we wire a FOLDER to the code node (as an import source), we need those files.
+    // Also check for folder inputs if this node is connected to a folder
     
     for (const dep of directDeps) {
         if (dep.type === 'FOLDER') {
@@ -192,6 +191,7 @@ export const compilePreview = (
       if (lower.endsWith('.js') || lower.endsWith('.jsx') || lower.endsWith('.ts') || lower.endsWith('.tsx')) {
           try {
               // Transpile using Babel
+              // @ts-ignore
               const transformed = Babel.transform(node.content, {
                   presets: ['react', 'env'],
                   filename: node.title
