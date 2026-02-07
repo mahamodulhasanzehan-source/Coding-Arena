@@ -694,20 +694,24 @@ export default function App() {
 
   const handleFindNearest = () => {
     // Calculate viewport center in world coordinates
-    const centerX = -state.pan.x / state.zoom + window.innerWidth / 2 / state.zoom;
-    const centerY = -state.pan.y / state.zoom + window.innerHeight / 2 / state.zoom;
+    const viewportCenterX = window.innerWidth / 2;
+    const viewportCenterY = window.innerHeight / 2;
+    
+    // We want the logic to find the node closest to the CURRENT CENTER of the screen
+    // World coordinates of the current screen center:
+    const worldCenterX = (viewportCenterX - state.pan.x) / state.zoom;
+    const worldCenterY = (viewportCenterY - state.pan.y) / state.zoom;
     
     let nearestNode: NodeData | null = null;
     let minDist = Infinity;
     
     state.nodes.forEach(n => {
-        // Use node center for distance calculation for better accuracy
         const nW = n.size.width;
         const nH = n.isMinimized ? 40 : n.size.height;
         const nCenterX = n.position.x + nW / 2;
         const nCenterY = n.position.y + nH / 2;
         
-        const dist = Math.hypot(nCenterX - centerX, nCenterY - centerY);
+        const dist = Math.hypot(nCenterX - worldCenterX, nCenterY - worldCenterY);
         if (dist < minDist) { minDist = dist; nearestNode = n; }
     });
 
@@ -715,15 +719,18 @@ export default function App() {
         const target = nearestNode as NodeData;
         handleHighlightNode(target.id);
         
-        // Calculate new pan to center the node
-        // pan.x = screenCenter.x - nodeCenter.x * zoom
+        // Calculate correct Pan to center this node on screen
         const nW = target.size.width;
         const nH = target.isMinimized ? 40 : target.size.height;
         const targetCenterX = target.position.x + nW / 2;
         const targetCenterY = target.position.y + nH / 2;
         
-        const newPanX = (window.innerWidth / 2) - (targetCenterX * state.zoom);
-        const newPanY = (window.innerHeight / 2) - (targetCenterY * state.zoom);
+        // Formula: ScreenX = WorldX * Zoom + PanX
+        // We want ScreenX to be ViewportCenterX
+        // PanX = ViewportCenterX - (WorldX * Zoom)
+        
+        const newPanX = viewportCenterX - (targetCenterX * state.zoom);
+        const newPanY = viewportCenterY - (targetCenterY * state.zoom);
         
         dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
     }
@@ -1303,7 +1310,8 @@ export default function App() {
                 width: '100%',
                 height: '100%',
                 pointerEvents: 'none',
-                transition: isPanning ? 'none' : 'transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1)' 
+                // Updated transition for smoother "magnifying glass" effect
+                transition: isPanning ? 'none' : 'transform 0.6s cubic-bezier(0.25, 1, 0.5, 1)' 
             }}
         >
             <div className="pointer-events-none w-full h-full relative">
