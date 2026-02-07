@@ -12,33 +12,36 @@ const SYSTEM_INSTRUCTIONS = `You are a coding assistant in NodeCode Studio.
 RULES:
 1. To EDIT content, use 'updateFile'. 
    - You can specify a path like 'folder/file.ext'.
-   - If the file doesn't exist, it will be created.
-   - If a folder path is provided, the file will be automatically moved/wired into that folder.
-2. To MOVE a file, use 'moveFile(filename, folderName)'. 
+   - If a folder path is provided, the file will be automatically wired into that folder.
+   - If the file exists, its content is updated.
+2. To MOVE a file (Structure), use 'moveFile(filename, folderName)'. 
    - This operates on EXISTING files.
-   - It changes the visual connections in the graph.
-   - To move to root, leave targetFolderName empty.
-3. To RENAME a file, use 'renameFile(oldName, newName)'.
-   - Renaming only changes the Title (e.g. 'script.js' -> 'main.js').
-   - Do NOT use this to move files (e.g. do NOT rename to 'folder/script.js').
-4. FOLDER STRUCTURE:
-   - This environment uses "Folder Nodes". Files connected to a folder are "inside" it.
-   - The context list below shows paths like 'components/Button.tsx'.
-   - DEFAULT BEHAVIOR: Place all new components, styles, and utils into appropriate folders (e.g. 'components', 'styles', 'lib').
-   - Keep the main entry point (usually index.html) at the root.
-5. SCOPE:
-   - You have authority over ALL files listed in the "Connected Context".
-   - You can edit any file in the chain, not just the one currently selected.
+   - It REWIRES the structural connection (File -> Folder).
+   - It PRESERVES code dependencies (File -> File).
+   - To move to root, leave targetFolderName empty (this removes it from any folder).
+   - You can call this multiple times to move multiple files.
+3. To WIRE dependencies, use 'connectFiles(sourceName, targetName)'.
+   - Use this to link a file (source) to another file (target) that imports it.
+   - Example: connectFiles('style.css', 'index.html').
+4. To RENAME a file, use 'renameFile(oldName, newName)'.
+   - Renaming only changes the Title.
+5. BATCH OPERATIONS:
+   - You can return multiple tool calls in a single response.
+   - If asked to "Move all JS files to src", call 'moveFile' for each JS file.
+
+FOLDER STRUCTURE:
+   - Files connected to a "Folder Node" are conceptually inside it.
+   - Paths are resolved visually: 'components/Button.tsx' means Button.tsx node is wired to components Folder node.
 `;
 
 // --- 2. THE HANDS: Tool Definitions ---
 const updateCodeFunction: FunctionDeclaration = {
     name: 'updateFile',
-    description: 'Create or Update a file. Supports paths (e.g., "components/Button.tsx"). If folder doesn\'t exist, it creates it.',
+    description: 'Create or Update a file. Supports paths (e.g., "components/Button.tsx").',
     parameters: {
         type: Type.OBJECT,
         properties: {
-            filename: { type: Type.STRING, description: 'The name or path of the file (e.g. "script.js" or "lib/utils.js").' },
+            filename: { type: Type.STRING, description: 'The name or path of the file.' },
             code: { type: Type.STRING, description: 'The NEW full content of the file.' }
         },
         required: ['filename', 'code']
@@ -59,31 +62,44 @@ const deleteFileFunction: FunctionDeclaration = {
 
 const moveFileFunction: FunctionDeclaration = {
     name: 'moveFile',
-    description: 'Move an EXISTING file into a folder or to root. This REWIRES the connections.',
+    description: 'Move an EXISTING file into a folder or to root. Changes parent folder connections only.',
     parameters: {
         type: Type.OBJECT,
         properties: {
-            filename: { type: Type.STRING, description: 'The exact name of the existing file node to move.' },
-            targetFolderName: { type: Type.STRING, description: 'The exact name of the destination folder node. Leave empty/null to move to root.' }
+            filename: { type: Type.STRING, description: 'The exact name of the file node.' },
+            targetFolderName: { type: Type.STRING, description: 'The destination folder name. Empty for root.' }
         },
         required: ['filename']
     }
 };
 
+const connectFilesFunction: FunctionDeclaration = {
+    name: 'connectFiles',
+    description: 'Create a connection/wire between two nodes (e.g. for imports).',
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            sourceName: { type: Type.STRING, description: 'Name of the source node (e.g. style.css).' },
+            targetName: { type: Type.STRING, description: 'Name of the target node (e.g. index.html).' }
+        },
+        required: ['sourceName', 'targetName']
+    }
+};
+
 const renameFileFunction: FunctionDeclaration = {
     name: 'renameFile',
-    description: 'Rename a file node. DO NOT use paths here.',
+    description: 'Rename a file node.',
     parameters: {
         type: Type.OBJECT,
         properties: {
             oldName: { type: Type.STRING, description: 'The current name of the file.' },
-            newName: { type: Type.STRING, description: 'The new name for the file (no paths).' }
+            newName: { type: Type.STRING, description: 'The new name for the file.' }
         },
         required: ['oldName', 'newName']
     }
 };
 
-const TOOLS = [{ functionDeclarations: [updateCodeFunction, deleteFileFunction, moveFileFunction, renameFileFunction] }];
+const TOOLS = [{ functionDeclarations: [updateCodeFunction, deleteFileFunction, moveFileFunction, connectFilesFunction, renameFileFunction] }];
 
 // --- 3. HELPERS ---
 
@@ -98,7 +114,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
     ]);
 }
 
-// Helper to determine the "virtual path" of a node based on connections
 const getNodePath = (node: NodeData, nodes: NodeData[], connections: Connection[]) => {
     const folderConn = connections.find(c => 
         c.sourceNodeId === node.id && 
@@ -111,7 +126,6 @@ const getNodePath = (node: NodeData, nodes: NodeData[], connections: Connection[
     return node.title;
 };
 
-// Helper to find a node by its Title OR its Path
 const findNodeByPathOrTitle = (pathOrTitle: string, nodes: NodeData[], connections: Connection[]) => {
     return nodes.find(n => {
         if (n.title === pathOrTitle) return true;
@@ -122,11 +136,9 @@ const findNodeByPathOrTitle = (pathOrTitle: string, nodes: NodeData[], connectio
 
 async function performGeminiCall<T>(operation: (ai: GoogleGenAI) => Promise<T>): Promise<T> {
     const keys = [process.env.API_KEY, process.env.GEMINI_API_KEY_4, process.env.GEMINI_API_KEY_5].filter((k): k is string => !!k && k.length > 0);
-    
     if (keys.length === 0) throw new Error("No Gemini API Keys configured.");
 
     let lastError: any;
-
     for (const apiKey of keys) {
         try {
             const ai = new GoogleGenAI({ apiKey });
@@ -134,7 +146,7 @@ async function performGeminiCall<T>(operation: (ai: GoogleGenAI) => Promise<T>):
         } catch (error: any) {
             lastError = error;
             if (error.status === 429 || error.message?.includes('429') || error.status === 503) {
-                console.warn(`API Key ${apiKey.slice(0,5)}... rate limited or unavailable. Switching...`);
+                console.warn(`API Key ${apiKey.slice(0,5)}... rate limited. Switching...`);
                 continue; 
             }
             throw error;
@@ -152,29 +164,24 @@ interface AiContext {
     onHighlight: (id: string) => void;
 }
 
-// Common logic to process tool calls
 const processToolCalls = (
     functionCalls: any[], 
     { state, dispatch, checkPermission, onHighlight }: AiContext,
     startNodeId: string
 ): string => {
     let toolOutput = '';
-    // Local simulation of node state for batch operations
-    let tempNodes = [...state.nodes];
+    let tempNodes = [...state.nodes]; // Local simulation for batch updates
 
     for (const call of functionCalls) {
         if (call.name === 'updateFile') {
             const args = call.args as any;
             const fullPath = args.filename;
             
-            // Handle Path Parsing (e.g., "components/Button.tsx")
             const parts = fullPath.split('/');
             const fileName = parts.pop(); 
             const folderName = parts.length > 0 ? parts.join('/') : null;
 
-            // Try to find existing node by full path (or just title if unique)
             let target = findNodeByPathOrTitle(fullPath, tempNodes, state.connections);
-            // Fallback: search by filename only if exact path not found
             if (!target) target = tempNodes.find(n => n.title === fileName && n.type === 'CODE');
             
             if (target) {
@@ -182,21 +189,6 @@ const processToolCalls = (
                     dispatch({ type: 'UPDATE_NODE_CONTENT', payload: { id: target.id, content: args.code } }); 
                     toolOutput += `\n[Updated ${target.title}]`; 
                     onHighlight(target.id); 
-                    
-                    // If path implies a folder, ensure it's wired correctly
-                    if (folderName) {
-                         // Check if already connected to this folder
-                         const currentPath = getNodePath(target, tempNodes, state.connections);
-                         if (!currentPath.startsWith(folderName + '/')) {
-                             // Needs moving/wiring
-                             // Logic continues below to "ensure folder connection"
-                         } else {
-                             // Already in correct folder
-                             continue; 
-                         }
-                    } else {
-                        continue;
-                    }
                 } else { 
                     toolOutput += `\n[Error: ${fileName} is locked]`;
                     continue;
@@ -222,7 +214,7 @@ const processToolCalls = (
                 target = newNode;
                 toolOutput += `\n[Created ${fileName}]`;
                 
-                // Wire to Context if not putting in a folder (default behavior)
+                // Default: Wire to context if no folder specified
                 if (!folderName) {
                     const contextNode = tempNodes.find(n => n.id === startNodeId);
                     if (contextNode && contextNode.type === 'CODE') {
@@ -231,9 +223,8 @@ const processToolCalls = (
                 }
             }
 
-            // --- Handle Folder Wiring (for both new and existing) ---
+            // Ensure Correct Folder Wiring
             if (folderName && target) {
-                // Find or Create Folder Node
                 let folderNode = tempNodes.find(n => n.type === 'FOLDER' && n.title === folderName);
                 
                 if (!folderNode) {
@@ -242,12 +233,7 @@ const processToolCalls = (
                     const folderPos = anchor ? { x: anchor.position.x - 250, y: anchor.position.y } : { x: 100, y: 100 };
                     
                     const newFolder: NodeData = { 
-                        id: folderId, 
-                        type: 'FOLDER', 
-                        title: folderName, 
-                        content: '', 
-                        position: folderPos, 
-                        size: { width: 250, height: 300 } 
+                        id: folderId, type: 'FOLDER', title: folderName, content: '', position: folderPos, size: { width: 250, height: 300 } 
                     };
                     
                     dispatch({ type: 'ADD_NODE', payload: newFolder });
@@ -256,32 +242,19 @@ const processToolCalls = (
                     toolOutput += `\n[Created Folder '${folderName}']`;
                 }
 
-                // Disconnect from other folders first (enforce single parent for now)
-                const existingFolderConns = state.connections.filter(c => 
+                // Check existing folder connection
+                const currentFolderConn = state.connections.find(c => 
                     c.sourceNodeId === target!.id && 
                     tempNodes.find(n => n.id === c.targetNodeId)?.type === 'FOLDER'
                 );
-                existingFolderConns.forEach(c => dispatch({ type: 'DISCONNECT', payload: c.id }));
 
-                // Connect File -> Folder
-                dispatch({ type: 'CONNECT', payload: { 
-                    id: `conn-folder-${Date.now()}`, 
-                    sourceNodeId: target.id, 
-                    sourcePortId: `${target.id}-out-dom`, 
-                    targetNodeId: folderNode.id, 
-                    targetPortId: `${folderNode.id}-in-files` 
-                }});
-                toolOutput += `\n[Wired ${fileName} to ${folderName}]`;
-                
-                // Optional: Connect Folder -> Main Context (if main context needs access)
-                // This ensures the graph remains connected if we moved a dependency
-                const contextNode = tempNodes.find(n => n.id === startNodeId);
-                if (contextNode && contextNode.type === 'CODE' && contextNode.id !== target.id) {
-                     // Check if folder is already connected to context
-                     const isConnected = state.connections.some(c => c.sourceNodeId === folderNode!.id && c.targetNodeId === contextNode.id);
-                     if (!isConnected) {
-                         dispatch({ type: 'CONNECT', payload: { id: `conn-ctx-${Date.now()}`, sourceNodeId: folderNode.id, sourcePortId: `${folderNode.id}-out-folder`, targetNodeId: contextNode.id, targetPortId: `${contextNode.id}-in-file` } });
-                     }
+                if (currentFolderConn && tempNodes.find(n => n.id === currentFolderConn.targetNodeId)?.title !== folderName) {
+                    dispatch({ type: 'DISCONNECT', payload: currentFolderConn.id });
+                    dispatch({ type: 'CONNECT', payload: { id: `conn-folder-${Date.now()}`, sourceNodeId: target.id, sourcePortId: `${target.id}-out-dom`, targetNodeId: folderNode.id, targetPortId: `${folderNode.id}-in-files` }});
+                    toolOutput += `\n[Moved ${fileName} to ${folderName}]`;
+                } else if (!currentFolderConn) {
+                    dispatch({ type: 'CONNECT', payload: { id: `conn-folder-${Date.now()}`, sourceNodeId: target.id, sourcePortId: `${target.id}-out-dom`, targetNodeId: folderNode.id, targetPortId: `${folderNode.id}-in-files` }});
+                    toolOutput += `\n[Wired ${fileName} to ${folderName}]`;
                 }
             }
 
@@ -291,12 +264,15 @@ const processToolCalls = (
             const targetNode = tempNodes.find(n => n.title === filename && (n.type === 'CODE' || n.type === 'IMAGE' || n.type === 'TEXT'));
             
             if (targetNode && checkPermission(targetNode.id)) {
-                // Disconnect current outputs
-                const existingOutputs = state.connections.filter(c => c.sourceNodeId === targetNode.id && c.sourcePortId.includes('out-dom'));
-                existingOutputs.forEach(c => dispatch({ type: 'DISCONNECT', payload: c.id }));
+                // 1. Remove ONLY Folder connections (Structural Move)
+                // We do NOT remove code dependencies here.
+                const existingFolderConns = state.connections.filter(c => 
+                    c.sourceNodeId === targetNode.id && 
+                    tempNodes.find(n => n.id === c.targetNodeId)?.type === 'FOLDER'
+                );
+                existingFolderConns.forEach(c => dispatch({ type: 'DISCONNECT', payload: c.id }));
 
                 if (targetFolderName) {
-                    // Move to Folder
                     let folderNode = tempNodes.find(n => n.type === 'FOLDER' && n.title === targetFolderName);
                     
                     if (!folderNode) {
@@ -311,16 +287,31 @@ const processToolCalls = (
                     dispatch({ type: 'CONNECT', payload: { id: `conn-${Date.now()}-${Math.random()}`, sourceNodeId: targetNode.id, sourcePortId: `${targetNode.id}-out-dom`, targetNodeId: folderNode.id, targetPortId: `${folderNode.id}-in-files` } });
                     toolOutput += `\n[Moved ${filename} to ${targetFolderName}]`;
                 } else {
-                    // Move to Root (Connect to Context Node directly)
-                    const contextNode = tempNodes.find(n => n.id === startNodeId);
-                    if (contextNode && contextNode.type === 'CODE') {
-                        dispatch({ type: 'CONNECT', payload: { id: `conn-root-${Date.now()}-${Math.random()}`, sourceNodeId: targetNode.id, sourcePortId: `${targetNode.id}-out-dom`, targetNodeId: contextNode.id, targetPortId: `${contextNode.id}-in-file` } });
-                        toolOutput += `\n[Moved ${filename} to Root]`;
-                    }
+                    toolOutput += `\n[Moved ${filename} to Root]`;
                 }
             } else {
-                toolOutput += `\n[Error: Could not find ${filename} to move]`;
+                toolOutput += `\n[Error: Could not find ${filename}]`;
             }
+
+        } else if (call.name === 'connectFiles') {
+            const args = call.args as any;
+            const { sourceName, targetName } = args;
+            
+            const source = tempNodes.find(n => n.title === sourceName);
+            const target = tempNodes.find(n => n.title === targetName);
+            
+            if (source && target) {
+                if (target.type === 'FOLDER') {
+                     dispatch({ type: 'CONNECT', payload: { id: `conn-man-${Date.now()}`, sourceNodeId: source.id, sourcePortId: `${source.id}-out-dom`, targetNodeId: target.id, targetPortId: `${target.id}-in-files` } });
+                     toolOutput += `\n[Connected ${sourceName} -> ${targetName}]`;
+                } else if (target.type === 'CODE') {
+                     dispatch({ type: 'CONNECT', payload: { id: `conn-man-${Date.now()}`, sourceNodeId: source.id, sourcePortId: `${source.id}-out-dom`, targetNodeId: target.id, targetPortId: `${target.id}-in-file` } });
+                     toolOutput += `\n[Connected ${sourceName} -> ${targetName}]`;
+                }
+            } else {
+                toolOutput += `\n[Error: Could not find nodes for connection ${sourceName}->${targetName}]`;
+            }
+
         } else if (call.name === 'renameFile') {
             const args = call.args as any;
             const { oldName, newName } = args;
@@ -334,6 +325,7 @@ const processToolCalls = (
             } else {
                 toolOutput += `\n[Error: Could not rename ${oldName}]`;
             }
+
         } else if (call.name === 'deleteFile') {
             const args = call.args as any;
             const targetIndex = tempNodes.findIndex(n => n.title === args.filename && n.type === 'CODE');
@@ -350,19 +342,13 @@ const processToolCalls = (
     return toolOutput;
 };
 
-// Main Chat Handler
-export const handleAiMessage = async (
-    nodeId: string, 
-    text: string, 
-    context: AiContext
-) => {
+export const handleAiMessage = async (nodeId: string, text: string, context: AiContext) => {
     const { state, dispatch } = context;
     const node = state.nodes.find(n => n.id === nodeId);
     if (!node) return;
     
-    // AUTHORITY EXPANSION: Get entire connected subgraph
+    // AUTHORITY EXPANSION
     const relatedNodes = getRelatedNodes(nodeId, state.nodes, state.connections);
-    // Merge with any manual selections
     const allContextNodeIds = Array.from(new Set([
         ...relatedNodes.map(n => n.id), 
         ...(node.contextNodeIds || []),
@@ -373,10 +359,7 @@ export const handleAiMessage = async (
         .map(id => state.nodes.find(n => n.id === id))
         .filter((n): n is NodeData => !!n && n.type === 'CODE');
 
-    // Lock all involved nodes
     const nodesToLock = new Set<string>(allContextNodeIds);
-    
-    // Find connected folders to lock as well
     contextFiles.forEach(file => {
         const folderConn = state.connections.find(c => c.sourceNodeId === file.id && state.nodes.find(n => n.id === c.targetNodeId)?.type === 'FOLDER');
         if (folderConn) nodesToLock.add(folderConn.targetNodeId);
@@ -385,7 +368,6 @@ export const handleAiMessage = async (
     dispatch({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'user', text } } });
     nodesToLock.forEach(id => dispatch({ type: 'SET_NODE_LOADING', payload: { id, isLoading: true } }));
 
-    // Prepare Context String with PATHS
     const structureContext = state.nodes
       .filter(n => n.type === 'CODE' || n.type === 'IMAGE' || n.type === 'TEXT' || n.type === 'FOLDER')
       .map(n => {
@@ -444,7 +426,6 @@ export const handleAiMessage = async (
     }
 };
 
-// "Optimize" or "Prompt" Handler
 export const handleAiGeneration = async (
     nodeId: string, 
     action: 'optimize' | 'prompt', 
@@ -455,9 +436,7 @@ export const handleAiGeneration = async (
     const startNode = state.nodes.find(n => n.id === nodeId);
     if (!startNode || startNode.type !== 'CODE' || !checkPermission(nodeId)) return;
     
-    // AUTHORITY EXPANSION
     const relatedNodes = getRelatedNodes(nodeId, state.nodes, state.connections);
-    // Also include folders connected to these nodes
     const targetNodes = relatedNodes.filter(n => n.type === 'CODE' || n.type === 'FOLDER');
     
     targetNodes.forEach(n => dispatch({ type: 'SET_NODE_LOADING', payload: { id: n.id, isLoading: true } }));
