@@ -1,4 +1,3 @@
-
 import React, { useReducer, useState, useRef, useEffect, useMemo } from 'react';
 import { Node } from './components/Node';
 import { Wire } from './components/Wire';
@@ -345,6 +344,7 @@ export default function App() {
       state.runningPreviewIds.forEach(previewId => {
           if (compileTimeoutRef.current[previewId]) clearTimeout(compileTimeoutRef.current[previewId]);
           
+          // Reduced debounce to 500ms for snappier updates
           compileTimeoutRef.current[previewId] = setTimeout(() => {
               const iframe = document.getElementById(`preview-iframe-${previewId}`) as HTMLIFrameElement;
               if (iframe) {
@@ -353,7 +353,7 @@ export default function App() {
                       iframe.srcdoc = compiled;
                   }
               }
-          }, 1000); 
+          }, 500); 
       });
   }, [state.nodes, state.connections, state.runningPreviewIds]);
 

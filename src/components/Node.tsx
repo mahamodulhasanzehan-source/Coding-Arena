@@ -1,4 +1,3 @@
-
 import React, { useRef, useEffect, useState } from 'react';
 import { NodeData, Position, Size } from '../types';
 import { getPortsForNode } from '../constants';
@@ -1090,13 +1089,27 @@ export const Node: React.FC<NodeProps> = ({
                  </div>
              </div>
         ) : (
-             <iframe
-                id={`preview-iframe-${data.id}`}
-                title="preview"
-                className="w-full h-full bg-white nodrag"
-                sandbox="allow-scripts allow-same-origin allow-modals allow-pointer-lock"
-                onPointerDown={(e) => e.stopPropagation()}
-            />
+            // PREVIEW NODE LOGIC
+            <div className="w-full h-full bg-[#1e1e1e] relative">
+               {isRunning ? (
+                 <iframe
+                    id={`preview-iframe-${data.id}`}
+                    title="preview"
+                    className="w-full h-full bg-white nodrag"
+                    // REMOVED allow-same-origin to fix console error and improve security
+                    sandbox="allow-scripts allow-modals allow-pointer-lock allow-forms"
+                    onPointerDown={(e) => e.stopPropagation()}
+                 />
+               ) : (
+                 <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/50 text-zinc-500 select-none">
+                     <div className="text-center">
+                        <Play size={48} className="mx-auto mb-2 opacity-20" />
+                        <p className="text-sm font-medium">Preview Stopped</p>
+                        <p className="text-[10px] opacity-60">Click Run to start</p>
+                     </div>
+                 </div>
+               )}
+            </div>
         )}
       </div>
 
