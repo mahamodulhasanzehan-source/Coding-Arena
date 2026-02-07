@@ -242,7 +242,7 @@ function graphReducer(state: GraphState, action: Action): GraphState {
 
 const updateCodeFunction: FunctionDeclaration = {
     name: 'updateFile',
-    description: 'Create or Update a file. If the file does not exist, it will be created. ALWAYS provide the FULL content.',
+    description: 'Create or Update the CONTENT of a file. DO NOT use this to move files. Only use this if the file text needs to change.',
     parameters: {
         type: Type.OBJECT,
         properties: {
@@ -267,11 +267,11 @@ const deleteFileFunction: FunctionDeclaration = {
 
 const moveFileFunction: FunctionDeclaration = {
     name: 'moveFile',
-    description: 'Move a file into a folder or to the root. This changes the connection structure.',
+    description: 'Move an EXISTING file into a folder or to root. This REWIRES the connections. It does NOT change content.',
     parameters: {
         type: Type.OBJECT,
         properties: {
-            filename: { type: Type.STRING, description: 'The exact name of the file node to move.' },
+            filename: { type: Type.STRING, description: 'The exact name of the existing file node to move.' },
             targetFolderName: { type: Type.STRING, description: 'The exact name of the destination folder node. Leave empty/null to move to root.' }
         },
         required: ['filename']
@@ -335,11 +335,15 @@ async function performGeminiCall<T>(operation: (ai: GoogleGenAI) => Promise<T>):
 }
 
 const SYSTEM_INSTRUCTIONS = `You are a coding assistant in NodeCode Studio.
+
 RULES:
-1. To EDIT content, use 'updateFile'.
+1. To EDIT content, use 'updateFile'. 
+   - DO NOT use this to move files.
+   - DO NOT use this to create duplicate files in folders.
 2. To MOVE a file, use 'moveFile(filename, folderName)'. 
-   - Moving changes CONNECTIONS. It connects the file to the folder.
-   - Folders are nodes. If the folder doesn't exist, it will be created.
+   - This operates on EXISTING files listed in the project structure.
+   - It simply changes the visual connections.
+   - If the target folder doesn't exist, it will be created automatically.
    - To move to root, leave targetFolderName empty.
 3. To RENAME a file, use 'renameFile(oldName, newName)'.
    - Renaming only changes the Title.
@@ -347,6 +351,7 @@ RULES:
      First RENAME 'components/button.js' to 'button.js'.
      Then MOVE 'button.js' to 'components'.
 4. Do NOT use paths in filenames (e.g. 'folder/file.js'). Use 'file.js' and put it inside a 'folder' node.
+5. ALWAYS check the 'CURRENT PROJECT FILES' list. Do not hallucinate files that are not there.
 `;
 
 export default function App() {
@@ -532,17 +537,31 @@ export default function App() {
       dispatchLocal({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'user', text } } });
       nodesToLock.forEach(id => dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id, isLoading: true } }));
 
+      // Provide structure context so AI knows about all files, not just selected ones
+      const structureContext = state.nodes
+        .filter(n => n.type === 'CODE' || n.type === 'IMAGE' || n.type === 'TEXT' || n.type === 'FOLDER')
+        .map(n => `- ${n.title} (${n.type})`)
+        .join('\n');
+
       const fileContext = contextFiles.map(n => `Filename: ${n!.title}\nContent:\n${n!.content}`).join('\n\n');
       
+      const dynamicSystemInstruction = `${SYSTEM_INSTRUCTIONS}
+
+      CURRENT PROJECT FILES (Structural Context):
+      ${structureContext}
+
+      Use this list to identify files for moving or renaming. Do not invent new files.
+      `;
+
       try {
           dispatchLocal({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: '' } } });
           
           await performGeminiCall(async (ai) => {
               const result = await ai.models.generateContentStream({ 
                   model: 'gemini-3-flash-preview', 
-                  contents: [{ role: 'user', parts: [{ text: `Query: ${text}\n\n${fileContext}` }] }], 
+                  contents: [{ role: 'user', parts: [{ text: `Query: ${text}\n\nSelected File Content Context:\n${fileContext}` }] }], 
                   config: { 
-                      systemInstruction: SYSTEM_INSTRUCTIONS, 
+                      systemInstruction: dynamicSystemInstruction, 
                       tools: [{ functionDeclarations: [updateCodeFunction, deleteFileFunction, moveFileFunction, renameFileFunction] }] 
                   } 
               });
@@ -596,7 +615,7 @@ export default function App() {
                       } else if (call.name === 'moveFile') {
                           const args = call.args as any;
                           const { filename, targetFolderName } = args;
-                          const targetNode = tempNodes.find(n => n.title === filename && n.type === 'CODE');
+                          const targetNode = tempNodes.find(n => n.title === filename && (n.type === 'CODE' || n.type === 'IMAGE' || n.type === 'TEXT'));
                           
                           if (targetNode && checkPermission(targetNode.id)) {
                               // 1. Disconnect current outputs (Local logic: we can't update state.connections locally easily without complex logic, so we just dispatch)
@@ -638,7 +657,7 @@ export default function App() {
                                   }
                               }
                           } else {
-                              toolOutput += `\n[Error: Could not find ${filename} to move]`;
+                              toolOutput += `\n[Error: Could not find ${filename} to move. Available files: ${tempNodes.map(n=>n.title).join(', ')}]`;
                           }
                       } else if (call.name === 'renameFile') {
                           const args = call.args as any;
@@ -688,14 +707,26 @@ export default function App() {
       targetNodes.forEach(n => dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: n.id, isLoading: true } }));
       try {
           const fileContext = targetNodes.filter(n => n.type === 'CODE').map(n => `Filename: ${n.title}\nContent:\n${n.content}`).join('\n\n');
+          
+          const structureContext = state.nodes
+            .filter(n => n.type === 'CODE' || n.type === 'IMAGE' || n.type === 'TEXT' || n.type === 'FOLDER')
+            .map(n => `- ${n.title} (${n.type})`)
+            .join('\n');
+
           let userPrompt = action === 'optimize' ? `Optimize the file ${startNode.title}.` : `Request: ${promptText}\n\n(Focus on ${startNode.title}...)`;
           
+          const dynamicSystemInstruction = `${SYSTEM_INSTRUCTIONS}
+
+          CURRENT PROJECT FILES (Structural Context):
+          ${structureContext}
+          `;
+
           await performGeminiCall(async (ai) => {
                const result = await ai.models.generateContent({ 
                    model: 'gemini-3-flash-preview', 
                    contents: userPrompt, 
                    config: { 
-                       systemInstruction: SYSTEM_INSTRUCTIONS, 
+                       systemInstruction: dynamicSystemInstruction, 
                        tools: [{ functionDeclarations: [updateCodeFunction, deleteFileFunction, moveFileFunction, renameFileFunction] }] 
                    } 
                });
@@ -728,7 +759,7 @@ export default function App() {
                        } else if (call.name === 'moveFile') {
                            const args = call.args as any;
                            const { filename, targetFolderName } = args;
-                           const target = tempNodes.find(n => n.title === filename && n.type === 'CODE');
+                           const target = tempNodes.find(n => n.title === filename && (n.type === 'CODE' || n.type === 'IMAGE' || n.type === 'TEXT'));
                            
                            if (target && checkPermission(target.id)) {
                                const existingOutputs = state.connections.filter(c => c.sourceNodeId === target.id && c.sourcePortId.includes('out-dom'));
