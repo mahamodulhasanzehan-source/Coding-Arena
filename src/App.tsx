@@ -693,14 +693,40 @@ export default function App() {
   };
 
   const handleFindNearest = () => {
-    const center = { x: -state.pan.x / state.zoom + window.innerWidth / 2 / state.zoom, y: -state.pan.y / state.zoom + window.innerHeight / 2 / state.zoom };
-    let nearestId = null;
+    // Calculate viewport center in world coordinates
+    const centerX = -state.pan.x / state.zoom + window.innerWidth / 2 / state.zoom;
+    const centerY = -state.pan.y / state.zoom + window.innerHeight / 2 / state.zoom;
+    
+    let nearestNode: NodeData | null = null;
     let minDist = Infinity;
+    
     state.nodes.forEach(n => {
-        const dist = Math.hypot(n.position.x - center.x, n.position.y - center.y);
-        if (dist < minDist) { minDist = dist; nearestId = n.id; }
+        // Use node center for distance calculation for better accuracy
+        const nW = n.size.width;
+        const nH = n.isMinimized ? 40 : n.size.height;
+        const nCenterX = n.position.x + nW / 2;
+        const nCenterY = n.position.y + nH / 2;
+        
+        const dist = Math.hypot(nCenterX - centerX, nCenterY - centerY);
+        if (dist < minDist) { minDist = dist; nearestNode = n; }
     });
-    if (nearestId) handleHighlightNode(nearestId);
+
+    if (nearestNode) {
+        const target = nearestNode as NodeData;
+        handleHighlightNode(target.id);
+        
+        // Calculate new pan to center the node
+        // pan.x = screenCenter.x - nodeCenter.x * zoom
+        const nW = target.size.width;
+        const nH = target.isMinimized ? 40 : target.size.height;
+        const targetCenterX = target.position.x + nW / 2;
+        const targetCenterY = target.position.y + nH / 2;
+        
+        const newPanX = (window.innerWidth / 2) - (targetCenterX * state.zoom);
+        const newPanY = (window.innerHeight / 2) - (targetCenterY * state.zoom);
+        
+        dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
+    }
   };
 
   const handleNodeMove = (id: string, newPos: Position) => {
@@ -972,7 +998,7 @@ export default function App() {
         canAlignVertical,
         canDistributeHorizontal, 
         canDistributeVertical,
-        canCompactHorizontal,
+        canCompactHorizontal, 
         canCompactVertical
     });
   };
