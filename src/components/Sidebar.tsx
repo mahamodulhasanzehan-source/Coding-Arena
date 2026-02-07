@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { NodeData } from '../types';
-import { X, FileCode, Monitor, TerminalSquare, Package, Image as ImageIcon, StickyNote, LogIn, LogOut } from 'lucide-react';
+import { X, FileCode, Monitor, TerminalSquare, Package, Image as ImageIcon, StickyNote, LogIn, LogOut, Folder } from 'lucide-react';
 import { signInWithGoogle, logOut, auth, onAuthStateChanged, User } from '../firebase';
 
 interface SidebarProps {
@@ -24,6 +24,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, nodes, onNodeClick, on
   const npmNodes = nodes.filter(n => n.type === 'NPM');
   const imageNodes = nodes.filter(n => n.type === 'IMAGE');
   const textNodes = nodes.filter(n => n.type === 'TEXT');
+  const folderNodes = nodes.filter(n => n.type === 'FOLDER');
 
   const [user, setUser] = useState<User | null>(null);
 
@@ -86,6 +87,25 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, nodes, onNodeClick, on
       </div>
 
       <div className="flex-1 flex flex-col min-h-0 relative">
+        {/* STRUCTURE SECTION (Orange/Grey) */}
+        <div className="flex-1 flex flex-col border-b border-panelBorder min-h-0">
+            <div className="bg-zinc-500/10 border-b border-zinc-500/20 px-4 py-2 flex items-center gap-2 text-zinc-400 font-bold text-xs uppercase tracking-wider shrink-0">
+                <Folder size={14} /> Structure
+            </div>
+            <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+                {folderNodes.map(node => (
+                    <button
+                        key={node.id}
+                        onClick={() => onNodeClick(node.id)}
+                        className="w-full text-left px-3 py-2 rounded text-zinc-400 hover:text-white hover:bg-zinc-700 text-sm font-medium transition-colors truncate"
+                    >
+                        {node.title}
+                    </button>
+                ))}
+                {folderNodes.length === 0 && <span className="text-zinc-600 text-xs font-medium px-3 py-2 italic">No folders</span>}
+            </div>
+        </div>
+
         {/* CODE SECTION (Gold) */}
         <div className="flex-1 flex flex-col border-b border-panelBorder min-h-0">
             <div className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-2 flex items-center gap-2 text-amber-500 font-bold text-xs uppercase tracking-wider shrink-0">

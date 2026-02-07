@@ -119,6 +119,29 @@ const collectDependencies = (
     return allDeps;
 };
 
+// Resolve the "Virtual Path" of a node based on its folder connections
+const getVirtualPath = (node: NodeData, connections: Connection[], nodes: NodeData[]): string => {
+    // Check if this node is connected TO a folder (File -> Folder)
+    // The File (Output) connects to Folder (Input)
+    // connections where source == node.id and target is a folder
+    
+    const parentFolderConn = connections.find(c => {
+        if (c.sourceNodeId !== node.id) return false;
+        const target = nodes.find(n => n.id === c.targetNodeId);
+        return target && target.type === 'FOLDER';
+    });
+
+    if (parentFolderConn) {
+        const folder = nodes.find(n => n.id === parentFolderConn.targetNodeId);
+        if (folder) {
+            // Check if Folder is nested (Folder -> Folder)
+            // NOT IMPLEMENTED DEEPLY in logic yet, but supports basic Folder/File
+            return `${folder.title}/${node.title}`;
+        }
+    }
+    return node.title;
+};
+
 export const compilePreview = (
   previewNodeId: string,
   nodes: NodeData[],
@@ -144,7 +167,7 @@ export const compilePreview = (
   // 2. Resolve Dependencies (Wired nodes only, recursively)
   const dependencyNodes = collectDependencies(rootNode, nodes, connections);
   
-  // Remove duplicates just in case
+  // Remove duplicates
   const uniqueDeps = Array.from(new Set(dependencyNodes.map(n => n.id)))
       .map(id => nodes.find(n => n.id === id)!)
       .filter(n => n.id !== rootNode.id); 
@@ -156,14 +179,14 @@ export const compilePreview = (
   
   if (lowerTitle.endsWith('.html') || lowerTitle.endsWith('.htm')) {
       // HTML: Render as is
-  } else if (lowerTitle.endsWith('.js') || lowerTitle.endsWith('.ts')) {
+  } else if (lowerTitle.endsWith('.js') || lowerTitle.endsWith('.ts') || lowerTitle.endsWith('.jsx') || lowerTitle.endsWith('.tsx')) {
       // JS: Wrap in script
       finalContent = `<script>\n${finalContent}\n</script>`;
   } else if (lowerTitle.endsWith('.css')) {
       // CSS: Wrap in style
       finalContent = `<style>\n${finalContent}\n</style>`;
   } else {
-      // Everything else (txt, md, no extension): Render as plain text
+      // Everything else: Render as plain text
       const escaped = finalContent
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")
@@ -178,37 +201,45 @@ export const compilePreview = (
       `;
   }
 
-  // 3. Inject Dependencies based on Filenames (Only if the root is HTML-like)
-  // We replace missing dependencies with a script that logs the error, preventing browser 404s.
+  // 3. Inject Dependencies based on Virtual Paths (Folder awareness)
   if (lowerTitle.endsWith('.html') || lowerTitle.endsWith('.htm')) {
-      // Check CSS imports <link href="style.css">
+      // Helper to find dep by exact title OR virtual path
+      const findDep = (refPath: string) => {
+          if (refPath.match(/^(https?:\/\/|\/\/)/i)) return null;
+          
+          return uniqueDeps.find(d => {
+              const vPath = getVirtualPath(d, connections, nodes);
+              // Match strict title OR virtual folder path
+              return d.title === refPath || vPath === refPath;
+          });
+      };
+
+      // Check CSS imports <link href="path/to/style.css">
       finalContent = finalContent.replace(/<link[^>]+href=["']([^"']+)["'][^>]*>/gi, (match, filename) => {
-        if (filename.match(/^(https?:\/\/|\/\/)/i)) return match; // Ignore remote URLs
+        if (filename.match(/^(https?:\/\/|\/\/)/i)) return match;
         
-        const depNode = uniqueDeps.find(d => d.title === filename);
+        const depNode = findDep(filename);
         if (depNode) {
             return `<style>\n/* Source: ${filename} */\n${depNode.content}\n</style>`;
         } else {
-            // Replace with explicit error logging to prevent browser 404 and scope error to terminal
-            return `<script>console.error('Dependency Error: "${filename}" is referenced but not connected via wires.');</script>`; 
+            return `<script>console.error('Dependency Error: "${filename}" is referenced but not found (check connections and folder structure).');</script>`; 
         }
       });
 
-      // Check JS imports <script src="script.js">
+      // Check JS imports <script src="path/to/script.js">
       finalContent = finalContent.replace(/<script[^>]+src=["']([^"']+)["'][^>]*><\/script>/gi, (match, filename) => {
-        if (filename.match(/^(https?:\/\/|\/\/)/i)) return match; // Ignore remote URLs
+        if (filename.match(/^(https?:\/\/|\/\/)/i)) return match;
 
-        const depNode = uniqueDeps.find(d => d.title === filename);
+        const depNode = findDep(filename);
         if (depNode) {
             return `<script>\n/* Source: ${filename} */\n${depNode.content}\n</script>`;
         } else {
-            // Replace with explicit error logging to prevent browser 404 and scope error to terminal
-            return `<script>console.error('Dependency Error: "${filename}" is referenced but not connected via wires.');</script>`; 
+             return `<script>console.error('Dependency Error: "${filename}" is referenced but not found (check connections and folder structure).');</script>`; 
         }
       });
   }
 
-  // 4. Inject Console Interceptor & Multiplayer Bridge & Force Reload Timestamp
+  // 4. Inject Console Interceptor & Multiplayer Bridge
   const interceptor = `
     <script>
       (function() {

@@ -241,11 +241,11 @@ function graphReducer(state: GraphState, action: Action): GraphState {
 
 const updateCodeFunction: FunctionDeclaration = {
     name: 'updateFile',
-    description: 'Create or Update a file. If the file does not exist, it will be created. Use this to write code, split code into new files, or make changes. ALWAYS provide the FULL content.',
+    description: 'Create or Update a file. If the file does not exist, it will be created. You can specify paths like "components/Header.tsx" to organize files into folders automatically. ALWAYS provide the FULL content.',
     parameters: {
         type: Type.OBJECT,
         properties: {
-            filename: { type: Type.STRING, description: 'The exact name of the file to create or update (e.g., script.js, style.css).' },
+            filename: { type: Type.STRING, description: 'The exact name of the file (e.g., script.js, components/Header.tsx).' },
             code: { type: Type.STRING, description: 'The NEW full content of the file.' }
         },
         required: ['filename', 'code']
@@ -520,7 +520,7 @@ export default function App() {
       dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: true } });
       const contextFiles = (node.contextNodeIds || []).map(id => state.nodes.find(n => n.id === id)).filter(n => n && n.type === 'CODE');
       const fileContext = contextFiles.map(n => `Filename: ${n!.title}\nContent:\n${n!.content}`).join('\n\n');
-      const systemInstruction = `You are a coding assistant in NodeCode Studio. Context Files: ${contextFiles.length > 0 ? contextFiles.map(f => f?.title).join(', ') : 'No files selected.'} RULES: 1. You can CREATE or UPDATE files using the 'updateFile' tool. 2. You can DELETE files using 'deleteFile'. 3. Always provide FULL content in 'updateFile'.`;
+      const systemInstruction = `You are a coding assistant in NodeCode Studio. Context Files: ${contextFiles.length > 0 ? contextFiles.map(f => f?.title).join(', ') : 'No files selected.'} RULES: 1. You can CREATE or UPDATE files using the 'updateFile' tool. 2. You can organize files into folders by using paths (e.g., "components/Button.tsx"). 3. ALWAYS provide FULL content in 'updateFile'.`;
       try {
           dispatchLocal({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: '' } } });
           await performGeminiCall(async (ai) => {
@@ -536,18 +536,67 @@ export default function App() {
                   for (const call of functionCalls) {
                       if (call.name === 'updateFile') {
                           const args = call.args as any;
-                          const target = state.nodes.find(n => n.title === args.filename && n.type === 'CODE');
+                          const rawFilename = args.filename;
+                          const parts = rawFilename.split('/');
+                          const isFolder = parts.length > 1;
+                          const fileName = parts[parts.length - 1];
+                          const folderName = isFolder ? parts.slice(0, parts.length - 1).join('/') : null;
+
+                          // Handle Folder Creation logic
+                          let targetFolderId: string | null = null;
+
+                          if (isFolder && folderName) {
+                              const existingFolder = state.nodes.find(n => n.type === 'FOLDER' && n.title === folderName);
+                              if (existingFolder) {
+                                  targetFolderId = existingFolder.id;
+                              } else {
+                                  targetFolderId = `node-folder-${Date.now()}`;
+                                  const chatNode = state.nodes.find(n => n.id === nodeId);
+                                  const fPos = chatNode ? { x: chatNode.position.x - 200, y: chatNode.position.y } : { x: 50, y: 50 };
+                                  dispatchLocal({ type: 'ADD_NODE', payload: { 
+                                      id: targetFolderId, 
+                                      type: 'FOLDER', 
+                                      title: folderName, 
+                                      content: '', 
+                                      position: fPos, 
+                                      size: { width: 250, height: 300 } 
+                                  }});
+                                  toolOutput += `\n[Created Folder ${folderName}]`;
+                              }
+                          }
+
+                          // Handle File Creation/Update
+                          const target = state.nodes.find(n => n.title === fileName && n.type === 'CODE');
                           if (target) {
-                              if (checkPermission(target.id)) { dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: target.id, content: args.code } }); toolOutput += `\n[Updated ${args.filename}]`; handleHighlightNode(target.id); } 
-                              else { toolOutput += `\n[Error: ${args.filename} is locked]`; }
+                              if (checkPermission(target.id)) { 
+                                  dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: target.id, content: args.code } }); 
+                                  toolOutput += `\n[Updated ${fileName}]`; 
+                                  handleHighlightNode(target.id); 
+                                  
+                                  // Ensure folder connection if path specified
+                                  if (targetFolderId) {
+                                      const alreadyConnected = state.connections.some(c => c.sourceNodeId === target.id && c.targetNodeId === targetFolderId);
+                                      if (!alreadyConnected) {
+                                          dispatchLocal({ type: 'CONNECT', payload: { id: `conn-folder-${Date.now()}`, sourceNodeId: target.id, sourcePortId: `${target.id}-out-dom`, targetNodeId: targetFolderId, targetPortId: `${targetFolderId}-in-files` } });
+                                      }
+                                  }
+                              } 
+                              else { toolOutput += `\n[Error: ${fileName} is locked]`; }
                           } else {
                               const newNodeId = `node-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
                               const chatNode = state.nodes.find(n => n.id === nodeId);
                               const pos = chatNode ? { x: chatNode.position.x + 50, y: chatNode.position.y + 50 } : { x: 100, y: 100 };
-                              dispatchLocal({ type: 'ADD_NODE', payload: { id: newNodeId, type: 'CODE', title: args.filename, content: args.code, position: pos, size: { width: 450, height: 300 }, autoHeight: false } });
-                              toolOutput += `\n[Created ${args.filename}]`;
+                              dispatchLocal({ type: 'ADD_NODE', payload: { id: newNodeId, type: 'CODE', title: fileName, content: args.code, position: pos, size: { width: 450, height: 300 }, autoHeight: false } });
+                              toolOutput += `\n[Created ${fileName}]`;
+                              
+                              if (targetFolderId) {
+                                  dispatchLocal({ type: 'CONNECT', payload: { id: `conn-folder-${Date.now()}`, sourceNodeId: newNodeId, sourcePortId: `${newNodeId}-out-dom`, targetNodeId: targetFolderId, targetPortId: `${targetFolderId}-in-files` } });
+                                  toolOutput += ` [In Folder: ${folderName}]`;
+                              }
+
                               const contextNode = state.nodes.find(n => n.id === nodeId);
-                              if (contextNode && contextNode.type === 'CODE') { if (checkPermission(contextNode.id)) { dispatchLocal({ type: 'CONNECT', payload: { id: `conn-auto-${Date.now()}`, sourceNodeId: newNodeId, sourcePortId: `${newNodeId}-out-dom`, targetNodeId: contextNode.id, targetPortId: `${contextNode.id}-in-file` } }); toolOutput += ` [Auto-Connected]`; } }
+                              // Auto connect to main code file if strictly necessary, but folders usually handle grouping.
+                              // Let's rely on folders.
                           }
                       } else if (call.name === 'deleteFile') {
                           const args = call.args as any;
@@ -654,7 +703,12 @@ export default function App() {
       const codeExts = ['html', 'htm', 'js', 'jsx', 'ts', 'tsx', 'css', 'json', 'txt', 'md'];
       const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'];
       let newType = node.type;
-      if (codeExts.includes(ext || '')) newType = 'CODE'; else if (imageExts.includes(ext || '')) newType = 'IMAGE';
+      
+      // Keep Folder type if manually set, otherwise guess
+      if (node.type !== 'FOLDER') {
+        if (codeExts.includes(ext || '')) newType = 'CODE'; else if (imageExts.includes(ext || '')) newType = 'IMAGE';
+      }
+      
       dispatchLocal({ type: 'UPDATE_NODE_TITLE', payload: { id, title: newTitle } });
       if (newType !== node.type) dispatchLocal({ type: 'UPDATE_NODE_TYPE', payload: { id, type: newType } });
   };
@@ -1355,9 +1409,18 @@ export default function App() {
 
                 {regularNodes.map(node => {
                     let logs: LogEntry[] = [];
+                    let folderContents: string[] = [];
+                    
                     if (node.type === 'TERMINAL') {
                          const sources = state.connections.filter(c => c.targetNodeId === node.id).map(c => c.sourceNodeId);
                          logs = sources.flatMap(sid => state.logs[sid] || []).sort((a, b) => a.timestamp - b.timestamp);
+                    }
+                    
+                    if (node.type === 'FOLDER') {
+                        folderContents = state.connections
+                            .filter(c => c.targetNodeId === node.id && c.targetPortId.includes('in-files'))
+                            .map(c => state.nodes.find(n => n.id === c.sourceNodeId)?.title)
+                            .filter((t): t is string => !!t);
                     }
                     
                     return (
@@ -1400,6 +1463,7 @@ export default function App() {
                                 onToggleMaximize={(id) => setMaximizedNodeId(maximizedNodeId === id ? null : id)}
                                 onSelect={handleToggleSelectNode}
                                 logs={logs}
+                                folderContents={folderContents}
                             >
                             </Node>
                         </div>
