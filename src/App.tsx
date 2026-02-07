@@ -337,15 +337,21 @@ export default function App() {
   const hiddenNodeIds = useMemo(() => {
       const ids = new Set<string>();
       
-      // Recursive helper to hide children of minimized folders
-      const hideChildren = (folderId: string) => {
-          const children = getAllConnectedSources(folderId, 'files', state.nodes, state.connections);
-          children.forEach(child => {
-              if (!ids.has(child.id)) {
-                  ids.add(child.id);
-                  // Recursively hide nested folders
-                  if (child.type === 'FOLDER') {
-                      hideChildren(child.id);
+      const getChildren = (folderId: string) => {
+           return state.connections
+              .filter(c => c.targetNodeId === folderId && c.targetPortId.includes('in-files'))
+              .map(c => c.sourceNodeId);
+      };
+
+      const traverse = (parentId: string) => {
+          const children = getChildren(parentId);
+          children.forEach(childId => {
+              if (!ids.has(childId)) {
+                  ids.add(childId);
+                  // Recursive check: If child is also a folder, hide its children too
+                  const childNode = state.nodes.find(n => n.id === childId);
+                  if (childNode && childNode.type === 'FOLDER') {
+                      traverse(childId);
                   }
               }
           });
@@ -353,9 +359,10 @@ export default function App() {
 
       state.nodes.forEach(node => {
           if (node.type === 'FOLDER' && node.isMinimized) {
-              hideChildren(node.id);
+              traverse(node.id);
           }
       });
+      
       return ids;
   }, [state.nodes, state.connections]);
 

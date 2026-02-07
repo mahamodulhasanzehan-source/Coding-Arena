@@ -242,12 +242,17 @@ const processToolCalls = (
                     toolOutput += `\n[Created Folder '${folderName}']`;
                 }
 
-                // Disconnect old parents to prevent duplicate wiring
-                const oldConns = state.connections.filter(c => 
-                    c.sourceNodeId === target!.id && 
-                    (tempNodes.find(n => n.id === c.targetNodeId)?.type === 'FOLDER' || tempNodes.find(n => n.id === c.targetNodeId)?.type === 'CODE')
-                );
-                oldConns.forEach(c => dispatch({ type: 'DISCONNECT', payload: c.id }));
+                // REWIRING LOGIC: Disconnect from everything EXCEPT Outputs (Preview/Terminal)
+                const outgoingConns = state.connections.filter(c => c.sourceNodeId === target!.id);
+                const connectionsToRemove = outgoingConns.filter(c => {
+                     const t = tempNodes.find(n => n.id === c.targetNodeId);
+                     if (!t) return true;
+                     // Keep Preview and Terminal connections
+                     if (t.type === 'PREVIEW' || t.type === 'TERMINAL') return false;
+                     // Remove everything else (Code, Folders, etc)
+                     return true;
+                });
+                connectionsToRemove.forEach(c => dispatch({ type: 'DISCONNECT', payload: c.id }));
 
                 dispatch({ type: 'CONNECT', payload: { id: `conn-folder-${Date.now()}`, sourceNodeId: target.id, sourcePortId: `${target.id}-out-dom`, targetNodeId: folderNode.id, targetPortId: `${folderNode.id}-in-files` }});
                 toolOutput += `\n[Moved ${fileName} to ${folderName}]`;
@@ -260,16 +265,18 @@ const processToolCalls = (
             
             if (targetNode && checkPermission(targetNode.id)) {
                 // 1. AGGRESSIVE DISCONNECT
-                // Remove connections to any FOLDER or CODE node (structural parents)
-                // We keep connections to PREVIEW or TERMINAL (outputs)
-                const outgoingConns = state.connections.filter(c => {
-                    if (c.sourceNodeId !== targetNode.id) return false;
-                    const target = tempNodes.find(n => n.id === c.targetNodeId);
-                    // Disconnect from Folders or Code inputs (parents)
-                    return target && (target.type === 'FOLDER' || target.type === 'CODE');
+                // Disconnect from everything EXCEPT Outputs (Preview/Terminal)
+                const outgoingConns = state.connections.filter(c => c.sourceNodeId === targetNode.id);
+                const connectionsToRemove = outgoingConns.filter(c => {
+                     const t = tempNodes.find(n => n.id === c.targetNodeId);
+                     if (!t) return true;
+                     // Keep Preview and Terminal connections to preserve runtime visualization
+                     if (t.type === 'PREVIEW' || t.type === 'TERMINAL') return false;
+                     // Remove connections to Main HTML (Imports) or other Folders
+                     return true;
                 });
                 
-                outgoingConns.forEach(c => dispatch({ type: 'DISCONNECT', payload: c.id }));
+                connectionsToRemove.forEach(c => dispatch({ type: 'DISCONNECT', payload: c.id }));
 
                 if (targetFolderName) {
                     let folderNode = tempNodes.find(n => n.type === 'FOLDER' && n.title === targetFolderName);
@@ -302,12 +309,14 @@ const processToolCalls = (
             if (source && target) {
                 if (target.type === 'FOLDER') {
                      // Aggressive disconnect for folders (Move behavior)
-                     const parentConns = state.connections.filter(c => 
-                        c.sourceNodeId === source.id && 
-                        (tempNodes.find(n => n.id === c.targetNodeId)?.type === 'CODE' || 
-                         tempNodes.find(n => n.id === c.targetNodeId)?.type === 'FOLDER')
-                     );
-                     parentConns.forEach(c => dispatch({ type: 'DISCONNECT', payload: c.id }));
+                     const outgoingConns = state.connections.filter(c => c.sourceNodeId === source.id);
+                     const connectionsToRemove = outgoingConns.filter(c => {
+                         const t = tempNodes.find(n => n.id === c.targetNodeId);
+                         if (!t) return true;
+                         if (t.type === 'PREVIEW' || t.type === 'TERMINAL') return false;
+                         return true;
+                     });
+                     connectionsToRemove.forEach(c => dispatch({ type: 'DISCONNECT', payload: c.id }));
 
                      dispatch({ type: 'CONNECT', payload: { id: `conn-man-${Date.now()}`, sourceNodeId: source.id, sourcePortId: `${source.id}-out-dom`, targetNodeId: target.id, targetPortId: `${target.id}-in-files` } });
                      toolOutput += `\n[Connected ${sourceName} -> ${targetName}]`;
