@@ -131,6 +131,20 @@ export const Node: React.FC<NodeProps> = ({
     }
   }, [logs, data.type]);
 
+  // Sync actual rendered size back to state when minimized
+  useEffect(() => {
+    if (data.isMinimized && nodeRef.current) {
+        // Measure the DOM element
+        const actualWidth = nodeRef.current.offsetWidth;
+        const actualHeight = nodeRef.current.offsetHeight;
+        
+        // Sync back to state if significantly different, ensuring Wires attach to the correct point
+        if (Math.abs(actualWidth - data.size.width) > 2 || Math.abs(actualHeight - data.size.height) > 2) {
+            onResize(data.id, { width: actualWidth, height: actualHeight });
+        }
+    }
+  }, [data.isMinimized, data.title, data.size.width, data.size.height]);
+
   // Auto-scroll chat to bottom
   useEffect(() => {
       if (data.type === 'AI_CHAT' && chatContainerRef.current) {
@@ -560,7 +574,8 @@ export const Node: React.FC<NodeProps> = ({
       borderWidth: 0,
   } : {
       transform: `translate(${data.position.x}px, ${data.position.y}px)`,
-      width: data.size.width,
+      width: data.isMinimized ? 'max-content' : data.size.width, // Use max-content for minimized state
+      minWidth: data.isMinimized ? '200px' : undefined, // Ensure minimum width for buttons
       height: data.isMinimized ? 40 : data.size.height,
   };
 
@@ -600,7 +615,7 @@ export const Node: React.FC<NodeProps> = ({
       )}
 
       {/* Header */}
-      <div className="h-10 flex items-center justify-between px-3 border-b border-panelBorder bg-zinc-900/50 rounded-t-lg select-none shrink-0 relative z-10">
+      <div className="h-10 flex items-center justify-between px-3 border-b border-panelBorder bg-zinc-900/50 rounded-t-lg select-none shrink-0 relative z-10 gap-3">
         <div className="flex items-center gap-2 text-zinc-300 font-semibold text-sm flex-1 min-w-0">
           {!isMaximized && <GripVertical size={14} className="opacity-50 shrink-0" />}
           {isEditingTitle && !isMaximized ? (
@@ -615,7 +630,7 @@ export const Node: React.FC<NodeProps> = ({
               autoFocus
             />
           ) : (
-             <div className={`flex items-center gap-2 group/title ${data.isMinimized ? '' : 'truncate'}`}>
+             <div className={`flex items-center gap-2 group/title ${data.isMinimized ? 'whitespace-nowrap' : 'truncate'}`}>
                 {/* Lock Status Indicator */}
                 {data.lockedBy && (
                     <div className="text-amber-500 flex items-center" title={`Locked by ${data.lockedBy.displayName}`}>

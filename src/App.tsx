@@ -27,19 +27,6 @@ const initialState: GraphState = {
   selectedNodeIds: [],
 };
 
-// Helper to calculate width of a minimized node based on title
-const calculateMinimizedWidth = (title: string): number => {
-    // Balanced calculation:
-    // Left Icons + Right Buttons (3x) + Gap takes approx 140px.
-    // We add a base padding to ensure text doesn't touch buttons.
-    const BASE_CHROME = 155; 
-    const CHAR_WIDTH = 9; 
-    const width = BASE_CHROME + (title.length * CHAR_WIDTH);
-    
-    // Floor at 200px to ensure "db.js" fits with all 3 buttons visible comfortably
-    return Math.max(200, Math.min(600, width));
-};
-
 function graphReducer(state: GraphState, action: Action): GraphState {
   switch (action.type) {
     case 'ADD_NODE':
@@ -71,28 +58,7 @@ function graphReducer(state: GraphState, action: Action): GraphState {
     case 'UPDATE_NODE_TITLE':
       return {
         ...state,
-        nodes: state.nodes.map(n => {
-            if (n.id !== action.payload.id) return n;
-            
-            const newTitle = action.payload.title;
-            
-            // If minimized, we need to resize and re-center based on new title length
-            if (n.isMinimized) {
-                const oldWidth = n.size.width;
-                const newWidth = calculateMinimizedWidth(newTitle);
-                const widthDiff = oldWidth - newWidth;
-                
-                return { 
-                    ...n, 
-                    title: newTitle,
-                    size: { ...n.size, width: newWidth },
-                    // Shift X by half the difference to maintain center alignment
-                    position: { x: n.position.x + widthDiff / 2, y: n.position.y }
-                };
-            }
-            
-            return { ...n, title: newTitle };
-        })
+        nodes: state.nodes.map(n => n.id === action.payload.id ? { ...n, title: action.payload.title } : n)
       };
     case 'UPDATE_NODE_TYPE':
         return {
@@ -240,33 +206,24 @@ function graphReducer(state: GraphState, action: Action): GraphState {
                 const shouldMinimize = !n.isMinimized;
                 
                 if (shouldMinimize) {
-                     // Minimizing: Calculate width and center
-                     const oldWidth = n.size.width;
-                     const newWidth = calculateMinimizedWidth(n.title);
-                     const widthDiff = oldWidth - newWidth;
-
+                     // Minimizing: Don't calculate width here. Component will handle "max-content".
+                     // Just save state.
                      return {
                          ...n,
                          isMinimized: true,
                          expandedSize: n.size, // Save current full size
-                         size: { width: newWidth, height: 40 },
-                         // Adjust position to center
-                         position: { x: n.position.x + widthDiff / 2, y: n.position.y }
+                         // We do NOT change 'size' here. 
+                         // The Node component will force a re-render with the correct CSS width, 
+                         // then call onResize to update state via effect if needed.
                      };
                 } else {
-                     // Maximizing (Un-minimizing)
-                     const restoredSize = n.expandedSize || NODE_DEFAULTS[n.type]; // Fallback default
-                     const oldWidth = n.size.width;
-                     const newWidth = restoredSize.width;
-                     const widthDiff = oldWidth - newWidth;
-
+                     // Maximizing: Restore
+                     const restoredSize = n.expandedSize || NODE_DEFAULTS[n.type];
                      return {
                          ...n,
                          isMinimized: false,
                          expandedSize: undefined,
                          size: restoredSize,
-                         // Adjust position to center
-                         position: { x: n.position.x + widthDiff / 2, y: n.position.y }
                      };
                 }
             })
