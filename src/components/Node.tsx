@@ -131,10 +131,10 @@ export const Node: React.FC<NodeProps> = ({
     }
   }, [logs, data.type]);
 
-  // Sync actual rendered size back to state when minimized
+  // Sync actual rendered size back to state when minimized to ensure wires connect correctly
   useEffect(() => {
     if (data.isMinimized && nodeRef.current) {
-        // Measure the DOM element
+        // When minimized, we allow the DOM to dictate width based on content (title + buttons)
         const actualWidth = nodeRef.current.offsetWidth;
         const actualHeight = nodeRef.current.offsetHeight;
         
@@ -143,7 +143,7 @@ export const Node: React.FC<NodeProps> = ({
             onResize(data.id, { width: actualWidth, height: actualHeight });
         }
     }
-  }, [data.isMinimized, data.title, data.size.width, data.size.height]);
+  }, [data.isMinimized, data.title, data.size.width, data.size.height, onResize, data.id]);
 
   // Auto-scroll chat to bottom
   useEffect(() => {
@@ -561,7 +561,7 @@ export const Node: React.FC<NodeProps> = ({
       borderClass = 'border-indigo-500/50';
   }
 
-  // Maximized Style Override
+  // Determine styles for Minimized vs Maximized vs Normal
   const maximizedStyle = isMaximized ? {
       position: 'fixed' as const,
       top: 0,
@@ -574,9 +574,10 @@ export const Node: React.FC<NodeProps> = ({
       borderWidth: 0,
   } : {
       transform: `translate(${data.position.x}px, ${data.position.y}px)`,
-      width: data.isMinimized ? 'max-content' : data.size.width, // Use max-content for minimized state
-      minWidth: data.isMinimized ? '200px' : undefined, // Ensure minimum width for buttons
-      height: data.isMinimized ? 40 : data.size.height,
+      // KEY CHANGE: If minimized, let content dictate width (auto), but check min-width
+      width: data.isMinimized ? 'auto' : data.size.width, 
+      minWidth: data.isMinimized ? '200px' : undefined,
+      height: data.isMinimized ? 'auto' : data.size.height, // Auto height for minimize to fit header exactly
   };
 
   const dynamicStyle = collaboratorInfo ? {
@@ -615,8 +616,8 @@ export const Node: React.FC<NodeProps> = ({
       )}
 
       {/* Header */}
-      <div className="h-10 flex items-center justify-between px-3 border-b border-panelBorder bg-zinc-900/50 rounded-t-lg select-none shrink-0 relative z-10 gap-3">
-        <div className="flex items-center gap-2 text-zinc-300 font-semibold text-sm flex-1 min-w-0">
+      <div className={`h-10 flex items-center justify-between px-3 border-b border-panelBorder bg-zinc-900/50 rounded-t-lg select-none shrink-0 relative z-10 gap-3 ${data.isMinimized ? 'rounded-b-lg border-b-0' : ''}`}>
+        <div className={`flex items-center gap-2 text-zinc-300 font-semibold text-sm min-w-0 ${data.isMinimized ? 'whitespace-nowrap' : 'flex-1'}`}>
           {!isMaximized && <GripVertical size={14} className="opacity-50 shrink-0" />}
           {isEditingTitle && !isMaximized ? (
             <input 
