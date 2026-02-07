@@ -122,10 +122,9 @@ const collectDependencies = (
     const directDeps = getAllConnectedSources(rootNode.id, 'file', nodes, connections);
     let allDeps: NodeData[] = [];
 
-    // Also check for folder inputs if this node is connected to a folder
-    
     for (const dep of directDeps) {
         if (dep.type === 'FOLDER') {
+            // If connected to a folder, get contents of that folder
             const folderContents = getAllConnectedSources(dep.id, 'files', nodes, connections);
             allDeps = [...allDeps, ...folderContents];
             
@@ -201,16 +200,33 @@ export const compilePreview = (
               const blobUrl = URL.createObjectURL(blob);
               
               const fullPath = getNodePath(node, nodes, connections);
+              const fileName = node.title;
+              const fileNameNoExt = fileName.replace(/\.[^/.]+$/, "");
               
-              // Map all possible reference variations
-              pathToBlobUrl[node.title] = blobUrl;
-              pathToBlobUrl[`./${node.title}`] = blobUrl;
-              pathToBlobUrl[fullPath] = blobUrl;
-              pathToBlobUrl[`./${fullPath}`] = blobUrl;
+              // Map all possible reference variations to ensure imports work
+              const paths = [
+                  fileName,
+                  `./${fileName}`,
+                  `/${fileName}`,
+                  fileNameNoExt,
+                  `./${fileNameNoExt}`,
+                  `/${fileNameNoExt}`,
+                  
+                  // Folder paths
+                  fullPath,
+                  `./${fullPath}`,
+                  `/${fullPath}`,
+                  fullPath.replace(/\.[^/.]+$/, ""),
+                  `./${fullPath.replace(/\.[^/.]+$/, "")}`,
+              ];
+
+              paths.forEach(p => {
+                  if (p) pathToBlobUrl[p] = blobUrl;
+              });
               
           } catch (e) {
               console.error(`Failed to transpile ${node.title}:`, e);
-              // Fallback to raw content if babel fails (unlikely for valid code)
+              // Fallback to raw content if babel fails
               const blob = new Blob([node.content], { type: 'application/javascript' });
               pathToBlobUrl[node.title] = URL.createObjectURL(blob);
           }
