@@ -281,6 +281,10 @@ export default function App() {
   const lastSentStateRef = useRef<Record<string, any>>({});
   const longPressTimer = useRef<any>(null);
   const touchStartPos = useRef<{ x: number, y: number } | null>(null);
+  
+  // Debounce ref for preview compilation
+  // Fix: Use ReturnType<typeof setTimeout> instead of NodeJS.Timeout to avoid type errors in environments without Node types
+  const compileTimeoutRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   useEffect(() => {
       const handleKeyDown = (e: KeyboardEvent) => {
@@ -332,6 +336,27 @@ export default function App() {
           dispatch({ type: 'LOAD_STATE', payload: { nodes: defaultNodes, connections: [], pan: {x:0, y:0}, zoom: 1 } });
       }
   };
+
+  // --- Live Preview Re-compilation ---
+  // Automatically update running previews when nodes change
+  useEffect(() => {
+      state.runningPreviewIds.forEach(previewId => {
+          if (compileTimeoutRef.current[previewId]) clearTimeout(compileTimeoutRef.current[previewId]);
+          
+          compileTimeoutRef.current[previewId] = setTimeout(() => {
+              const iframe = document.getElementById(`preview-iframe-${previewId}`) as HTMLIFrameElement;
+              if (iframe) {
+                  const compiled = compilePreview(previewId, state.nodes, state.connections);
+                  // Only update if content changed significantly to avoid flickering, 
+                  // but effectively replacing srcdoc is the standard way here.
+                  // We could optimize by checking a hash, but for now simple replacement works.
+                  if (iframe.srcdoc !== compiled) {
+                      iframe.srcdoc = compiled;
+                  }
+              }
+          }, 1000); // 1 second debounce
+      });
+  }, [state.nodes, state.connections, state.runningPreviewIds]);
 
   // --- Folder Minimization Logic ---
   const hiddenNodeIds = useMemo(() => {
@@ -1064,6 +1089,7 @@ export default function App() {
     const handleToggleRun = (id: string) => {
         const isRunning = state.runningPreviewIds.includes(id);
         const iframe = document.getElementById(`preview-iframe-${id}`) as HTMLIFrameElement;
+        
         if (isRunning) {
              dispatchLocal({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: false } });
              dispatchLocal({ type: 'CLEAR_LOGS', payload: { nodeId: id } });
@@ -1071,6 +1097,12 @@ export default function App() {
         } else {
              dispatchLocal({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: true } });
              dispatchLocal({ type: 'CLEAR_LOGS', payload: { nodeId: id } });
+             
+             // IMMEDIATELY render the preview content
+             if (iframe) {
+                 const compiled = compilePreview(id, state.nodes, state.connections, true);
+                 iframe.srcdoc = compiled;
+             }
         }
     };
     
