@@ -516,9 +516,20 @@ export default function App() {
   const handleSendMessage = async (nodeId: string, text: string) => {
       const node = state.nodes.find(n => n.id === nodeId);
       if (!node) return;
-      dispatchLocal({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'user', text } } });
-      dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: true } });
+      
+      // Lock Context Nodes AND their Folders
       const contextFiles = (node.contextNodeIds || []).map(id => state.nodes.find(n => n.id === id)).filter(n => n && n.type === 'CODE');
+      const nodesToLock = new Set<string>([nodeId, ...contextFiles.map(n => n!.id)]);
+      
+      // Find folders connected to these context files
+      contextFiles.forEach(file => {
+          const folderConn = state.connections.find(c => c.sourceNodeId === file!.id && state.nodes.find(n => n.id === c.targetNodeId)?.type === 'FOLDER');
+          if (folderConn) nodesToLock.add(folderConn.targetNodeId);
+      });
+
+      dispatchLocal({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'user', text } } });
+      nodesToLock.forEach(id => dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id, isLoading: true } }));
+
       const fileContext = contextFiles.map(n => `Filename: ${n!.title}\nContent:\n${n!.content}`).join('\n\n');
       const systemInstruction = `You are a coding assistant in NodeCode Studio. Context Files: ${contextFiles.length > 0 ? contextFiles.map(f => f?.title).join(', ') : 'No files selected.'} RULES: 1. You can CREATE or UPDATE files using the 'updateFile' tool. 2. You can organize files into folders by using paths (e.g., "components/Button.tsx"). 3. ALWAYS provide FULL content in 'updateFile'.`;
       try {
@@ -570,28 +581,50 @@ export default function App() {
                           const contextNode = state.nodes.find(n => n.id === nodeId);
 
                           if (target) {
+                              // Existing File Logic
                               if (checkPermission(target.id)) { 
                                   dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: target.id, content: args.code } }); 
                                   toolOutput += `\n[Updated ${fileName}]`; 
                                   handleHighlightNode(target.id); 
                                   
-                                  // Ensure folder connection if path specified
+                                  // --- Folder Wiring Logic for Existing Files ---
                                   if (targetFolderId) {
+                                      // 1. Strict Move: User specified a folder path ("components/Header.tsx")
                                       const alreadyConnected = state.connections.some(c => c.sourceNodeId === target.id && c.targetNodeId === targetFolderId);
                                       if (!alreadyConnected) {
+                                          // Disconnect from ANY other output connections (Old folders or direct links)
+                                          const existingOutputs = state.connections.filter(c => c.sourceNodeId === target.id);
+                                          existingOutputs.forEach(c => dispatchLocal({ type: 'DISCONNECT', payload: c.id }));
+
+                                          // Connect to new folder
                                           dispatchLocal({ type: 'CONNECT', payload: { id: `conn-folder-${Date.now()}`, sourceNodeId: target.id, sourcePortId: `${target.id}-out-dom`, targetNodeId: targetFolderId, targetPortId: `${targetFolderId}-in-files` } });
                                       }
-                                      // Folder -> Context wiring
+                                      
+                                      // Ensure Folder is connected to Context (if needed)
                                       if (contextNode && contextNode.type === 'CODE') {
                                           const folderConnectedToContext = state.connections.some(c => c.sourceNodeId === targetFolderId && c.targetNodeId === contextNode.id);
                                           if (!folderConnectedToContext) {
                                               dispatchLocal({ type: 'CONNECT', payload: { id: `conn-ctx-folder-${Date.now()}`, sourceNodeId: targetFolderId, sourcePortId: `${targetFolderId}-out-folder`, targetNodeId: contextNode.id, targetPortId: `${contextNode.id}-in-file` } });
                                           }
                                       }
+                                  } else {
+                                      // 2. Sticky Folder: User specified NO path ("Header.tsx")
+                                      // Check if already in a folder
+                                      const inAFolder = state.connections.some(c => c.sourceNodeId === target.id && state.nodes.find(n => n.id === c.targetNodeId)?.type === 'FOLDER');
+                                      
+                                      if (!inAFolder && contextNode && contextNode.type === 'CODE') {
+                                          // Only connect to context if NOT in a folder and not already connected
+                                          const alreadyConnected = state.connections.some(c => c.sourceNodeId === target.id && c.targetNodeId === contextNode.id);
+                                          if (!alreadyConnected) {
+                                               dispatchLocal({ type: 'CONNECT', payload: { id: `conn-auto-${Date.now()}`, sourceNodeId: target.id, sourcePortId: `${target.id}-out-dom`, targetNodeId: contextNode.id, targetPortId: `${contextNode.id}-in-file` } }); 
+                                          }
+                                      }
+                                      // If inAFolder is true, DO NOTHING. Maintain existing structure.
                                   }
                               } 
                               else { toolOutput += `\n[Error: ${fileName} is locked]`; }
                           } else {
+                              // New File Logic
                               const newNodeId = `node-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
                               const chatNode = state.nodes.find(n => n.id === nodeId);
                               const pos = chatNode ? { x: chatNode.position.x + 50, y: chatNode.position.y + 50 } : { x: 100, y: 100 };
@@ -603,22 +636,21 @@ export default function App() {
                                   dispatchLocal({ type: 'CONNECT', payload: { id: `conn-folder-${Date.now()}`, sourceNodeId: newNodeId, sourcePortId: `${newNodeId}-out-dom`, targetNodeId: targetFolderId, targetPortId: `${targetFolderId}-in-files` } });
                                   toolOutput += ` [In Folder: ${folderName}]`;
                                   
-                                  // Connect Folder -> Context (Code requesting creation)
-                                  // This enables imports like "import X from './components/X'"
+                                  // Connect Folder -> Context
                                   if (contextNode && contextNode.type === 'CODE') {
                                       const folderConnectedToContext = state.connections.some(c => c.sourceNodeId === targetFolderId && c.targetNodeId === contextNode.id);
                                       if (!folderConnectedToContext) {
                                           dispatchLocal({ type: 'CONNECT', payload: { id: `conn-ctx-folder-${Date.now()}`, sourceNodeId: targetFolderId, sourcePortId: `${targetFolderId}-out-folder`, targetNodeId: contextNode.id, targetPortId: `${contextNode.id}-in-file` } });
                                       }
                                   }
-                              } 
-                              
-                              // ONLY connect directly to context if NOT in a folder
-                              if (!targetFolderId && contextNode && contextNode.type === 'CODE') { 
-                                  if (checkPermission(contextNode.id)) { 
-                                      dispatchLocal({ type: 'CONNECT', payload: { id: `conn-auto-${Date.now()}`, sourceNodeId: newNodeId, sourcePortId: `${newNodeId}-out-dom`, targetNodeId: contextNode.id, targetPortId: `${contextNode.id}-in-file` } }); 
-                                      toolOutput += ` [Auto-Connected]`; 
-                                  } 
+                              } else {
+                                  // Connect New File -> Context Directly
+                                  if (contextNode && contextNode.type === 'CODE') { 
+                                      if (checkPermission(contextNode.id)) { 
+                                          dispatchLocal({ type: 'CONNECT', payload: { id: `conn-auto-${Date.now()}`, sourceNodeId: newNodeId, sourcePortId: `${newNodeId}-out-dom`, targetNodeId: contextNode.id, targetPortId: `${contextNode.id}-in-file` } }); 
+                                          toolOutput += ` [Auto-Connected]`; 
+                                      } 
+                                  }
                               }
                           }
                       } else if (call.name === 'deleteFile') {
@@ -630,18 +662,19 @@ export default function App() {
                   if (toolOutput) dispatchLocal({ type: 'UPDATE_LAST_MESSAGE', payload: { id: nodeId, text: fullText + toolOutput } });
               }
           });
-      } catch (error: any) { dispatchLocal({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: `Error: ${error.message}` } } }); } finally { dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } }); }
+      } catch (error: any) { dispatchLocal({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'model', text: `Error: ${error.message}` } } }); } finally { nodesToLock.forEach(id => dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id, isLoading: false } })); }
   };
 
   const handleAiGenerate = async (nodeId: string, action: 'optimize' | 'prompt', promptText?: string) => {
       const startNode = state.nodes.find(n => n.id === nodeId);
       if (!startNode || startNode.type !== 'CODE' || !checkPermission(nodeId)) return;
       const relatedNodes = getRelatedNodes(nodeId, state.nodes, state.connections);
-      const codeCluster = relatedNodes.filter(n => n.type === 'CODE');
-      const targetNodes = codeCluster.length > 0 ? codeCluster : [startNode];
+      // LOCK FOLDERS TOO
+      const targetNodes = relatedNodes.filter(n => n.type === 'CODE' || n.type === 'FOLDER');
+      
       targetNodes.forEach(n => dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: n.id, isLoading: true } }));
       try {
-          const fileContext = targetNodes.map(n => `Filename: ${n.title}\nContent:\n${n.content}`).join('\n\n');
+          const fileContext = targetNodes.filter(n => n.type === 'CODE').map(n => `Filename: ${n.title}\nContent:\n${n.content}`).join('\n\n');
           const systemInstruction = `You are an expert developer. You are editing code in a visual editor. Project Files: ${fileContext}`;
           let userPrompt = action === 'optimize' ? `Optimize the file ${startNode.title}.` : `Request: ${promptText}\n\n(Focus on ${startNode.title}...)`;
           await performGeminiCall(async (ai) => {
