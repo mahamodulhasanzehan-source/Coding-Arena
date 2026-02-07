@@ -1,108 +1,45 @@
 
-// Replaced with robust local mock implementation to resolve build errors with missing firebase modules.
-// This allows the app to function completely using LocalStorage for persistence.
+import { initializeApp } from "firebase/app";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged as firebaseOnAuthStateChanged } from "firebase/auth";
+import { getFirestore, doc, getDoc, setDoc, deleteDoc } from "firebase/firestore";
 
-// Fix for import.meta.env type error
-const env = (import.meta as any).env || {};
-
-const config = {
-  apiKey: env.VITE_FIREBASE_API_KEY,
-  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: env.VITE_FIREBASE_APP_ID
+const firebaseConfig = {
+  apiKey: "AIzaSyBllwH83gpDoLAeo_XnnMDu4mmWVzBJOkA",
+  authDomain: "tacotyper.firebaseapp.com",
+  projectId: "tacotyper",
+  storageBucket: "tacotyper.firebasestorage.app",
+  messagingSenderId: "781290974991",
+  appId: "1:781290974991:web:9be3718a10fc11c9a5187a",
+  measurementId: "G-P0VZGCB036"
 };
 
-// --- Mock Auth ---
-
-export interface User {
-    uid: string;
-    isAnonymous: boolean;
-    photoURL?: string | null;
-    displayName?: string | null;
-    email?: string | null;
-}
-
-let currentUser: User | null = JSON.parse(localStorage.getItem('nodecode_mock_user') || 'null');
-const authStateListeners = new Set<(user: User | null) => void>();
-
-export const auth = {
-    get currentUser() { return currentUser; }
-};
-
-export const db = {}; // Mock DB object
-
-// --- Auth Functions ---
+const app = initializeApp(firebaseConfig);
+export const auth = getAuth(app);
+export const db = getFirestore(app);
+export const googleProvider = new GoogleAuthProvider();
 
 export const signInWithGoogle = async () => {
-    console.log("Mock Sign In: Logging in as local user.");
-    const mockUser: User = { 
-        uid: 'local-user-' + Math.random().toString(36).substr(2, 9), 
-        isAnonymous: false, 
-        photoURL: 'https://ui-avatars.com/api/?name=Local+User&background=random', 
-        displayName: 'Local User',
-        email: 'local@example.com'
-    };
-    
-    currentUser = mockUser;
-    localStorage.setItem('nodecode_mock_user', JSON.stringify(currentUser));
-    notifyListeners();
-    return mockUser;
+  try {
+    const result = await signInWithPopup(auth, googleProvider);
+    return result.user;
+  } catch (error) {
+    console.error("Error signing in with Google:", error);
+    throw error;
+  }
 };
 
 export const logOut = async () => {
-    console.log('Mock Logged out');
-    currentUser = null;
-    localStorage.removeItem('nodecode_mock_user');
-    notifyListeners();
+  try {
+    await signOut(auth);
+  } catch (error) {
+    console.error("Error signing out:", error);
+  }
 };
 
-export const onAuthStateChanged = (authInstance: any, callback: (user: User | null) => void) => {
-    authStateListeners.add(callback);
-    // Trigger immediately with current state
-    callback(currentUser);
-    return () => {
-        authStateListeners.delete(callback);
-    };
+// Wrapper to match the interface expected by components
+export const onAuthStateChanged = (authInstance: any, callback: (user: any) => void) => {
+    return firebaseOnAuthStateChanged(authInstance, callback);
 };
 
-function notifyListeners() {
-    authStateListeners.forEach(listener => listener(currentUser));
-}
-
-// --- Firestore Wrappers (Mock with LocalStorage) ---
-
-export const doc = (database: any, col: string, id: string) => {
-    return { id, path: `${col}/${id}`, _mock: true }; 
-};
-
-export const getDoc = async (ref: any) => {
-    // Mock Storage Reading (localStorage fallback for persistence in mock mode)
-    const stored = localStorage.getItem(`mock_db_${ref.path}`);
-    if (stored) {
-        return { 
-            exists: () => true, 
-            data: () => JSON.parse(stored) 
-        };
-    }
-    return { exists: () => false, data: () => undefined };
-};
-
-export const setDoc = async (ref: any, data: any, opts?: any) => {
-    console.log(`[MockDB] Saving to ${ref.path}`);
-    // Simple mock implementation: Overwrite (merge not fully supported in this simple mock but sufficient for App.tsx usage)
-    const existing = localStorage.getItem(`mock_db_${ref.path}`);
-    let finalData = data;
-    
-    if (opts?.merge && existing) {
-        finalData = { ...JSON.parse(existing), ...data };
-    }
-    
-    localStorage.setItem(`mock_db_${ref.path}`, JSON.stringify(finalData));
-};
-
-export const deleteDoc = async (ref: any) => {
-    console.log(`[MockDB] Deleting ${ref.path}`);
-    localStorage.removeItem(`mock_db_${ref.path}`);
-};
+export { doc, getDoc, setDoc, deleteDoc };
+export type { User } from "firebase/auth";
