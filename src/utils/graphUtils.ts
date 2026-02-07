@@ -23,8 +23,6 @@ export const calculatePortPosition = (
   const yRelative = startY + 6 + (portIndex * PORT_STRIDE);
   const y = node.position.y + yRelative;
 
-  // With the state update logic, node.size.width is now the correct visual width
-  // even when minimized.
   const width = node.size.width;
 
   const x = type === 'input' 
@@ -62,7 +60,6 @@ export const getAllConnectedSources = (
         .filter((n): n is NodeData => !!n);
 };
 
-// Find all nodes in the connected component of the startNode
 export const getRelatedNodes = (
   startNodeId: string,
   nodes: NodeData[],
@@ -85,7 +82,6 @@ export const getRelatedNodes = (
        }
     }
 
-    // Find all neighbors
     const neighbors = connections
       .filter(c => c.sourceNodeId === currentId || c.targetNodeId === currentId)
       .map(c => c.sourceNodeId === currentId ? c.targetNodeId : c.sourceNodeId);
@@ -108,27 +104,19 @@ const collectDependencies = (
     if (visited.has(rootNode.id)) return [];
     visited.add(rootNode.id);
 
-    // 1. Get direct dependencies (Code, NPM, or Folder) connected to "Imports"
     const directDeps = getAllConnectedSources(rootNode.id, 'file', nodes, connections);
     let allDeps: NodeData[] = [];
 
     for (const dep of directDeps) {
         if (dep.type === 'FOLDER') {
-            // 2. If it's a folder, traverse INSIDE it
-            // Folder (Target "Files") <- File (Source)
-            // We need to find everything connected to the folder's Input port
             const folderContents = getAllConnectedSources(dep.id, 'files', nodes, connections);
-            
-            // Add contents as dependencies
             allDeps = [...allDeps, ...folderContents];
             
-            // Recursively collect dependencies of the items INSIDE the folder
             folderContents.forEach(child => {
                 const nested = collectDependencies(child, nodes, connections, visited);
                 allDeps = [...allDeps, ...nested];
             });
         } else {
-            // Standard Code/NPM node
             allDeps.push(dep);
             const nested = collectDependencies(dep, nodes, connections, visited);
             allDeps = [...allDeps, ...nested];
@@ -138,36 +126,12 @@ const collectDependencies = (
     return allDeps;
 };
 
-// Resolve the "Virtual Path" of a node based on its folder connections
-const getVirtualPath = (node: NodeData, connections: Connection[], nodes: NodeData[]): string => {
-    // Check if this node is connected TO a folder (File -> Folder)
-    // The File (Output) connects to Folder (Input)
-    // connections where source == node.id and target is a folder
-    
-    const parentFolderConn = connections.find(c => {
-        if (c.sourceNodeId !== node.id) return false;
-        const target = nodes.find(n => n.id === c.targetNodeId);
-        return target && target.type === 'FOLDER';
-    });
-
-    if (parentFolderConn) {
-        const folder = nodes.find(n => n.id === parentFolderConn.targetNodeId);
-        if (folder) {
-            // Check if Folder is nested (Folder -> Folder)
-            // NOT IMPLEMENTED DEEPLY in logic yet, but supports basic Folder/File
-            return `${folder.title}/${node.title}`;
-        }
-    }
-    return node.title;
-};
-
 export const compilePreview = (
   previewNodeId: string,
   nodes: NodeData[],
   connections: Connection[],
   forceReload: boolean = false
 ): string => {
-  // 1. Find the main entry point connected to PREVIEW
   const rootNode = getConnectedSource(previewNodeId, 'dom', nodes, connections);
   
   if (!rootNode) {
@@ -176,185 +140,163 @@ export const compilePreview = (
       <html>
         <body style="background-color: #0f0f11; color: #71717a; font-family: sans-serif; height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0;">
           <div style="text-align: center;">
-            <p>Connect a <strong>CODE Canvas</strong> to the DOM port.</p>
+            <p>Connect a <strong>CODE Canvas</strong> (index.html or App.js) to the DOM port.</p>
           </div>
         </body>
       </html>
     `;
   }
 
-  // 2. Resolve Dependencies (Wired nodes + Folder Contents, recursively)
+  // 1. Collect all reachable dependencies
   const dependencyNodes = collectDependencies(rootNode, nodes, connections);
-  
-  // Remove duplicates
   const uniqueDeps = Array.from(new Set(dependencyNodes.map(n => n.id)))
       .map(id => nodes.find(n => n.id === id)!)
       .filter(n => n.id !== rootNode.id); 
 
-  let finalContent = rootNode.content;
+  // 2. Separate Resources
+  let cssContent = '';
+  const jsFiles: Record<string, string> = {};
   
-  // Wrap content based on STRICT file extension
-  const lowerTitle = rootNode.title.toLowerCase();
+  const allNodes = [rootNode, ...uniqueDeps];
   
-  if (lowerTitle.endsWith('.html') || lowerTitle.endsWith('.htm')) {
-      // HTML: Render as is
-  } else if (lowerTitle.endsWith('.js') || lowerTitle.endsWith('.ts') || lowerTitle.endsWith('.jsx') || lowerTitle.endsWith('.tsx')) {
-      // JS: Wrap in script
-      finalContent = `<script>\n${finalContent}\n</script>`;
-  } else if (lowerTitle.endsWith('.css')) {
-      // CSS: Wrap in style
-      finalContent = `<style>\n${finalContent}\n</style>`;
-  } else {
-      // Everything else: Render as plain text
-      const escaped = finalContent
-          .replace(/&/g, "&amp;")
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;")
-          .replace(/"/g, "&quot;")
-          .replace(/'/g, "&#039;");
-          
-      finalContent = `
-        <body style="margin: 0; background-color: #1e1e1e; color: #d4d4d4;">
-            <pre style="padding: 1rem; font-family: 'JetBrains Mono', monospace; white-space: pre-wrap; word-wrap: break-word;">${escaped}</pre>
-        </body>
-      `;
-  }
-
-  // 3. Inject Dependencies based on Virtual Paths (Folder awareness)
-  if (lowerTitle.endsWith('.html') || lowerTitle.endsWith('.htm')) {
-      // Helper to find dep by exact title OR virtual path
-      const findDep = (refPath: string) => {
-          if (refPath.match(/^(https?:\/\/|\/\/)/i)) return null;
-          
-          return uniqueDeps.find(d => {
-              const vPath = getVirtualPath(d, connections, nodes);
-              // Match strict title OR virtual folder path
-              return d.title === refPath || vPath === refPath;
-          });
-      };
-
-      // Check CSS imports <link href="path/to/style.css">
-      finalContent = finalContent.replace(/<link[^>]+href=["']([^"']+)["'][^>]*>/gi, (match, filename) => {
-        if (filename.match(/^(https?:\/\/|\/\/)/i)) return match;
-        
-        const depNode = findDep(filename);
-        if (depNode) {
-            return `<style>\n/* Source: ${filename} */\n${depNode.content}\n</style>`;
-        } else {
-            return `<script>console.error('Dependency Error: "${filename}" is referenced but not found (check connections and folder structure).');</script>`; 
-        }
-      });
-
-      // Check JS imports <script src="path/to/script.js">
-      finalContent = finalContent.replace(/<script[^>]+src=["']([^"']+)["'][^>]*><\/script>/gi, (match, filename) => {
-        if (filename.match(/^(https?:\/\/|\/\/)/i)) return match;
-
-        const depNode = findDep(filename);
-        if (depNode) {
-            return `<script>\n/* Source: ${filename} */\n${depNode.content}\n</script>`;
-        } else {
-             return `<script>console.error('Dependency Error: "${filename}" is referenced but not found (check connections and folder structure).');</script>`; 
-        }
-      });
-  }
-
-  // 4. Inject Console Interceptor & Multiplayer Bridge
-  const interceptor = `
-    <script>
-      (function() {
-        const oldLog = console.log;
-        const oldError = console.error;
-        const oldWarn = console.warn;
-        const oldInfo = console.info;
-
-        function send(type, args) {
-          try {
-            const message = args.map(arg => {
-                if (arg === undefined) return 'undefined';
-                if (arg === null) return 'null';
-                if (typeof arg === 'object') return JSON.stringify(arg);
-                return String(arg);
-            }).join(' ');
-            
-            // Strictly target the parent window
-            window.parent.postMessage({
-              source: 'preview-iframe',
-              nodeId: '${previewNodeId}',
-              type: type,
-              message: message,
-              timestamp: Date.now()
-            }, '*');
-          } catch (e) {
-             // Ignore serialization errors
-          }
-        }
-
-        console.log = function(...args) { oldLog.apply(console, args); send('log', args); };
-        console.error = function(...args) { oldError.apply(console, args); send('error', args); };
-        console.warn = function(...args) { oldWarn.apply(console, args); send('warn', args); };
-        console.info = function(...args) { oldInfo.apply(console, args); send('info', args); };
-        
-        window.onerror = function(msg, url, line, col, error) {
-           send('error', [msg + ' (Line ' + line + ')']);
-           return false;
-        };
-
-        // --- Multiplayer Bridge ---
-        window.broadcastState = function(state) {
-          window.parent.postMessage({
-            source: 'preview-iframe',
-            nodeId: '${previewNodeId}',
-            type: 'BROADCAST_STATE',
-            payload: state
-          }, '*');
-        };
-
-        window.onStateReceived = function(callback) {
-          window.addEventListener('message', (event) => {
-            if (event.data && event.data.type === 'STATE_UPDATE') {
-              callback(event.data.payload);
-            }
-          });
-        };
-
-        // Notify parent that iframe is ready to receive state
-        window.addEventListener('load', () => {
-            window.parent.postMessage({
-                source: 'preview-iframe',
-                nodeId: '${previewNodeId}',
-                type: 'IFRAME_READY',
-                timestamp: Date.now()
-            }, '*');
-        });
-      })();
-    </script>
-    ${forceReload ? `<!-- Force Reload: ${Date.now()} -->` : ''}
-  `;
-
-  // Only inject interceptor into HTML pages or wrapped content
-  if (lowerTitle.endsWith('.html') || lowerTitle.endsWith('.htm')) {
-       return `
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <meta charset="utf-8">
-            ${interceptor}
-          </head>
-          <body>
-            ${finalContent}
-          </body>
-        </html>
-      `;
-  } else {
-      if (lowerTitle.endsWith('.js') || lowerTitle.endsWith('.css')) {
-           return `
-            <!DOCTYPE html>
-            <html>
-            <head><meta charset="utf-8">${interceptor}</head>
-            <body>${finalContent}</body>
-            </html>
-           `;
+  allNodes.forEach(node => {
+      const lower = node.title.toLowerCase();
+      if (lower.endsWith('.css')) {
+          cssContent += `\n/* ${node.title} */\n${node.content}\n`;
+      } else if (lower.endsWith('.js') || lower.endsWith('.jsx') || lower.endsWith('.ts') || lower.endsWith('.tsx')) {
+          jsFiles[node.title] = node.content;
       }
-      return finalContent;
+  });
+
+  // 3. Prepare HTML Body
+  let htmlBody = '';
+  const isHtmlRoot = rootNode.title.toLowerCase().endsWith('.html');
+
+  if (isHtmlRoot) {
+      htmlBody = rootNode.content;
+      // Remove <link rel="stylesheet"> tags since we inject CSS manually
+      htmlBody = htmlBody.replace(/<link[^>]+rel=["']stylesheet["'][^>]*>/gi, '');
+      
+      // Ensure local script tags use type="module" so they hit our Import Map
+      // Replaces <script src="./App.js"> with <script type="module" src="./App.js">
+      htmlBody = htmlBody.replace(/<script\s+([^>]*?)src=["'](\.\/)?([^"']+\.jsx?|[^"']+\.tsx?)["']([^>]*)>/gi, (match, p1, p2, filename, p3) => {
+          if (jsFiles[filename]) {
+              return `<script type="module" src="./${filename}" ${p1} ${p3}>`;
+          }
+          return match;
+      });
+  } else {
+      // If root is JS, create a default React mount point
+      htmlBody = '<div id="root"></div>';
   }
+
+  // 4. Build the final HTML document with Babel and Import Maps
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        
+        <!-- Utilities -->
+        <script src="https://cdn.tailwindcss.com"></script>
+        <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+        
+        <!-- Injected Styles -->
+        <style>
+            ${cssContent}
+        </style>
+
+        <!-- Console Interceptor -->
+        <script>
+          (function() {
+            const oldLog = console.log;
+            const oldError = console.error;
+            const oldWarn = console.warn;
+            const oldInfo = console.info;
+
+            function send(type, args) {
+              try {
+                const message = args.map(arg => {
+                    if (arg === undefined) return 'undefined';
+                    if (arg === null) return 'null';
+                    if (typeof arg === 'object') return JSON.stringify(arg);
+                    return String(arg);
+                }).join(' ');
+                
+                window.parent.postMessage({
+                  source: 'preview-iframe',
+                  nodeId: '${previewNodeId}',
+                  type: type,
+                  message: message,
+                  timestamp: Date.now()
+                }, '*');
+              } catch (e) {}
+            }
+
+            console.log = function(...args) { oldLog.apply(console, args); send('log', args); };
+            console.error = function(...args) { oldError.apply(console, args); send('error', args); };
+            console.warn = function(...args) { oldWarn.apply(console, args); send('warn', args); };
+            console.info = function(...args) { oldInfo.apply(console, args); send('info', args); };
+            
+            window.onerror = function(msg, url, line, col, error) {
+               send('error', [msg + ' (Line ' + line + ')']);
+               return false;
+            };
+          })();
+        </script>
+      </head>
+      <body>
+        ${htmlBody}
+
+        <!-- Dynamic Module Loader -->
+        <script>
+          const jsFiles = ${JSON.stringify(jsFiles)};
+          
+          // Default Import Map for React
+          const importMap = {
+            imports: {
+              "react": "https://esm.sh/react@18.2.0",
+              "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+              "react-dom": "https://esm.sh/react-dom@18.2.0",
+            }
+          };
+
+          try {
+              // 1. Transpile all JS/JSX files using Babel
+              for (const [filename, content] of Object.entries(jsFiles)) {
+                  const output = Babel.transform(content, { 
+                      presets: ['react', 'env'],
+                      filename: filename 
+                  }).code;
+                  
+                  // 2. Create Blob URLs for the transpiled code
+                  const blob = new Blob([output], { type: 'application/javascript' });
+                  const url = URL.createObjectURL(blob);
+                  
+                  // 3. Add to Import Map (supporting ./ relative imports)
+                  importMap.imports['./' + filename] = url;
+                  importMap.imports[filename] = url;
+              }
+              
+              // 4. Inject Import Map
+              const mapEl = document.createElement('script');
+              mapEl.type = 'importmap';
+              mapEl.textContent = JSON.stringify(importMap);
+              document.head.appendChild(mapEl);
+              
+          } catch (e) {
+              console.error("Transpilation/Build Error:", e);
+          }
+        </script>
+
+        <!-- Entry Point Execution (if Root is JS) -->
+        <script type="module">
+            ${!isHtmlRoot ? `import './${rootNode.title}';` : ''}
+        </script>
+        
+        ${forceReload ? `<!-- Force Reload: ${Date.now()} -->` : ''}
+      </body>
+    </html>
+  `;
 };
