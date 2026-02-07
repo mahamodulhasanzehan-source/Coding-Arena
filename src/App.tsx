@@ -567,6 +567,8 @@ export default function App() {
 
                           // Handle File Creation/Update
                           const target = state.nodes.find(n => n.title === fileName && n.type === 'CODE');
+                          const contextNode = state.nodes.find(n => n.id === nodeId);
+
                           if (target) {
                               if (checkPermission(target.id)) { 
                                   dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: target.id, content: args.code } }); 
@@ -579,6 +581,13 @@ export default function App() {
                                       if (!alreadyConnected) {
                                           dispatchLocal({ type: 'CONNECT', payload: { id: `conn-folder-${Date.now()}`, sourceNodeId: target.id, sourcePortId: `${target.id}-out-dom`, targetNodeId: targetFolderId, targetPortId: `${targetFolderId}-in-files` } });
                                       }
+                                      // Folder -> Context wiring
+                                      if (contextNode && contextNode.type === 'CODE') {
+                                          const folderConnectedToContext = state.connections.some(c => c.sourceNodeId === targetFolderId && c.targetNodeId === contextNode.id);
+                                          if (!folderConnectedToContext) {
+                                              dispatchLocal({ type: 'CONNECT', payload: { id: `conn-ctx-folder-${Date.now()}`, sourceNodeId: targetFolderId, sourcePortId: `${targetFolderId}-out-folder`, targetNodeId: contextNode.id, targetPortId: `${contextNode.id}-in-file` } });
+                                          }
+                                      }
                                   }
                               } 
                               else { toolOutput += `\n[Error: ${fileName} is locked]`; }
@@ -590,13 +599,27 @@ export default function App() {
                               toolOutput += `\n[Created ${fileName}]`;
                               
                               if (targetFolderId) {
+                                  // Connect New File -> Folder
                                   dispatchLocal({ type: 'CONNECT', payload: { id: `conn-folder-${Date.now()}`, sourceNodeId: newNodeId, sourcePortId: `${newNodeId}-out-dom`, targetNodeId: targetFolderId, targetPortId: `${targetFolderId}-in-files` } });
                                   toolOutput += ` [In Folder: ${folderName}]`;
+                                  
+                                  // Connect Folder -> Context (Code requesting creation)
+                                  // This enables imports like "import X from './components/X'"
+                                  if (contextNode && contextNode.type === 'CODE') {
+                                      const folderConnectedToContext = state.connections.some(c => c.sourceNodeId === targetFolderId && c.targetNodeId === contextNode.id);
+                                      if (!folderConnectedToContext) {
+                                          dispatchLocal({ type: 'CONNECT', payload: { id: `conn-ctx-folder-${Date.now()}`, sourceNodeId: targetFolderId, sourcePortId: `${targetFolderId}-out-folder`, targetNodeId: contextNode.id, targetPortId: `${contextNode.id}-in-file` } });
+                                      }
+                                  }
+                              } 
+                              
+                              // ONLY connect directly to context if NOT in a folder
+                              if (!targetFolderId && contextNode && contextNode.type === 'CODE') { 
+                                  if (checkPermission(contextNode.id)) { 
+                                      dispatchLocal({ type: 'CONNECT', payload: { id: `conn-auto-${Date.now()}`, sourceNodeId: newNodeId, sourcePortId: `${newNodeId}-out-dom`, targetNodeId: contextNode.id, targetPortId: `${contextNode.id}-in-file` } }); 
+                                      toolOutput += ` [Auto-Connected]`; 
+                                  } 
                               }
-
-                              const contextNode = state.nodes.find(n => n.id === nodeId);
-                              // Auto connect to main code file if strictly necessary, but folders usually handle grouping.
-                              // Let's rely on folders.
                           }
                       } else if (call.name === 'deleteFile') {
                           const args = call.args as any;

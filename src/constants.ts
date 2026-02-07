@@ -16,7 +16,7 @@ export const getPortsForNode = (nodeId: string, type: NodeType): Port[] => {
   switch (type) {
     case 'CODE':
       return [
-        { id: `${nodeId}-in-file`, nodeId, type: 'input', label: 'Imports', accepts: ['CODE', 'NPM'] },
+        { id: `${nodeId}-in-file`, nodeId, type: 'input', label: 'Imports', accepts: ['CODE', 'NPM', 'FOLDER'] },
         { id: `${nodeId}-out-dom`, nodeId, type: 'output', label: 'DOM/File' },
       ];
     case 'PREVIEW':
@@ -35,6 +35,7 @@ export const getPortsForNode = (nodeId: string, type: NodeType): Port[] => {
     case 'FOLDER':
         return [
             { id: `${nodeId}-in-files`, nodeId, type: 'input', label: 'Files', accepts: ['CODE', 'IMAGE', 'TEXT'] },
+            { id: `${nodeId}-out-folder`, nodeId, type: 'output', label: 'Export' },
         ];
     case 'AI_CHAT':
     case 'IMAGE':

@@ -108,13 +108,32 @@ const collectDependencies = (
     if (visited.has(rootNode.id)) return [];
     visited.add(rootNode.id);
 
+    // 1. Get direct dependencies (Code, NPM, or Folder) connected to "Imports"
     const directDeps = getAllConnectedSources(rootNode.id, 'file', nodes, connections);
-    let allDeps: NodeData[] = [...directDeps];
+    let allDeps: NodeData[] = [];
 
-    directDeps.forEach(dep => {
-        const nestedDeps = collectDependencies(dep, nodes, connections, visited);
-        allDeps = [...allDeps, ...nestedDeps];
-    });
+    for (const dep of directDeps) {
+        if (dep.type === 'FOLDER') {
+            // 2. If it's a folder, traverse INSIDE it
+            // Folder (Target "Files") <- File (Source)
+            // We need to find everything connected to the folder's Input port
+            const folderContents = getAllConnectedSources(dep.id, 'files', nodes, connections);
+            
+            // Add contents as dependencies
+            allDeps = [...allDeps, ...folderContents];
+            
+            // Recursively collect dependencies of the items INSIDE the folder
+            folderContents.forEach(child => {
+                const nested = collectDependencies(child, nodes, connections, visited);
+                allDeps = [...allDeps, ...nested];
+            });
+        } else {
+            // Standard Code/NPM node
+            allDeps.push(dep);
+            const nested = collectDependencies(dep, nodes, connections, visited);
+            allDeps = [...allDeps, ...nested];
+        }
+    }
 
     return allDeps;
 };
@@ -164,7 +183,7 @@ export const compilePreview = (
     `;
   }
 
-  // 2. Resolve Dependencies (Wired nodes only, recursively)
+  // 2. Resolve Dependencies (Wired nodes + Folder Contents, recursively)
   const dependencyNodes = collectDependencies(rootNode, nodes, connections);
   
   // Remove duplicates
