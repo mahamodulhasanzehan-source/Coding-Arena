@@ -199,20 +199,31 @@ export const compilePreview = (
               let content = node.content;
 
               // AUTO-IMPORT INJECTION: Detect connections and inject import statements if missing
+              // This is crucial for implicit connections visualized by wires
               const imports = getAllConnectedSources(node.id, 'file', nodes, connections);
+              const injections: string[] = [];
+              
               imports.forEach(imp => {
                   if (imp.type === 'CODE' || imp.type === 'NPM') {
                       const identifier = toIdentifier(imp.title);
                       // Look for usage of identifier, but ignore if already imported
-                      const hasImport = new RegExp(`import\\s+.*?['"](.*/)?${imp.title}['"]`).test(content);
-                      const hasIdentifierImport = new RegExp(`import\\s+.*?\\b${identifier}\\b`).test(content);
+                      // We look for "import ... from ...imp.title..."
+                      const hasImportRegex = new RegExp(`import\\s+.*?['"](.*/)?${imp.title.replace('.', '\\.')}['"]`);
+                      const hasImport = hasImportRegex.test(content);
+                      
+                      // Also check if the identifier is even used in the code to avoid unused imports
+                      const isUsed = new RegExp(`\\b${identifier}\\b`).test(content);
 
-                      if (!hasImport && !hasIdentifierImport) {
+                      if (!hasImport && isUsed) {
                           // Inject default import.
-                          content = `import ${identifier} from './${imp.title}';\n` + content;
+                          injections.push(`import ${identifier} from './${imp.title}';`);
                       }
                   }
               });
+              
+              if (injections.length > 0) {
+                  content = injections.join('\n') + '\n' + content;
+              }
 
               // Transpile using Babel
               let transformFn = (Babel as any).transform;
@@ -222,9 +233,14 @@ export const compilePreview = (
 
               let transformedCode = content;
               if (transformFn) {
+                 // IMPORTANT: 'modules: false' prevents Babel from converting ESM to CJS (require)
+                 // which browser cannot handle. We want browser-native ESM.
                  // @ts-ignore
                  const res = transformFn(content, {
-                     presets: ['react', 'env'],
+                     presets: [
+                         'react', 
+                         ['env', { modules: false, targets: { browsers: "> 1%, not dead" } }]
+                     ],
                      filename: node.title
                  });
                  transformedCode = res.code;
@@ -235,23 +251,38 @@ export const compilePreview = (
               
               const fullPath = getNodePath(node, nodes, connections);
               const fileName = node.title;
+              // Handle extensions and paths
               const fileNameNoExt = fileName.replace(/\.[^/.]+$/, "");
               
               // Register multiple paths for the same file to handle various import styles
-              const paths = [
-                  fileName,
-                  `./${fileName}`,
-                  `/${fileName}`,
-                  fileNameNoExt,
-                  `./${fileNameNoExt}`,
-                  `/${fileNameNoExt}`,
-                  fullPath,
-                  `./${fullPath}`,
-                  `/${fullPath}`
-              ];
+              // Map: Button.jsx -> blob, ./Button.jsx -> blob, Button -> blob
+              const paths = new Set<string>();
+              paths.add(fileName);
+              paths.add(`./${fileName}`);
+              paths.add(`/${fileName}`);
+              
+              if (fileName !== fileNameNoExt) {
+                  paths.add(fileNameNoExt);
+                  paths.add(`./${fileNameNoExt}`);
+                  paths.add(`/${fileNameNoExt}`);
+              }
+              
+              if (fullPath && fullPath !== fileName) {
+                  paths.add(fullPath);
+                  paths.add(`./${fullPath}`);
+                  paths.add(`/${fullPath}`);
+                  
+                  // Also handle folder paths without extension
+                  const fullPathNoExt = fullPath.replace(/\.[^/.]+$/, "");
+                  if (fullPath !== fullPathNoExt) {
+                      paths.add(fullPathNoExt);
+                      paths.add(`./${fullPathNoExt}`);
+                      paths.add(`/${fullPathNoExt}`);
+                  }
+              }
 
               paths.forEach(p => {
-                  if (p) pathToBlobUrl[p] = blobUrl;
+                  pathToBlobUrl[p] = blobUrl;
               });
               
           } catch (e: any) {
@@ -277,8 +308,11 @@ export const compilePreview = (
   const interceptorScript = `
     <script>
       (function() {
+        const PREVIEW_ID = '${previewNodeId}';
+        
         function send(type, args) {
             try {
+                // Filter out some noise if necessary, but generally send everything
                 const message = args.map(arg => {
                     if (arg === undefined) return 'undefined';
                     if (arg === null) return 'null';
@@ -289,7 +323,7 @@ export const compilePreview = (
                 
                 window.parent.postMessage({
                     source: 'preview-iframe',
-                    nodeId: '${previewNodeId}',
+                    nodeId: PREVIEW_ID,
                     type: type,
                     message: message,
                     timestamp: Date.now()
@@ -326,19 +360,28 @@ export const compilePreview = (
 
   if (isHtmlRoot) {
       htmlBody = rootNode.content;
-      htmlBody = htmlBody.replace(/<link[^>]+rel=["']stylesheet["'][^>]*>/gi, ''); // Remove existing styles
+      htmlBody = htmlBody.replace(/<link[^>]+rel=["']stylesheet["'][^>]*>/gi, ''); // Remove existing styles since we injected CSS content
       
-      // Inject module imports
+      // Inject module imports for scripts
       htmlBody = htmlBody.replace(/<script\s+([^>]*?)src=["']([^"']+)["']([^>]*)><\/script>/gi, (match, p1, src, p3) => {
+          // If it's a known internal file, use module type so importmap applies
+          // We check if we have a mapping for it
           const cleanSrc = src.replace(/^(\.\/|\/)/, '');
-          const blobUrl = pathToBlobUrl[cleanSrc] || pathToBlobUrl[src] || pathToBlobUrl[`./${src}`];
-          if (blobUrl) {
-              return `<script type="module" src="${blobUrl}" ${p1} ${p3}></script>`;
+          const isInternal = pathToBlobUrl[cleanSrc] || pathToBlobUrl[src] || pathToBlobUrl[`./${src}`];
+          
+          if (isInternal) {
+              // We don't replace the SRC with blob URL here because importmap handles it!
+              // We just ensure type="module" is present.
+              // Actually, if we use importmap, we can keep the src as is (e.g. src="./App.js")
+              // providing type="module" is set.
+              if (!p1.includes('type="module"') && !p3.includes('type="module"')) {
+                  return `<script type="module" src="${src}" ${p1} ${p3}></script>`;
+              }
           }
           return match;
       });
   } else {
-      // JS Root
+      // JS Root (React App Entry)
       htmlBody = '<div id="root"></div>';
   }
 
@@ -367,9 +410,13 @@ export const compilePreview = (
         ${htmlBody}
         ${!isHtmlRoot ? `
         <script type="module">
-            import Entry from '${pathToBlobUrl[rootNode.title] || rootNode.title}';
+            // Mount the root node
+            // We use the raw title as specifier, relying on importmap to resolve it to blob
+            import Entry from './${rootNode.title}';
+            
             const rootEl = document.getElementById('root');
             if (rootEl && Entry) {
+                // Determine if Entry is a React component or just side-effects
                 if (typeof Entry === 'function' || typeof Entry === 'object') {
                     try {
                         const root = window.ReactDOM.createRoot(rootEl);
