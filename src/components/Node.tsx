@@ -2,7 +2,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { NodeData, Position, Size } from '../types';
 import { getPortsForNode } from '../constants';
-import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles, X, Image as ImageIcon, Square, Minus, Maximize2, Minimize2, StickyNote, Check, Lock, Folder, File } from 'lucide-react';
+import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles, X, Image as ImageIcon, Square, Minus, Maximize2, Minimize2, StickyNote, Check, Lock } from 'lucide-react';
 import Editor, { useMonaco } from '@monaco-editor/react';
 import Markdown from 'markdown-to-jsx';
 
@@ -37,8 +37,6 @@ interface NodeProps {
   onSelect?: (id: string, multi: boolean) => void; 
   collaboratorInfo?: { name: string; color: string; action: 'dragging' | 'editing' };
   logs?: any[]; 
-  // Map passed from App.tsx containing title strings of files connected to this folder
-  folderContents?: string[]; 
   children?: React.ReactNode;
 }
 
@@ -73,7 +71,6 @@ export const Node: React.FC<NodeProps> = ({
   onSelect,
   collaboratorInfo,
   logs,
-  folderContents,
   children
 }) => {
   const ports = getPortsForNode(data.id, data.type);
@@ -134,10 +131,10 @@ export const Node: React.FC<NodeProps> = ({
     }
   }, [logs, data.type]);
 
-  // Sync actual rendered size back to state when minimized to ensure wires connect correctly
+  // Sync actual rendered size back to state when minimized
   useEffect(() => {
     if (data.isMinimized && nodeRef.current) {
-        // When minimized, we allow the DOM to dictate width based on content (title + buttons)
+        // Measure the DOM element
         const actualWidth = nodeRef.current.offsetWidth;
         const actualHeight = nodeRef.current.offsetHeight;
         
@@ -146,7 +143,7 @@ export const Node: React.FC<NodeProps> = ({
             onResize(data.id, { width: actualWidth, height: actualHeight });
         }
     }
-  }, [data.isMinimized, data.title, data.size.width, data.size.height, onResize, data.id]);
+  }, [data.isMinimized, data.title, data.size.width, data.size.height]);
 
   // Auto-scroll chat to bottom
   useEffect(() => {
@@ -564,7 +561,7 @@ export const Node: React.FC<NodeProps> = ({
       borderClass = 'border-indigo-500/50';
   }
 
-  // Determine styles for Minimized vs Maximized vs Normal
+  // Maximized Style Override
   const maximizedStyle = isMaximized ? {
       position: 'fixed' as const,
       top: 0,
@@ -577,10 +574,9 @@ export const Node: React.FC<NodeProps> = ({
       borderWidth: 0,
   } : {
       transform: `translate(${data.position.x}px, ${data.position.y}px)`,
-      // KEY CHANGE: If minimized, let content dictate width (auto), but check min-width
-      width: data.isMinimized ? 'auto' : data.size.width, 
-      minWidth: data.isMinimized ? '200px' : undefined,
-      height: data.isMinimized ? 'auto' : data.size.height, // Auto height for minimize to fit header exactly
+      width: data.isMinimized ? 'max-content' : data.size.width, // Use max-content for minimized state
+      minWidth: data.isMinimized ? '200px' : undefined, // Ensure minimum width for buttons
+      height: data.isMinimized ? 40 : data.size.height,
   };
 
   const dynamicStyle = collaboratorInfo ? {
@@ -619,8 +615,8 @@ export const Node: React.FC<NodeProps> = ({
       )}
 
       {/* Header */}
-      <div className={`h-10 flex items-center justify-between px-3 border-b border-panelBorder bg-zinc-900/50 rounded-t-lg select-none shrink-0 relative z-10 gap-3 ${data.isMinimized ? 'rounded-b-lg border-b-0' : ''}`}>
-        <div className={`flex items-center gap-2 text-zinc-300 font-semibold text-sm min-w-0 ${data.isMinimized ? 'whitespace-nowrap' : 'flex-1'}`}>
+      <div className="h-10 flex items-center justify-between px-3 border-b border-panelBorder bg-zinc-900/50 rounded-t-lg select-none shrink-0 relative z-10 gap-3">
+        <div className="flex items-center gap-2 text-zinc-300 font-semibold text-sm flex-1 min-w-0">
           {!isMaximized && <GripVertical size={14} className="opacity-50 shrink-0" />}
           {isEditingTitle && !isMaximized ? (
             <input 
@@ -645,7 +641,6 @@ export const Node: React.FC<NodeProps> = ({
                 {data.type === 'NPM' && <Package size={14} className="text-red-500" />}
                 {data.type === 'IMAGE' && <ImageIcon size={14} className="text-purple-400" />}
                 {data.type === 'TEXT' && <StickyNote size={14} className="text-emerald-400" />}
-                {data.type === 'FOLDER' && <Folder size={14} className="text-orange-400" />}
                 <span className={data.isMinimized ? 'whitespace-nowrap' : 'truncate'}>{data.title}</span>
                 {!isMaximized && (
                     <button 
@@ -662,18 +657,6 @@ export const Node: React.FC<NodeProps> = ({
         </div>
         
         <div className="flex items-center gap-1 shrink-0">
-            {/* Folder Minimize */}
-            {data.type === 'FOLDER' && (
-                <button
-                    onClick={handleToggleMinimize}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    className="nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 text-zinc-400 hover:text-white hover:bg-zinc-800 active:scale-90 transition-transform"
-                    title={data.isMinimized ? "Expand" : "Collapse"}
-                >
-                     {data.isMinimized ? <Square size={14} /> : <Minus size={14} />}
-                </button>
-            )}
-
            {data.type === 'CODE' && (
               <div className="flex items-center gap-1">
                  <button
@@ -904,23 +887,6 @@ export const Node: React.FC<NodeProps> = ({
                     </button>
                 )}
             </div>
-        ) : data.type === 'FOLDER' ? (
-             <div className="w-full h-full bg-[#1e1e1e] overflow-y-auto custom-scrollbar p-2" onPointerDown={(e) => e.stopPropagation()}>
-                 <div className="flex flex-col gap-1">
-                     {folderContents && folderContents.length > 0 ? (
-                         folderContents.map((fileName, idx) => (
-                             <div key={idx} className="flex items-center gap-2 p-1.5 rounded bg-zinc-800/50 border border-zinc-700/50 text-xs text-zinc-300">
-                                 <File size={12} className="text-zinc-500" />
-                                 <span className="truncate">{fileName}</span>
-                             </div>
-                         ))
-                     ) : (
-                         <div className="text-zinc-600 text-xs italic text-center mt-4">
-                             Connect files to the Input port to add them to this folder.
-                         </div>
-                     )}
-                 </div>
-             </div>
         ) : data.type === 'NPM' ? (
              <div className="flex flex-col h-full bg-zinc-900/50">
                  <div className="p-3 border-b border-panelBorder flex gap-2">

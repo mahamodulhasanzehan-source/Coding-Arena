@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Code2, Monitor, TerminalSquare, Trash2, Copy, Unplug, Package, Image as ImageIcon, Eraser, AlignHorizontalJustifyCenter, AlignVerticalJustifyCenter, StretchHorizontal, StretchVertical, Minimize2, StickyNote, Lock, Unlock, Folder, ShieldAlert } from 'lucide-react';
+import { Code2, Monitor, TerminalSquare, Trash2, Copy, Unplug, Package, Image as ImageIcon, Eraser, AlignHorizontalJustifyCenter, AlignVerticalJustifyCenter, StretchHorizontal, StretchVertical, Minimize2, StickyNote, Lock, Unlock } from 'lucide-react';
 import { NodeType, Position } from '../types';
 
 interface ContextMenuProps {
@@ -19,7 +19,6 @@ interface ContextMenuProps {
   onDistribute?: (type: 'horizontal' | 'vertical') => void;
   onCompact?: (type: 'horizontal' | 'vertical') => void;
   onToggleLock?: (id: string) => void;
-  onForceUnlock?: (id: string) => void;
   canAlignHorizontal?: boolean;
   canAlignVertical?: boolean;
   canDistributeHorizontal?: boolean;
@@ -45,7 +44,6 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onDistribute,
   onCompact,
   onToggleLock,
-  onForceUnlock,
   canAlignHorizontal = false,
   canAlignVertical = false,
   canDistributeHorizontal = false,
@@ -86,8 +84,6 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     const showLock = currentUser && !isLocked;
     // Can Unlock: Signed in AND Locked by Me
     const showUnlock = currentUser && isLockedByMe;
-    // Force Unlock: Signed in AND Locked by Someone Else
-    const showForceUnlock = currentUser && isLocked && !isLockedByMe && onForceUnlock;
 
     return (
       <div 
@@ -100,7 +96,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         </div>
         
         {/* Lock/Unlock Actions */}
-        {(showLock || showUnlock || showForceUnlock) && onToggleLock && (
+        {(showLock || showUnlock) && onToggleLock && (
             <div className="border-b border-panelBorder pb-1 mb-1">
                 {showLock && (
                     <button
@@ -118,15 +114,6 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
                     >
                         <Unlock size={14} />
                         Unlock {isMultiSelect ? 'Selected' : ''}
-                    </button>
-                )}
-                {showForceUnlock && onForceUnlock && (
-                    <button
-                        onClick={() => onForceUnlock(targetNodeId)}
-                        className="w-full text-left px-4 py-2 text-sm font-medium text-red-500 hover:bg-zinc-800 transition-colors flex items-center gap-2"
-                    >
-                        <ShieldAlert size={14} />
-                        Force Unlock
                     </button>
                 )}
             </div>
@@ -230,7 +217,6 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   // Canvas Context Menu
   const items = [
     { label: 'Code Canvas', type: 'CODE', icon: <Code2 size={16} /> },
-    { label: 'Folder Group', type: 'FOLDER', icon: <Folder size={16} /> },
     { label: 'Text Module', type: 'TEXT', icon: <StickyNote size={16} /> },
     { label: 'Image Module', type: 'IMAGE', icon: <ImageIcon size={16} /> },
     { label: 'Preview Canvas', type: 'PREVIEW', icon: <Monitor size={16} /> },

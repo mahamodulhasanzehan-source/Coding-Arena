@@ -1,5 +1,5 @@
 
-export type NodeType = 'CODE' | 'PREVIEW' | 'TERMINAL' | 'AI_CHAT' | 'NPM' | 'IMAGE' | 'TEXT' | 'FOLDER';
+export type NodeType = 'CODE' | 'PREVIEW' | 'TERMINAL' | 'AI_CHAT' | 'NPM' | 'IMAGE' | 'TEXT';
 
 export interface Position {
   x: number;
@@ -35,7 +35,6 @@ export interface NodeData {
       uid: string;
       displayName: string;
   }; 
-  folderFileIds?: string[]; // For FOLDER nodes: IDs of files connected to this folder
 }
 
 export interface Port {
