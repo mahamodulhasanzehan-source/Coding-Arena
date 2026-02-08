@@ -3,8 +3,10 @@ import { Connection, NodeData, NodeType, Port } from '../types';
 import { getPortsForNode } from '../constants';
 
 // ---- Port Calculation Math ----
+const HEADER_HEIGHT = 40; 
 const PORT_START_Y = 52;  
 const PORT_STRIDE = 40; 
+const PORT_OFFSET_X = 12; 
 
 export const calculatePortPosition = (
   node: NodeData,
@@ -17,18 +19,15 @@ export const calculatePortPosition = (
 
   if (portIndex === -1) return { x: node.position.x, y: node.position.y };
 
-  let y = 0;
-  if (node.isMinimized) {
-      // Center vertically in the 40px header
-      y = node.position.y + 20; 
-  } else {
-      const yRelative = PORT_START_Y + 6 + (portIndex * PORT_STRIDE);
-      y = node.position.y + yRelative;
-  }
+  const startY = node.isMinimized ? 14 : PORT_START_Y;
+  const yRelative = startY + 6 + (portIndex * PORT_STRIDE);
+  const y = node.position.y + yRelative;
+
+  const width = node.isMinimized ? 250 : node.size.width;
 
   const x = type === 'input' 
     ? node.position.x - 6 
-    : node.position.x + node.size.width + 6;
+    : node.position.x + width + 6;
 
   return { x, y };
 };
@@ -284,6 +283,7 @@ export const compilePreview = (
     ${forceReload ? `<!-- Force Reload: ${Date.now()} -->` : ''}
   `;
 
+  // Only inject interceptor into HTML pages
   if (lowerTitle.endsWith('.html') || lowerTitle.endsWith('.htm')) {
        return `
         <!DOCTYPE html>
