@@ -1,3 +1,4 @@
+
 import { Connection, NodeData, NodeType, Port } from '../types';
 import { getPortsForNode } from '../constants';
 // @ts-ignore: Externalized in vite.config.ts, types not needed for build
@@ -159,7 +160,10 @@ export const compilePreview = (
     return `
       <!DOCTYPE html>
       <html>
-        <body style="background-color: #0f0f11; color: #71717a; font-family: sans-serif; height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0;">
+        <head>
+            <style>body { background-color: #0f0f11; color: #71717a; font-family: sans-serif; height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; }</style>
+        </head>
+        <body>
           <div style="text-align: center;">
             <p>Connect a <strong>CODE Canvas</strong> (index.html or App.js) to the DOM port.</p>
           </div>
@@ -175,7 +179,6 @@ export const compilePreview = (
       .filter(n => n.id !== rootNode.id); 
 
   // 2. Prepare Maps
-  // We map Paths to Blob URLs
   const pathToBlobUrl: Record<string, string> = {};
   let cssContent = '';
   
@@ -188,30 +191,24 @@ export const compilePreview = (
       }
   });
 
-  // 4. Process JS/JSX/TS
-  // We must transpile BEFORE creating Blobs so the browser gets pure JS
+  // 4. Process JS/JSX/TS - create Blobs for modules
   allNodes.forEach(node => {
       const lower = node.title.toLowerCase();
       if (lower.endsWith('.js') || lower.endsWith('.jsx') || lower.endsWith('.ts') || lower.endsWith('.tsx')) {
           try {
               let content = node.content;
 
-              // AUTO-IMPORT INJECTION
-              // If a node is connected to this node via "Imports", inject the import statement if missing
+              // AUTO-IMPORT INJECTION: Detect connections and inject import statements if missing
               const imports = getAllConnectedSources(node.id, 'file', nodes, connections);
               imports.forEach(imp => {
                   if (imp.type === 'CODE' || imp.type === 'NPM') {
                       const identifier = toIdentifier(imp.title);
                       // Look for usage of identifier, but ignore if already imported
                       const hasImport = new RegExp(`import\\s+.*?['"](.*/)?${imp.title}['"]`).test(content);
-                      
-                      // Also check if they imported using the identifier logic (e.g. import Header from './Header')
                       const hasIdentifierImport = new RegExp(`import\\s+.*?\\b${identifier}\\b`).test(content);
 
                       if (!hasImport && !hasIdentifierImport) {
-                          // Inject default import. 
-                          // NOTE: We use the EXACT filename as path so Import Map can pick it up.
-                          // We prefix with ./ to ensure it looks like a relative path
+                          // Inject default import.
                           content = `import ${identifier} from './${imp.title}';\n` + content;
                       }
                   }
@@ -219,25 +216,28 @@ export const compilePreview = (
 
               // Transpile using Babel
               let transformFn = (Babel as any).transform;
-              // Handle default export wrapping that occurs in some environments
               if (!transformFn && (Babel as any).default && (Babel as any).default.transform) {
                   transformFn = (Babel as any).default.transform;
               }
 
-              // @ts-ignore
-              const transformed = transformFn(content, {
-                  presets: ['react', 'env'],
-                  filename: node.title
-              }).code;
+              let transformedCode = content;
+              if (transformFn) {
+                 // @ts-ignore
+                 const res = transformFn(content, {
+                     presets: ['react', 'env'],
+                     filename: node.title
+                 });
+                 transformedCode = res.code;
+              }
 
-              const blob = new Blob([transformed], { type: 'application/javascript' });
+              const blob = new Blob([transformedCode], { type: 'application/javascript' });
               const blobUrl = URL.createObjectURL(blob);
               
               const fullPath = getNodePath(node, nodes, connections);
               const fileName = node.title;
               const fileNameNoExt = fileName.replace(/\.[^/.]+$/, "");
               
-              // Map all possible reference variations to ensure imports work
+              // Register multiple paths for the same file to handle various import styles
               const paths = [
                   fileName,
                   `./${fileName}`,
@@ -245,24 +245,20 @@ export const compilePreview = (
                   fileNameNoExt,
                   `./${fileNameNoExt}`,
                   `/${fileNameNoExt}`,
-                  
-                  // Folder paths
                   fullPath,
                   `./${fullPath}`,
-                  `/${fullPath}`,
-                  fullPath.replace(/\.[^/.]+$/, ""),
-                  `./${fullPath.replace(/\.[^/.]+$/, "")}`,
+                  `/${fullPath}`
               ];
 
               paths.forEach(p => {
                   if (p) pathToBlobUrl[p] = blobUrl;
               });
               
-          } catch (e) {
+          } catch (e: any) {
               console.error(`Failed to transpile ${node.title}:`, e);
-              // Fallback to raw content if babel fails
-              const blob = new Blob([node.content], { type: 'application/javascript' });
-              pathToBlobUrl[node.title] = URL.createObjectURL(blob);
+              // Register an error script to throw immediately in the preview
+              const errBlob = new Blob([`console.error("Transpilation Error in ${node.title}: ${e.message.replace(/"/g, '\\"')}");`], { type: 'application/javascript' });
+              pathToBlobUrl[node.title] = URL.createObjectURL(errBlob);
           }
       }
   });
@@ -277,126 +273,113 @@ export const compilePreview = (
     }
   };
 
-  // 6. Prepare HTML Body
+  // 6. Error Interceptor Script
+  const interceptorScript = `
+    <script>
+      (function() {
+        function send(type, args) {
+            try {
+                const message = args.map(arg => {
+                    if (arg === undefined) return 'undefined';
+                    if (arg === null) return 'null';
+                    if (arg instanceof Error) return arg.toString();
+                    if (typeof arg === 'object') return JSON.stringify(arg);
+                    return String(arg);
+                }).join(' ');
+                
+                window.parent.postMessage({
+                    source: 'preview-iframe',
+                    nodeId: '${previewNodeId}',
+                    type: type,
+                    message: message,
+                    timestamp: Date.now()
+                }, '*');
+            } catch (e) {
+                console.warn('Failed to send log to parent', e);
+            }
+        }
+
+        const oldLog = console.log;
+        const oldError = console.error;
+        const oldWarn = console.warn;
+        const oldInfo = console.info;
+
+        console.log = function(...args) { oldLog.apply(console, args); send('log', args); };
+        console.error = function(...args) { oldError.apply(console, args); send('error', args); };
+        console.warn = function(...args) { oldWarn.apply(console, args); send('warn', args); };
+        console.info = function(...args) { oldInfo.apply(console, args); send('info', args); };
+        
+        window.addEventListener('error', function(event) {
+           send('error', [event.message + ' (' + event.filename + ':' + event.lineno + ')']);
+        });
+
+        window.addEventListener('unhandledrejection', function(event) {
+           send('error', ['Unhandled Promise Rejection: ' + event.reason]);
+        });
+      })();
+    </script>
+  `;
+
+  // 7. Assemble HTML
   let htmlBody = '';
   const isHtmlRoot = rootNode.title.toLowerCase().endsWith('.html');
 
   if (isHtmlRoot) {
       htmlBody = rootNode.content;
+      htmlBody = htmlBody.replace(/<link[^>]+rel=["']stylesheet["'][^>]*>/gi, ''); // Remove existing styles
       
-      // Remove <link rel="stylesheet"> tags since we inject CSS manually
-      htmlBody = htmlBody.replace(/<link[^>]+rel=["']stylesheet["'][^>]*>/gi, '');
-      
-      // INTELLIGENT SCRIPT REPLACEMENT
+      // Inject module imports
       htmlBody = htmlBody.replace(/<script\s+([^>]*?)src=["']([^"']+)["']([^>]*)><\/script>/gi, (match, p1, src, p3) => {
-          // Clean src path (remove ./ or /)
           const cleanSrc = src.replace(/^(\.\/|\/)/, '');
-          // Find matching blob
           const blobUrl = pathToBlobUrl[cleanSrc] || pathToBlobUrl[src] || pathToBlobUrl[`./${src}`];
-          
           if (blobUrl) {
-              // Force type="module" so it can use imports
               return `<script type="module" src="${blobUrl}" ${p1} ${p3}></script>`;
           }
           return match;
       });
   } else {
-      // If root is JS, create a default React mount point
+      // JS Root
       htmlBody = '<div id="root"></div>';
   }
 
-  // 7. Final HTML Assembly
   return `
     <!DOCTYPE html>
     <html>
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        
-        <!-- Utilities -->
         <script src="https://cdn.tailwindcss.com"></script>
-        
-        <!-- Injected Styles -->
+        ${interceptorScript}
         <style>
             ${cssContent}
         </style>
-
-        <!-- Import Map -->
         <script type="importmap">
             ${JSON.stringify(importMap)}
         </script>
-
-        <!-- Global React Injection (Fixes "React is not defined") -->
         <script type="module">
             import React from 'react';
             import ReactDOM from 'react-dom/client';
             window.React = React;
             window.ReactDOM = ReactDOM;
         </script>
-
-        <!-- Console Interceptor -->
-        <script>
-          (function() {
-            const oldLog = console.log;
-            const oldError = console.error;
-            const oldWarn = console.warn;
-            const oldInfo = console.info;
-
-            function send(type, args) {
-              try {
-                const message = args.map(arg => {
-                    if (arg === undefined) return 'undefined';
-                    if (arg === null) return 'null';
-                    if (typeof arg === 'object') return JSON.stringify(arg);
-                    return String(arg);
-                }).join(' ');
-                
-                window.parent.postMessage({
-                  source: 'preview-iframe',
-                  nodeId: '${previewNodeId}',
-                  type: type,
-                  message: message,
-                  timestamp: Date.now()
-                }, '*');
-              } catch (e) {}
-            }
-
-            console.log = function(...args) { oldLog.apply(console, args); send('log', args); };
-            console.error = function(...args) { oldError.apply(console, args); send('error', args); };
-            console.warn = function(...args) { oldWarn.apply(console, args); send('warn', args); };
-            console.info = function(...args) { oldInfo.apply(console, args); send('info', args); };
-            
-            window.onerror = function(msg, url, line, col, error) {
-               send('error', [msg + ' (Line ' + line + ')']);
-               return false;
-            };
-          })();
-        </script>
       </head>
       <body>
         ${htmlBody}
-
-        <!-- Entry Point Execution (if Root is JS) -->
         ${!isHtmlRoot ? `
         <script type="module">
             import Entry from '${pathToBlobUrl[rootNode.title] || rootNode.title}';
-            
-            // Auto-Mount React if default export is a component and root is empty
             const rootEl = document.getElementById('root');
-            if (rootEl && rootEl.innerHTML.trim() === '' && Entry) {
-                if (typeof Entry === 'function') {
+            if (rootEl && Entry) {
+                if (typeof Entry === 'function' || typeof Entry === 'object') {
                     try {
                         const root = window.ReactDOM.createRoot(rootEl);
                         root.render(window.React.createElement(Entry));
-                        console.log('Auto-mounted default export from ${rootNode.title}');
                     } catch(e) {
                         console.error("Auto-mount failed:", e);
                     }
                 }
             }
         </script>` : ''}
-        
-        ${forceReload ? `<!-- Force Reload: ${Date.now()} -->` : ''}
       </body>
     </html>
   `;

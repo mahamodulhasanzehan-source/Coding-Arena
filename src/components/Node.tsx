@@ -41,7 +41,7 @@ interface NodeProps {
   children?: React.ReactNode;
 }
 
-export const Node: React.FC<NodeProps> = ({
+export const Node = React.memo<NodeProps>(({
   data,
   isSelected,
   isHighlighted,
@@ -1147,4 +1147,4 @@ export const Node: React.FC<NodeProps> = ({
       )}
     </div>
   );
-};
+});

@@ -1,14 +1,13 @@
 
-import React, { useReducer, useState, useRef, useEffect, useMemo } from 'react';
+import React, { useReducer, useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { Node } from './components/Node';
 import { Wire } from './components/Wire';
 import { ContextMenu } from './components/ContextMenu';
 import { Sidebar } from './components/Sidebar';
-import { CollaboratorCursor } from './components/CollaboratorCursor';
-import { GraphState, Action, NodeData, NodeType, LogEntry, UserPresence, Position } from './types';
-import { NODE_DEFAULTS, getPortsForNode } from './constants';
-import { compilePreview, calculatePortPosition, getRelatedNodes, getAllConnectedSources, getConnectedSource } from './utils/graphUtils';
-import { Trash2, Menu, Cloud, CloudOff, UploadCloud, Users, Download, Search, AlertTriangle } from 'lucide-react';
+import { GraphState, Action, NodeData, NodeType, LogEntry, Position } from './types';
+import { NODE_DEFAULTS } from './constants';
+import { compilePreview, calculatePortPosition, getConnectedSource } from './utils/graphUtils';
+import { Menu, Cloud, CloudOff, UploadCloud, Download, Search, AlertTriangle } from 'lucide-react';
 import { auth, onAuthStateChanged, db, doc, getDoc, setDoc, deleteDoc } from './firebase';
 import JSZip from 'jszip';
 import { handleAiMessage, handleAiGeneration } from './aiManager';
@@ -128,7 +127,6 @@ function graphReducer(state: GraphState, action: Action): GraphState {
     case 'DISCONNECT':
       return { 
           ...state, 
-          // FIX: Handle both Connection ID (from AI) and Port ID (from UI)
           connections: state.connections.filter(c => 
               c.id !== action.payload && 
               c.sourcePortId !== action.payload && 
@@ -162,26 +160,9 @@ function graphReducer(state: GraphState, action: Action): GraphState {
         };
     case 'LOAD_STATE':
         if (!action.payload) return state;
-        
-        const incomingNodes = action.payload.nodes || [];
-        const mergedNodes = incomingNodes.map(serverNode => {
-            const localNode = state.nodes.find(n => n.id === serverNode.id);
-            const interactionType = state.nodeInteractions[serverNode.id];
-
-            if (localNode) {
-                if (interactionType === 'drag') {
-                    return { ...serverNode, position: localNode.position };
-                }
-                if (interactionType === 'edit') {
-                    return { ...serverNode, content: localNode.content, title: localNode.title };
-                }
-            }
-            return serverNode;
-        });
-
         return { 
           ...state, 
-          nodes: mergedNodes, 
+          nodes: action.payload.nodes || [], 
           connections: action.payload.connections || state.connections,
           runningPreviewIds: action.payload.runningPreviewIds || state.runningPreviewIds,
           pan: action.payload.pan || state.pan,
@@ -207,24 +188,12 @@ function graphReducer(state: GraphState, action: Action): GraphState {
             ...state,
             nodes: state.nodes.map(n => {
                 if (n.id !== action.payload.id) return n;
-
                 const shouldMinimize = !n.isMinimized;
-                
                 if (shouldMinimize) {
-                     return {
-                         ...n,
-                         isMinimized: true,
-                         expandedSize: n.size, 
-                         size: { width: n.size.width, height: 40 }
-                     };
+                     return { ...n, isMinimized: true, expandedSize: n.size, size: { width: n.size.width, height: 40 } };
                 } else {
                      const restoredSize = n.expandedSize || NODE_DEFAULTS[n.type];
-                     return {
-                         ...n,
-                         isMinimized: false,
-                         expandedSize: undefined,
-                         size: restoredSize,
-                     };
+                     return { ...n, isMinimized: false, expandedSize: undefined, size: restoredSize };
                 }
             })
         };
@@ -246,13 +215,11 @@ function graphReducer(state: GraphState, action: Action): GraphState {
 
 type SyncStatus = 'synced' | 'saving' | 'offline' | 'error';
 
-const getRandomColor = () => {
-    const colors = ['#ef4444', '#f97316', '#f59e0b', '#84cc16', '#10b981', '#06b6d4', '#3b82f6', '#8b5cf6', '#d946ef', '#f43f5e'];
-    return colors[Math.floor(Math.random() * colors.length)];
-};
-
 export default function App() {
   const [state, dispatch] = useReducer(graphReducer, initialState);
+  const stateRef = useRef(state); 
+  stateRef.current = state; 
+
   const [contextMenu, setContextMenu] = useState<{ 
       x: number; 
       y: number; 
@@ -273,7 +240,6 @@ export default function App() {
   const [highlightedNodeId, setHighlightedNodeId] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('offline');
   const [currentUser, setCurrentUser] = useState<{ uid: string; displayName: string } | null>(null);
-  const [userColor] = useState(getRandomColor());
   const [snapLines, setSnapLines] = useState<{x1: number, y1: number, x2: number, y2: number}[]>([]);
   const [maximizedNodeId, setMaximizedNodeId] = useState<string | null>(null);
   const [selectionBox, setSelectionBox] = useState<{ x: number, y: number, w: number, h: number, startX: number, startY: number } | null>(null);
@@ -285,9 +251,78 @@ export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const dragStartRef = useRef<{ x: number, y: number } | null>(null);
   const touchStartPos = useRef<{ x: number, y: number } | null>(null);
-  
-  // Debounce ref for preview compilation
   const compileTimeoutRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  // --- MANUAL EVENT LISTENER ATTACHMENT TO FIX PASSIVE LISTENER ERROR ---
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const onWheel = (e: WheelEvent) => {
+        // Prevent default browser zoom
+        e.preventDefault();
+
+        // Use state from Ref to avoid stale closure or re-binding
+        const currentState = stateRef.current;
+        const rect = container.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        
+        const zoomFactor = -e.deltaY * 0.001;
+        const newZoom = Math.min(Math.max(0.1, currentState.zoom + zoomFactor), 5);
+        
+        const dx = (mouseX - currentState.pan.x) / currentState.zoom;
+        const dy = (mouseY - currentState.pan.y) / currentState.zoom;
+        
+        const newPanX = mouseX - dx * newZoom;
+        const newPanY = mouseY - dy * newZoom;
+
+        dispatch({ type: 'ZOOM', payload: { zoom: newZoom } });
+        dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
+    };
+
+    const onTouchStart = (e: TouchEvent) => {
+        if (e.touches.length === 2) {
+             e.preventDefault(); // Stop browser gesture
+             // Logic handled in React's onTouchStart but preventDefault needed here for some browsers
+        }
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+        if (e.touches.length === 2) {
+             e.preventDefault(); // Stop browser gesture
+        }
+    };
+
+    // Attach with passive: false to allow preventDefault
+    container.addEventListener('wheel', onWheel, { passive: false });
+    container.addEventListener('touchstart', onTouchStart, { passive: false });
+    container.addEventListener('touchmove', onTouchMove, { passive: false });
+
+    return () => {
+        container.removeEventListener('wheel', onWheel);
+        container.removeEventListener('touchstart', onTouchStart);
+        container.removeEventListener('touchmove', onTouchMove);
+    };
+  }, []); // Empty dependency array ensures we only attach once
+
+  // --- TERMINAL LOG LISTENER ---
+  useEffect(() => {
+    const handleMessage = (e: MessageEvent) => {
+      if (e.data?.source === 'preview-iframe') {
+        const { nodeId, type, message, timestamp } = e.data;
+        dispatch({
+          type: 'ADD_LOG',
+          payload: {
+            nodeId,
+            log: { type, message, timestamp }
+          }
+        });
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
 
   useEffect(() => {
       const handleKeyDown = (e: KeyboardEvent) => {
@@ -345,7 +380,6 @@ export default function App() {
       state.runningPreviewIds.forEach(previewId => {
           if (compileTimeoutRef.current[previewId]) clearTimeout(compileTimeoutRef.current[previewId]);
           
-          // Reduced debounce to 500ms for snappier updates
           compileTimeoutRef.current[previewId] = setTimeout(() => {
               const iframe = document.getElementById(`preview-iframe-${previewId}`) as HTMLIFrameElement;
               if (iframe) {
@@ -358,16 +392,13 @@ export default function App() {
       });
   }, [state.nodes, state.connections, state.runningPreviewIds]);
 
-  // --- Folder Minimization Logic ---
   const hiddenNodeIds = useMemo(() => {
       const ids = new Set<string>();
-      
       const getChildren = (folderId: string) => {
            return state.connections
               .filter(c => c.targetNodeId === folderId && c.targetPortId.includes('in-files'))
               .map(c => c.sourceNodeId);
       };
-
       const traverse = (parentId: string) => {
           const children = getChildren(parentId);
           children.forEach(childId => {
@@ -380,13 +411,11 @@ export default function App() {
               }
           });
       };
-
       state.nodes.forEach(node => {
           if (node.type === 'FOLDER' && node.isMinimized) {
               traverse(node.id);
           }
       });
-      
       return ids;
   }, [state.nodes, state.connections]);
 
@@ -431,7 +460,6 @@ export default function App() {
   }, [state.nodes, state.connections, state.runningPreviewIds, state.pan, state.zoom, currentUser]); 
 
   // --- Handlers ---
-
   const handleContextMenu = (e: React.MouseEvent | React.TouchEvent | React.PointerEvent, nodeId?: string, portId?: string) => {
     e.preventDefault();
     if (isPanning) return;
@@ -469,9 +497,9 @@ export default function App() {
     });
   };
 
-  const isConnected = (portId: string) => {
+  const isConnected = useCallback((portId: string) => {
       return state.connections.some(c => c.sourcePortId === portId || c.targetPortId === portId);
-  };
+  }, [state.connections]);
 
   const handleToggleRun = (nodeId: string) => {
       const isRunning = state.runningPreviewIds.includes(nodeId);
@@ -640,32 +668,9 @@ export default function App() {
       }
   };
 
-  const handleWheel = (e: React.WheelEvent) => {
-      // FIX: Always prevent default to avoid scrolling the page body
-      e.preventDefault(); 
-
-      // Zoom is now the default wheel behavior, as requested.
-      // Removed modifier key check for zoom.
-      const rect = containerRef.current!.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
-      
-      const zoomFactor = -e.deltaY * 0.001;
-      const newZoom = Math.min(Math.max(0.1, state.zoom + zoomFactor), 5);
-      
-      const dx = (mouseX - state.pan.x) / state.zoom;
-      const dy = (mouseY - state.pan.y) / state.zoom;
-      
-      const newPanX = mouseX - dx * newZoom;
-      const newPanY = mouseY - dy * newZoom;
-
-      dispatch({ type: 'ZOOM', payload: { zoom: newZoom, center: { x: 0, y: 0 } } });
-      dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
-  };
-
   const handleTouchStart = (e: React.TouchEvent) => {
       if (e.touches.length === 2) {
-          e.preventDefault();
+          // Native listener already handles preventDefault
           isPinching.current = true;
           const dist = Math.hypot(
               e.touches[0].clientX - e.touches[1].clientX,
@@ -679,7 +684,6 @@ export default function App() {
 
   const handleTouchMove = (e: React.TouchEvent) => {
       if (isPinching.current && e.touches.length === 2) {
-          e.preventDefault();
           const dist = Math.hypot(
               e.touches[0].clientX - e.touches[1].clientX,
               e.touches[0].clientY - e.touches[1].clientY
@@ -826,7 +830,6 @@ export default function App() {
   };
 
   // --- AI HANDLERS VIA MANAGER ---
-
   const handleSendMessageWrapper = async (nodeId: string, text: string) => {
       await handleAiMessage(nodeId, text, {
           state,
@@ -947,19 +950,14 @@ export default function App() {
   };
 
   const handleFindNearest = () => {
-    // Calculate viewport center in world coordinates
     const viewportCenterX = window.innerWidth / 2;
     const viewportCenterY = window.innerHeight / 2;
-    
-    // We want the logic to find the node closest to the CURRENT CENTER of the screen
-    // World coordinates of the current screen center:
     const worldCenterX = (viewportCenterX - state.pan.x) / state.zoom;
     const worldCenterY = (viewportCenterY - state.pan.y) / state.zoom;
     
     let nearestNode: NodeData | null = null;
     let minDist = Infinity;
     
-    // Search only in currently displayed (non-hidden) nodes
     regularNodes.forEach(n => {
         const nW = n.size.width;
         const nH = n.isMinimized ? 40 : n.size.height;
@@ -973,8 +971,6 @@ export default function App() {
     if (nearestNode) {
         const target = nearestNode as NodeData;
         handleHighlightNode(target.id);
-        
-        // Calculate correct Pan to center this node on screen
         const nW = target.size.width;
         const nH = target.isMinimized ? 40 : target.size.height;
         const targetCenterX = target.position.x + nW / 2;
@@ -987,11 +983,9 @@ export default function App() {
     }
   };
 
-  const handleNodeMove = (id: string, newPos: Position) => {
-      // Basic movement
+  const handleNodeMove = useCallback((id: string, newPos: Position) => {
       dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id, position: newPos } });
       
-      // Move selected siblings
       if (state.selectedNodeIds.includes(id)) {
            const initialNode = state.nodes.find(n => n.id === id);
            const startX = initialNode?.position.x || 0;
@@ -1009,7 +1003,6 @@ export default function App() {
            });
       }
       
-      // Snap Lines Logic
       const SNAP_THRESHOLD = 5;
       const otherNodes = regularNodes.filter(n => n.id !== id && !state.selectedNodeIds.includes(n.id));
       const myNode = regularNodes.find(n => n.id === id);
@@ -1045,7 +1038,7 @@ export default function App() {
           }
       });
       setSnapLines(newSnapLines);
-  };
+  }, [state.nodes, state.selectedNodeIds, regularNodes]);
   
   const handleNodeDragEnd = (id: string) => { setSnapLines([]); };
 
@@ -1125,7 +1118,6 @@ export default function App() {
         onPointerDown={handleBgPointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onWheel={handleWheel}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
