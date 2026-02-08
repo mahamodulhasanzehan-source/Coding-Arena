@@ -1,3 +1,4 @@
+
 import React, { useRef, useEffect, useState } from 'react';
 import { NodeData, Position, Size } from '../types';
 import { getPortsForNode } from '../constants';
@@ -1067,8 +1068,8 @@ export const Node: React.FC<NodeProps> = ({
                     id={`preview-iframe-${data.id}`}
                     title="preview"
                     className="w-full h-full bg-white nodrag"
-                    // REMOVED allow-same-origin to fix console error and improve security
-                    sandbox="allow-scripts allow-modals allow-pointer-lock allow-forms"
+                    // ADDED allow-same-origin to allow blob url loading
+                    sandbox="allow-scripts allow-modals allow-pointer-lock allow-forms allow-same-origin"
                     onPointerDown={(e) => e.stopPropagation()}
                  />
                ) : (

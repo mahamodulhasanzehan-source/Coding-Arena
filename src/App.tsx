@@ -1,3 +1,4 @@
+
 import React, { useReducer, useState, useRef, useEffect, useMemo } from 'react';
 import { Node } from './components/Node';
 import { Wire } from './components/Wire';
@@ -514,21 +515,26 @@ export default function App() {
   };
 
   const handleBgPointerDown = (e: React.PointerEvent) => {
-      if (e.button !== 0) return; // Only left click
+      // Allow Middle Click (1) for Panning, Left Click (0) for Standard interactions
+      if (e.button !== 0 && e.button !== 1) return; 
+
       if ((e.target as HTMLElement).closest('.nodrag')) return;
       
-      if (!e.shiftKey && !e.ctrlKey) {
+      // Clear selection only on Left Click without modifiers
+      if (e.button === 0 && !e.shiftKey && !e.ctrlKey) {
           dispatchLocal({ type: 'SET_SELECTED_NODES', payload: [] });
       }
 
       e.currentTarget.setPointerCapture(e.pointerId);
       
-      if (e.shiftKey || e.ctrlKey || e.metaKey) {
+      // Selection Box (Left Click + Modifier)
+      if (e.button === 0 && (e.shiftKey || e.ctrlKey || e.metaKey)) {
           const rect = containerRef.current!.getBoundingClientRect();
           const x = e.clientX - rect.left;
           const y = e.clientY - rect.top;
           setSelectionBox({ x, y, w: 0, h: 0, startX: x, startY: y });
       } else {
+          // Pan on Left Drag (no mod) OR Middle Drag
           setIsPanning(true);
           dragStartRef.current = { x: e.clientX, y: e.clientY };
       }
@@ -638,25 +644,23 @@ export default function App() {
       // FIX: Always prevent default to avoid scrolling the page body
       e.preventDefault(); 
 
-      if (e.ctrlKey || e.metaKey) {
-          const rect = containerRef.current!.getBoundingClientRect();
-          const mouseX = e.clientX - rect.left;
-          const mouseY = e.clientY - rect.top;
-          
-          const zoomFactor = -e.deltaY * 0.001;
-          const newZoom = Math.min(Math.max(0.1, state.zoom + zoomFactor), 5);
-          
-          const dx = (mouseX - state.pan.x) / state.zoom;
-          const dy = (mouseY - state.pan.y) / state.zoom;
-          
-          const newPanX = mouseX - dx * newZoom;
-          const newPanY = mouseY - dy * newZoom;
+      // Zoom is now the default wheel behavior, as requested.
+      // Removed modifier key check for zoom.
+      const rect = containerRef.current!.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      
+      const zoomFactor = -e.deltaY * 0.001;
+      const newZoom = Math.min(Math.max(0.1, state.zoom + zoomFactor), 5);
+      
+      const dx = (mouseX - state.pan.x) / state.zoom;
+      const dy = (mouseY - state.pan.y) / state.zoom;
+      
+      const newPanX = mouseX - dx * newZoom;
+      const newPanY = mouseY - dy * newZoom;
 
-          dispatch({ type: 'ZOOM', payload: { zoom: newZoom, center: { x: 0, y: 0 } } });
-          dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
-      } else {
-          dispatch({ type: 'PAN', payload: { x: state.pan.x - e.deltaX, y: state.pan.y - e.deltaY } });
-      }
+      dispatch({ type: 'ZOOM', payload: { zoom: newZoom, center: { x: 0, y: 0 } } });
+      dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
