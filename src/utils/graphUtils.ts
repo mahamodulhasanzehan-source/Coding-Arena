@@ -3,10 +3,8 @@ import { Connection, NodeData, NodeType, Port } from '../types';
 import { getPortsForNode } from '../constants';
 
 // ---- Port Calculation Math ----
-const HEADER_HEIGHT = 40; 
 const PORT_START_Y = 52;  
 const PORT_STRIDE = 40; 
-const PORT_OFFSET_X = 12; 
 
 export const calculatePortPosition = (
   node: NodeData,
@@ -19,17 +17,18 @@ export const calculatePortPosition = (
 
   if (portIndex === -1) return { x: node.position.x, y: node.position.y };
 
-  const startY = node.isMinimized ? 14 : PORT_START_Y;
-  const yRelative = startY + 6 + (portIndex * PORT_STRIDE);
-  const y = node.position.y + yRelative;
-
-  // With the state update logic, node.size.width is now the correct visual width
-  // even when minimized.
-  const width = node.size.width;
+  let y = 0;
+  if (node.isMinimized) {
+      // Center vertically in the 40px header
+      y = node.position.y + 20; 
+  } else {
+      const yRelative = PORT_START_Y + 6 + (portIndex * PORT_STRIDE);
+      y = node.position.y + yRelative;
+  }
 
   const x = type === 'input' 
     ? node.position.x - 6 
-    : node.position.x + width + 6;
+    : node.position.x + node.size.width + 6;
 
   return { x, y };
 };
@@ -150,7 +149,9 @@ export const compilePreview = (
       .filter(n => n.id !== rootNode.id); 
 
   let finalContent = rootNode.content;
-  
+  const connectedFilenames = new Set(uniqueDeps.map(d => d.title));
+  const missingDependencies: string[] = [];
+
   // Wrap content based on STRICT file extension
   const lowerTitle = rootNode.title.toLowerCase();
   
@@ -179,36 +180,36 @@ export const compilePreview = (
   }
 
   // 3. Inject Dependencies based on Filenames (Only if the root is HTML-like)
-  // We replace missing dependencies with a script that logs the error, preventing browser 404s.
   if (lowerTitle.endsWith('.html') || lowerTitle.endsWith('.htm')) {
       // Check CSS imports <link href="style.css">
       finalContent = finalContent.replace(/<link[^>]+href=["']([^"']+)["'][^>]*>/gi, (match, filename) => {
-        if (filename.match(/^(https?:\/\/|\/\/)/i)) return match; // Ignore remote URLs
-        
         const depNode = uniqueDeps.find(d => d.title === filename);
         if (depNode) {
             return `<style>\n/* Source: ${filename} */\n${depNode.content}\n</style>`;
         } else {
-            // Replace with explicit error logging to prevent browser 404 and scope error to terminal
-            return `<script>console.error('Dependency Error: "${filename}" is referenced but not connected via wires.');</script>`; 
+            missingDependencies.push(filename);
+            return match; 
         }
       });
 
       // Check JS imports <script src="script.js">
       finalContent = finalContent.replace(/<script[^>]+src=["']([^"']+)["'][^>]*><\/script>/gi, (match, filename) => {
-        if (filename.match(/^(https?:\/\/|\/\/)/i)) return match; // Ignore remote URLs
-
         const depNode = uniqueDeps.find(d => d.title === filename);
         if (depNode) {
             return `<script>\n/* Source: ${filename} */\n${depNode.content}\n</script>`;
         } else {
-            // Replace with explicit error logging to prevent browser 404 and scope error to terminal
-            return `<script>console.error('Dependency Error: "${filename}" is referenced but not connected via wires.');</script>`; 
+            missingDependencies.push(filename);
+            return match; 
         }
       });
   }
 
+
   // 4. Inject Console Interceptor & Multiplayer Bridge & Force Reload Timestamp
+  const errorInjections = missingDependencies.map(file => 
+    `console.error('Dependency Error: "${file}" is referenced in code but not connected via wires.');`
+  ).join('\n');
+
   const interceptor = `
     <script>
       (function() {
@@ -226,7 +227,6 @@ export const compilePreview = (
                 return String(arg);
             }).join(' ');
             
-            // Strictly target the parent window
             window.parent.postMessage({
               source: 'preview-iframe',
               nodeId: '${previewNodeId}',
@@ -276,12 +276,14 @@ export const compilePreview = (
                 timestamp: Date.now()
             }, '*');
         });
+
+        // Report Missing Dependencies immediately
+        ${errorInjections}
       })();
     </script>
     ${forceReload ? `<!-- Force Reload: ${Date.now()} -->` : ''}
   `;
 
-  // Only inject interceptor into HTML pages or wrapped content
   if (lowerTitle.endsWith('.html') || lowerTitle.endsWith('.htm')) {
        return `
         <!DOCTYPE html>

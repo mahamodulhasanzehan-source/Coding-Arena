@@ -1,5 +1,5 @@
 
-export type NodeType = 'CODE' | 'PREVIEW' | 'TERMINAL' | 'AI_CHAT' | 'NPM' | 'IMAGE' | 'TEXT';
+export type NodeType = 'CODE' | 'PREVIEW' | 'TERMINAL' | 'AI_CHAT' | 'NPM' | 'IMAGE';
 
 export interface Position {
   x: number;
@@ -22,19 +22,15 @@ export interface NodeData {
   title: string;
   position: Position;
   size: Size;
-  expandedSize?: Size; // Store original size when minimized
-  content: string; // Code content, internal state, NPM query, Base64 Image, or Markdown text
+  content: string; // Code content, internal state, NPM query, or Base64 Image
   lastOutput?: any; // For terminals or previews to store runtime state if needed
   autoHeight?: boolean; // For CODE nodes to grow automatically
   messages?: ChatMessage[]; // For AI_CHAT nodes
   contextNodeIds?: string[]; // IDs of files selected for AI context
   isLoading?: boolean; // For AI loading state
   sharedState?: any; // For multiplayer state synchronization
-  isMinimized?: boolean; // Visual state for minimization
-  lockedBy?: { // NEW: Locking mechanism
-      uid: string;
-      displayName: string;
-  }; 
+  isMinimized?: boolean; // Minimization state
+  expandedSize?: Size; // Store original size when minimized
 }
 
 export interface Port {
@@ -84,7 +80,6 @@ export interface GraphState {
   };
   collaborators: UserPresence[];
   nodeInteractions: Record<string, 'drag' | 'edit' | null>; // Local interaction locks
-  selectedNodeIds: string[]; // Multi-selection state
 }
 
 export type Action =
@@ -111,6 +106,4 @@ export type Action =
   | { type: 'UPDATE_COLLABORATORS'; payload: UserPresence[] }
   | { type: 'SET_NODE_INTERACTION'; payload: { nodeId: string; type: 'drag' | 'edit' | null } }
   | { type: 'UPDATE_NODE_SHARED_STATE'; payload: { nodeId: string; state: any } }
-  | { type: 'TOGGLE_MINIMIZE'; payload: { id: string } }
-  | { type: 'SET_SELECTED_NODES'; payload: string[] }
-  | { type: 'LOCK_NODES'; payload: { ids: string[]; user: { uid: string; displayName: string } | undefined } };
+  | { type: 'TOGGLE_MINIMIZE'; payload: string };

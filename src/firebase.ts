@@ -1,7 +1,8 @@
 
 import { initializeApp } from "firebase/app";
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged as firebaseOnAuthStateChanged } from "firebase/auth";
-import { getFirestore, doc, getDoc, setDoc, deleteDoc } from "firebase/firestore";
+// @ts-ignore
+import { getAuth, signInAnonymously } from "firebase/auth";
+import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBllwH83gpDoLAeo_XnnMDu4mmWVzBJOkA",
@@ -16,30 +17,13 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
-export const googleProvider = new GoogleAuthProvider();
 
-export const signInWithGoogle = async () => {
+export const signIn = async () => {
   try {
-    const result = await signInWithPopup(auth, googleProvider);
-    return result.user;
+    const userCredential = await signInAnonymously(auth);
+    return userCredential.user;
   } catch (error) {
-    console.error("Error signing in with Google:", error);
+    console.error("Error signing in anonymously:", error);
     throw error;
   }
 };
-
-export const logOut = async () => {
-  try {
-    await signOut(auth);
-  } catch (error) {
-    console.error("Error signing out:", error);
-  }
-};
-
-// Wrapper to match the interface expected by components
-export const onAuthStateChanged = (authInstance: any, callback: (user: any) => void) => {
-    return firebaseOnAuthStateChanged(authInstance, callback);
-};
-
-export { doc, getDoc, setDoc, deleteDoc };
-export type { User } from "firebase/auth";

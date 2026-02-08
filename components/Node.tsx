@@ -62,7 +62,6 @@ export const Node: React.FC<NodeProps> = ({
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
   const editorRef = useRef<any>(null);
   const monaco = useMonaco();
-  const MonacoEditor = Editor as any;
   
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
@@ -421,13 +420,13 @@ export const Node: React.FC<NodeProps> = ({
       <div className={`flex-1 relative group nodrag flex flex-col min-h-0 overflow-hidden`}>
         {data.type === 'CODE' ? (
             <div className="w-full h-full bg-[#1e1e1e]" onPointerDown={(e) => e.stopPropagation()}>
-                 <MonacoEditor
+                 <Editor
                     height="100%"
                     defaultLanguage={getLanguage(data.title)}
                     language={getLanguage(data.title)}
                     value={data.content}
                     theme="vs-dark"
-                    onChange={(value: string | undefined) => onUpdateContent?.(data.id, value || '')}
+                    onChange={(value) => onUpdateContent?.(data.id, value || '')}
                     onMount={handleEditorMount}
                     options={{
                         minimap: { enabled: true, scale: 0.5 },
@@ -674,4 +673,3 @@ export const Node: React.FC<NodeProps> = ({
     </div>
   );
 };
-        

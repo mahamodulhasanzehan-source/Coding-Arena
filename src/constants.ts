@@ -8,7 +8,6 @@ export const NODE_DEFAULTS = {
   AI_CHAT: { width: 350, height: 450, title: 'AI Assistant', content: '' },
   NPM: { width: 300, height: 350, title: 'NPM Packages', content: '' },
   IMAGE: { width: 300, height: 300, title: 'Image', content: '' },
-  TEXT: { width: 300, height: 300, title: 'Note.md', content: '# New Note\n\nDouble-click to edit this markdown note.', autoHeight: false },
 };
 
 export const getPortsForNode = (nodeId: string, type: NodeType): Port[] => {
@@ -32,9 +31,9 @@ export const getPortsForNode = (nodeId: string, type: NodeType): Port[] => {
         { id: `${nodeId}-out-pkg`, nodeId, type: 'output', label: 'Package' },
       ];
     case 'AI_CHAT':
-    case 'IMAGE':
-    case 'TEXT':
         return [];
+    case 'IMAGE':
+        return []; // Image nodes are purely visual for now
     default:
       return [];
   }
