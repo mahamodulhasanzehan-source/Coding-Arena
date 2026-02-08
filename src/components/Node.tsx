@@ -1,3 +1,4 @@
+
 import React, { useRef, useEffect, useState } from 'react';
 import { NodeData, Position, Size } from '../types';
 import { getPortsForNode } from '../constants';
@@ -36,6 +37,7 @@ interface NodeProps {
   onSelect?: (id: string, multi: boolean) => void; 
   collaboratorInfo?: { name: string; color: string; action: 'dragging' | 'editing' };
   logs?: any[]; 
+  // Map passed from App.tsx containing title strings of files connected to this folder
   folderContents?: string[]; 
   children?: React.ReactNode;
 }
@@ -135,8 +137,11 @@ export const Node: React.FC<NodeProps> = ({
   // Sync actual rendered size back to state when minimized to ensure wires connect correctly
   useEffect(() => {
     if (data.isMinimized && nodeRef.current) {
+        // When minimized, we allow the DOM to dictate width based on content (title + buttons)
         const actualWidth = nodeRef.current.offsetWidth;
         const actualHeight = nodeRef.current.offsetHeight;
+        
+        // Sync back to state if significantly different, ensuring Wires attach to the correct point
         if (Math.abs(actualWidth - data.size.width) > 2 || Math.abs(actualHeight - data.size.height) > 2) {
             onResize(data.id, { width: actualWidth, height: actualHeight });
         }
@@ -190,6 +195,7 @@ export const Node: React.FC<NodeProps> = ({
     initialPosRef.current = { ...data.position };
 
     if (e.pointerType === 'mouse') {
+        // Desktop: Immediate Selection & Drag
         if (onSelect) {
             if (e.ctrlKey) {
                 onSelect(data.id, true);
@@ -200,9 +206,13 @@ export const Node: React.FC<NodeProps> = ({
         setIsDragging(true);
         onInteraction?.(data.id, 'drag'); 
     } else {
+        // Mobile/Touch: Wait to distinguish Tap vs Drag vs Long Press
+        
+        // Start Long Press Timer for Context Menu
         longPressTimer.current = setTimeout(() => {
             if (onContextMenu) {
                 onContextMenu(e as any);
+                // Reset interaction state if long press triggered
                 dragStartRef.current = null;
                 setIsDragging(false);
             }
@@ -214,6 +224,7 @@ export const Node: React.FC<NodeProps> = ({
   };
 
   const handleResizePointerDown = (e: React.PointerEvent) => {
+    // Prevent resizing if Minimized
     if (data.isLoading || data.isMinimized || isMaximized) return; 
     
     e.stopPropagation();
@@ -226,9 +237,11 @@ export const Node: React.FC<NodeProps> = ({
   const handlePointerMove = (e: React.PointerEvent) => {
     if (!dragStartRef.current) return;
 
+    // Mobile Threshold Check
     if (e.pointerType !== 'mouse' && !isDragging && !isResizing) {
         const dist = Math.hypot(e.clientX - dragStartRef.current.x, e.clientY - dragStartRef.current.y);
         if (dist > 10) {
+            // Moved enough to be a drag, cancel long press
             if (longPressTimer.current) {
                 clearTimeout(longPressTimer.current);
                 longPressTimer.current = null;
@@ -236,7 +249,7 @@ export const Node: React.FC<NodeProps> = ({
             setIsDragging(true);
             onInteraction?.(data.id, 'drag');
         } else {
-            return; 
+            return; // Ignore tiny movements
         }
     }
 
@@ -260,6 +273,7 @@ export const Node: React.FC<NodeProps> = ({
           const HEADER_HEIGHT = 40;
           const PADDING = 20; 
           const maxAllowedHeight = Math.max(150, contentHeightRef.current + HEADER_HEIGHT + PADDING);
+          
           if (newHeight > maxAllowedHeight) {
               newHeight = maxAllowedHeight;
           }
@@ -273,11 +287,14 @@ export const Node: React.FC<NodeProps> = ({
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
+    // Handle Mobile Tap
     if (e.pointerType !== 'mouse' && longPressTimer.current) {
         clearTimeout(longPressTimer.current);
         longPressTimer.current = null;
+        
+        // If we haven't started dragging effectively, it's a tap
         if (!isDragging && onSelect) {
-            onSelect(data.id, true);
+            onSelect(data.id, true); // Always additive (multi) on mobile
         }
     }
 
@@ -376,6 +393,7 @@ export const Node: React.FC<NodeProps> = ({
           onInteraction?.(data.id, null);
       });
 
+      // Auto-Size Logic
       if (data.type === 'CODE') {
           editor.onDidContentSizeChange((e: any) => {
               contentHeightRef.current = e.contentHeight;
@@ -405,6 +423,7 @@ export const Node: React.FC<NodeProps> = ({
       return 'javascript';
   };
 
+  // NPM Logic
   const searchNpm = async () => {
       if (!npmQuery.trim()) return;
       setIsSearchingNpm(true);
@@ -481,6 +500,7 @@ export const Node: React.FC<NodeProps> = ({
       }
   };
 
+  // Text Module Shortcut Handling
   const handleTextKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if ((e.ctrlKey || e.metaKey)) {
           const key = e.key.toLowerCase();
@@ -509,6 +529,7 @@ export const Node: React.FC<NodeProps> = ({
               const newText = text.substring(0, start) + wrapped + text.substring(end);
               if (onUpdateContent) onUpdateContent(data.id, newText);
               
+              // Restore selection after update (need timeout for React state update)
               setTimeout(() => {
                   if (textEditorRef.current) {
                       textEditorRef.current.selectionStart = start + wrapperLen;
@@ -519,6 +540,7 @@ export const Node: React.FC<NodeProps> = ({
       }
   };
 
+  // Styles
   let borderClass = 'border-panelBorder';
   let shadowClass = '';
   
@@ -542,6 +564,7 @@ export const Node: React.FC<NodeProps> = ({
       borderClass = 'border-indigo-500/50';
   }
 
+  // Determine styles for Minimized vs Maximized vs Normal
   const maximizedStyle = isMaximized ? {
       position: 'fixed' as const,
       top: 0,
@@ -554,9 +577,10 @@ export const Node: React.FC<NodeProps> = ({
       borderWidth: 0,
   } : {
       transform: `translate(${data.position.x}px, ${data.position.y}px)`,
+      // KEY CHANGE: If minimized, let content dictate width (auto), but check min-width
       width: data.isMinimized ? 'auto' : data.size.width, 
       minWidth: data.isMinimized ? '200px' : undefined,
-      height: data.isMinimized ? 'auto' : data.size.height,
+      height: data.isMinimized ? 'auto' : data.size.height, // Auto height for minimize to fit header exactly
   };
 
   const dynamicStyle = collaboratorInfo ? {
@@ -583,6 +607,7 @@ export const Node: React.FC<NodeProps> = ({
     >
       {shimmerOverlay}
 
+      {/* Collaborator Badge (Hidden if Maximized) */}
       {collaboratorInfo && !isMaximized && (
           <div 
             className="absolute -top-6 right-0 px-2 py-0.5 rounded text-[10px] font-bold text-white shadow-md flex items-center gap-1 z-50 animate-in fade-in slide-in-from-bottom-2"
@@ -610,6 +635,7 @@ export const Node: React.FC<NodeProps> = ({
             />
           ) : (
              <div className={`flex items-center gap-2 group/title ${data.isMinimized ? 'whitespace-nowrap' : 'truncate'}`}>
+                {/* Lock Status Indicator */}
                 {data.lockedBy && (
                     <div className="text-amber-500 flex items-center" title={`Locked by ${data.lockedBy.displayName}`}>
                         <Lock size={12} />
@@ -636,6 +662,7 @@ export const Node: React.FC<NodeProps> = ({
         </div>
         
         <div className="flex items-center gap-1 shrink-0">
+            {/* Folder Minimize */}
             {data.type === 'FOLDER' && (
                 <button
                     onClick={handleToggleMinimize}
@@ -710,6 +737,7 @@ export const Node: React.FC<NodeProps> = ({
               >
                   {isRunning ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
               </button>
+              {/* Maximize Button */}
               <button 
                   onClick={handleToggleMaximize}
                   onPointerDown={(e) => e.stopPropagation()}
@@ -777,7 +805,7 @@ export const Node: React.FC<NodeProps> = ({
                         tabSize: 2,
                         wordWrap: 'on',
                         padding: { top: 10, bottom: 10 },
-                        readOnly: data.isLoading,
+                        readOnly: data.isLoading, // We won't strictly lock here to avoid UX flickering, relying on App.tsx alert
                         scrollbar: {
                             vertical: 'auto',
                             handleMouseWheel: true,
@@ -865,6 +893,7 @@ export const Node: React.FC<NodeProps> = ({
                         )}
                     </div>
                 )}
+                {/* Visual Hint for Mode */}
                 {!isEditingText && (
                     <button 
                         onClick={() => setIsEditingText(true)}
@@ -1061,27 +1090,13 @@ export const Node: React.FC<NodeProps> = ({
                  </div>
              </div>
         ) : (
-            // PREVIEW NODE LOGIC
-            <div className="w-full h-full bg-[#1e1e1e] relative">
-               {isRunning ? (
-                 <iframe
-                    id={`preview-iframe-${data.id}`}
-                    title="preview"
-                    className="w-full h-full bg-white nodrag"
-                    // REMOVED allow-same-origin to fix console error and improve security
-                    sandbox="allow-scripts allow-modals allow-pointer-lock allow-forms"
-                    onPointerDown={(e) => e.stopPropagation()}
-                 />
-               ) : (
-                 <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/50 text-zinc-500 select-none">
-                     <div className="text-center">
-                        <Play size={48} className="mx-auto mb-2 opacity-20" />
-                        <p className="text-sm font-medium">Preview Stopped</p>
-                        <p className="text-[10px] opacity-60">Click Run to start</p>
-                     </div>
-                 </div>
-               )}
-            </div>
+             <iframe
+                id={`preview-iframe-${data.id}`}
+                title="preview"
+                className="w-full h-full bg-white nodrag"
+                sandbox="allow-scripts allow-same-origin allow-modals allow-pointer-lock"
+                onPointerDown={(e) => e.stopPropagation()}
+            />
         )}
       </div>
 

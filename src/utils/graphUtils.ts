@@ -1,7 +1,6 @@
+
 import { Connection, NodeData, NodeType, Port } from '../types';
 import { getPortsForNode } from '../constants';
-// @ts-ignore: Externalized in vite.config.ts, types not needed for build
-import * as Babel from '@babel/standalone';
 
 // ---- Port Calculation Math ----
 const HEADER_HEIGHT = 40; 
@@ -95,19 +94,6 @@ export const getRelatedNodes = (
   return related;
 };
 
-// Helper: Determine the virtual path of a node (e.g. "components/Header.js")
-const getNodePath = (node: NodeData, nodes: NodeData[], connections: Connection[]): string => {
-    const folderConn = connections.find(c => 
-        c.sourceNodeId === node.id && 
-        nodes.find(n => n.id === c.targetNodeId)?.type === 'FOLDER'
-    );
-    if (folderConn) {
-        const folder = nodes.find(n => n.id === folderConn.targetNodeId);
-        if (folder) return `${folder.title}/${node.title}`;
-    }
-    return node.title;
-};
-
 // Helper to recursively collect all code dependencies
 const collectDependencies = (
   rootNode: NodeData,
@@ -123,7 +109,6 @@ const collectDependencies = (
 
     for (const dep of directDeps) {
         if (dep.type === 'FOLDER') {
-            // If connected to a folder, get contents of that folder
             const folderContents = getAllConnectedSources(dep.id, 'files', nodes, connections);
             allDeps = [...allDeps, ...folderContents];
             
@@ -139,12 +124,6 @@ const collectDependencies = (
     }
 
     return allDeps;
-};
-
-// Helper: Sanitize filename to valid identifier
-const toIdentifier = (filename: string) => {
-    const base = filename.replace(/\.[^/.]+$/, "");
-    return base.replace(/[^a-zA-Z0-9_$]/g, "_");
 };
 
 export const compilePreview = (
@@ -174,129 +153,35 @@ export const compilePreview = (
       .map(id => nodes.find(n => n.id === id)!)
       .filter(n => n.id !== rootNode.id); 
 
-  // 2. Prepare Maps
-  // We map Paths to Blob URLs
-  const pathToBlobUrl: Record<string, string> = {};
+  // 2. Separate Resources
   let cssContent = '';
+  const jsFiles: Record<string, string> = {};
   
   const allNodes = [rootNode, ...uniqueDeps];
   
-  // 3. Process CSS first
-  allNodes.forEach(node => {
-      if (node.title.toLowerCase().endsWith('.css')) {
-          cssContent += `\n/* ${node.title} */\n${node.content}\n`;
-      }
-  });
-
-  // 4. Process JS/JSX/TS
-  // We must transpile BEFORE creating Blobs so the browser gets pure JS
   allNodes.forEach(node => {
       const lower = node.title.toLowerCase();
-      if (lower.endsWith('.js') || lower.endsWith('.jsx') || lower.endsWith('.ts') || lower.endsWith('.tsx')) {
-          try {
-              let content = node.content;
-
-              // AUTO-IMPORT INJECTION
-              // If a node is connected to this node via "Imports", inject the import statement if missing
-              const imports = getAllConnectedSources(node.id, 'file', nodes, connections);
-              imports.forEach(imp => {
-                  if (imp.type === 'CODE' || imp.type === 'NPM') {
-                      const identifier = toIdentifier(imp.title);
-                      // Look for usage of identifier, but ignore if already imported
-                      const hasImport = new RegExp(`import\\s+.*?['"](.*/)?${imp.title}['"]`).test(content);
-                      
-                      // Also check if they imported using the identifier logic (e.g. import Header from './Header')
-                      const hasIdentifierImport = new RegExp(`import\\s+.*?\\b${identifier}\\b`).test(content);
-
-                      if (!hasImport && !hasIdentifierImport) {
-                          // Inject default import. 
-                          // NOTE: We use the EXACT filename as path so Import Map can pick it up.
-                          // We prefix with ./ to ensure it looks like a relative path
-                          content = `import ${identifier} from './${imp.title}';\n` + content;
-                      }
-                  }
-              });
-
-              // Transpile using Babel
-              let transformFn = (Babel as any).transform;
-              // Handle default export wrapping that occurs in some environments
-              if (!transformFn && (Babel as any).default && (Babel as any).default.transform) {
-                  transformFn = (Babel as any).default.transform;
-              }
-
-              // @ts-ignore
-              const transformed = transformFn(content, {
-                  presets: ['react', 'env'],
-                  filename: node.title
-              }).code;
-
-              const blob = new Blob([transformed], { type: 'application/javascript' });
-              const blobUrl = URL.createObjectURL(blob);
-              
-              const fullPath = getNodePath(node, nodes, connections);
-              const fileName = node.title;
-              const fileNameNoExt = fileName.replace(/\.[^/.]+$/, "");
-              
-              // Map all possible reference variations to ensure imports work
-              const paths = [
-                  fileName,
-                  `./${fileName}`,
-                  `/${fileName}`,
-                  fileNameNoExt,
-                  `./${fileNameNoExt}`,
-                  `/${fileNameNoExt}`,
-                  
-                  // Folder paths
-                  fullPath,
-                  `./${fullPath}`,
-                  `/${fullPath}`,
-                  fullPath.replace(/\.[^/.]+$/, ""),
-                  `./${fullPath.replace(/\.[^/.]+$/, "")}`,
-              ];
-
-              paths.forEach(p => {
-                  if (p) pathToBlobUrl[p] = blobUrl;
-              });
-              
-          } catch (e) {
-              console.error(`Failed to transpile ${node.title}:`, e);
-              // Fallback to raw content if babel fails
-              const blob = new Blob([node.content], { type: 'application/javascript' });
-              pathToBlobUrl[node.title] = URL.createObjectURL(blob);
-          }
+      if (lower.endsWith('.css')) {
+          cssContent += `\n/* ${node.title} */\n${node.content}\n`;
+      } else if (lower.endsWith('.js') || lower.endsWith('.jsx') || lower.endsWith('.ts') || lower.endsWith('.tsx')) {
+          jsFiles[node.title] = node.content;
       }
   });
 
-  // 5. Build Import Map
-  const importMap = {
-    imports: {
-      "react": "https://esm.sh/react@18.2.0",
-      "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-      "react-dom": "https://esm.sh/react-dom@18.2.0",
-      ...pathToBlobUrl 
-    }
-  };
-
-  // 6. Prepare HTML Body
+  // 3. Prepare HTML Body
   let htmlBody = '';
   const isHtmlRoot = rootNode.title.toLowerCase().endsWith('.html');
 
   if (isHtmlRoot) {
       htmlBody = rootNode.content;
-      
       // Remove <link rel="stylesheet"> tags since we inject CSS manually
       htmlBody = htmlBody.replace(/<link[^>]+rel=["']stylesheet["'][^>]*>/gi, '');
       
-      // INTELLIGENT SCRIPT REPLACEMENT
-      htmlBody = htmlBody.replace(/<script\s+([^>]*?)src=["']([^"']+)["']([^>]*)><\/script>/gi, (match, p1, src, p3) => {
-          // Clean src path (remove ./ or /)
-          const cleanSrc = src.replace(/^(\.\/|\/)/, '');
-          // Find matching blob
-          const blobUrl = pathToBlobUrl[cleanSrc] || pathToBlobUrl[src] || pathToBlobUrl[`./${src}`];
-          
-          if (blobUrl) {
-              // Force type="module" so it can use imports
-              return `<script type="module" src="${blobUrl}" ${p1} ${p3}></script>`;
+      // Ensure local script tags use type="module" so they hit our Import Map
+      // Replaces <script src="./App.js"> with <script type="module" src="./App.js">
+      htmlBody = htmlBody.replace(/<script\s+([^>]*?)src=["'](\.\/)?([^"']+\.jsx?|[^"']+\.tsx?)["']([^>]*)>/gi, (match, p1, p2, filename, p3) => {
+          if (jsFiles[filename]) {
+              return `<script type="module" src="./${filename}" ${p1} ${p3}>`;
           }
           return match;
       });
@@ -305,7 +190,7 @@ export const compilePreview = (
       htmlBody = '<div id="root"></div>';
   }
 
-  // 7. Final HTML Assembly
+  // 4. Build the final HTML document with Babel and Import Maps
   return `
     <!DOCTYPE html>
     <html>
@@ -315,24 +200,12 @@ export const compilePreview = (
         
         <!-- Utilities -->
         <script src="https://cdn.tailwindcss.com"></script>
+        <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
         
         <!-- Injected Styles -->
         <style>
             ${cssContent}
         </style>
-
-        <!-- Import Map -->
-        <script type="importmap">
-            ${JSON.stringify(importMap)}
-        </script>
-
-        <!-- Global React Injection (Fixes "React is not defined") -->
-        <script type="module">
-            import React from 'react';
-            import ReactDOM from 'react-dom/client';
-            window.React = React;
-            window.ReactDOM = ReactDOM;
-        </script>
 
         <!-- Console Interceptor -->
         <script>
@@ -376,25 +249,51 @@ export const compilePreview = (
       <body>
         ${htmlBody}
 
-        <!-- Entry Point Execution (if Root is JS) -->
-        ${!isHtmlRoot ? `
-        <script type="module">
-            import Entry from '${pathToBlobUrl[rootNode.title] || rootNode.title}';
-            
-            // Auto-Mount React if default export is a component and root is empty
-            const rootEl = document.getElementById('root');
-            if (rootEl && rootEl.innerHTML.trim() === '' && Entry) {
-                if (typeof Entry === 'function') {
-                    try {
-                        const root = window.ReactDOM.createRoot(rootEl);
-                        root.render(window.React.createElement(Entry));
-                        console.log('Auto-mounted default export from ${rootNode.title}');
-                    } catch(e) {
-                        console.error("Auto-mount failed:", e);
-                    }
-                }
+        <!-- Dynamic Module Loader -->
+        <script>
+          const jsFiles = ${JSON.stringify(jsFiles)};
+          
+          // Default Import Map for React
+          const importMap = {
+            imports: {
+              "react": "https://esm.sh/react@18.2.0",
+              "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+              "react-dom": "https://esm.sh/react-dom@18.2.0",
             }
-        </script>` : ''}
+          };
+
+          try {
+              // 1. Transpile all JS/JSX files using Babel
+              for (const [filename, content] of Object.entries(jsFiles)) {
+                  const output = Babel.transform(content, { 
+                      presets: ['react', 'env'],
+                      filename: filename 
+                  }).code;
+                  
+                  // 2. Create Blob URLs for the transpiled code
+                  const blob = new Blob([output], { type: 'application/javascript' });
+                  const url = URL.createObjectURL(blob);
+                  
+                  // 3. Add to Import Map (supporting ./ relative imports)
+                  importMap.imports['./' + filename] = url;
+                  importMap.imports[filename] = url;
+              }
+              
+              // 4. Inject Import Map
+              const mapEl = document.createElement('script');
+              mapEl.type = 'importmap';
+              mapEl.textContent = JSON.stringify(importMap);
+              document.head.appendChild(mapEl);
+              
+          } catch (e) {
+              console.error("Transpilation/Build Error:", e);
+          }
+        </script>
+
+        <!-- Entry Point Execution (if Root is JS) -->
+        <script type="module">
+            ${!isHtmlRoot ? `import './${rootNode.title}';` : ''}
+        </script>
         
         ${forceReload ? `<!-- Force Reload: ${Date.now()} -->` : ''}
       </body>

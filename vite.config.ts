@@ -10,6 +10,7 @@ const __dirname = dirname(__filename)
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
   // Load env file based on `mode` in the current working directory.
+  // Cast process to any to avoid TypeScript error: Property 'cwd' does not exist on type 'Process'.
   const env = loadEnv(mode, (process as any).cwd(), '');
   return {
     plugins: [react()],
@@ -19,15 +20,15 @@ export default defineConfig(({ mode }) => {
       },
     },
     define: {
+      // JSON.stringify is needed to wrap the value in quotes for replacement
       'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY_4 || env.API_KEY || ''),
       'process.env.GEMINI_API_KEY_4': JSON.stringify(env.GEMINI_API_KEY_4),
       'process.env.GEMINI_API_KEY_5': JSON.stringify(env.GEMINI_API_KEY_5),
     },
     build: {
       rollupOptions: {
-        // Externalize @babel/standalone so Vite doesn't try to bundle it.
-        // It will be resolved at runtime via the import map in index.html.
-        external: ['@babel/standalone']
+        // markdown-to-jsx removed from external to ensure it is bundled with the local React version
+        external: []
       }
     }
   }
