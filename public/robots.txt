@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://coding-arena-tau.vercel.app/sitemap.xml

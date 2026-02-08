@@ -1,8 +1,7 @@
-
 import React, { useRef, useEffect, useState } from 'react';
 import { NodeData, Position, Size } from '../types';
 import { getPortsForNode } from '../constants';
-import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles, X, Image as ImageIcon, Square, Minus, Maximize2, Minimize2, StickyNote, Check } from 'lucide-react';
+import { Play, GripVertical, Pencil, Pause, RotateCcw, Plus, Send, Bot, User, FileCode, Loader2, ArrowRight, Package, Search, Download, Wand2, Sparkles, X, Image as ImageIcon, Square, Minus, Maximize2, Minimize2, StickyNote, Check, Lock, Folder, File } from 'lucide-react';
 import Editor, { useMonaco } from '@monaco-editor/react';
 import Markdown from 'markdown-to-jsx';
 
@@ -37,6 +36,7 @@ interface NodeProps {
   onSelect?: (id: string, multi: boolean) => void; 
   collaboratorInfo?: { name: string; color: string; action: 'dragging' | 'editing' };
   logs?: any[]; 
+  folderContents?: string[]; 
   children?: React.ReactNode;
 }
 
@@ -71,6 +71,7 @@ export const Node: React.FC<NodeProps> = ({
   onSelect,
   collaboratorInfo,
   logs,
+  folderContents,
   children
 }) => {
   const ports = getPortsForNode(data.id, data.type);
@@ -114,6 +115,8 @@ export const Node: React.FC<NodeProps> = ({
   // Image States
   const [isDragOver, setIsDragOver] = useState(false);
 
+  const isLocked = !!data.lockedBy;
+
   const dragStartRef = useRef<{ x: number, y: number } | null>(null);
   const initialPosRef = useRef<Position>({ x: 0, y: 0 });
   const initialSizeRef = useRef<Size>({ width: 0, height: 0 });
@@ -127,6 +130,17 @@ export const Node: React.FC<NodeProps> = ({
         el.scrollTop = el.scrollHeight;
     }
   }, [logs, data.type]);
+
+  // Sync actual rendered size back to state when minimized to ensure wires connect correctly
+  useEffect(() => {
+    if (data.isMinimized && nodeRef.current) {
+        const actualWidth = nodeRef.current.offsetWidth;
+        const actualHeight = nodeRef.current.offsetHeight;
+        if (Math.abs(actualWidth - data.size.width) > 2 || Math.abs(actualHeight - data.size.height) > 2) {
+            onResize(data.id, { width: actualWidth, height: actualHeight });
+        }
+    }
+  }, [data.isMinimized, data.title, data.size.width, data.size.height, onResize, data.id]);
 
   // Auto-scroll chat to bottom
   useEffect(() => {
@@ -175,7 +189,6 @@ export const Node: React.FC<NodeProps> = ({
     initialPosRef.current = { ...data.position };
 
     if (e.pointerType === 'mouse') {
-        // Desktop: Immediate Selection & Drag
         if (onSelect) {
             if (e.ctrlKey) {
                 onSelect(data.id, true);
@@ -186,13 +199,9 @@ export const Node: React.FC<NodeProps> = ({
         setIsDragging(true);
         onInteraction?.(data.id, 'drag'); 
     } else {
-        // Mobile/Touch: Wait to distinguish Tap vs Drag vs Long Press
-        
-        // Start Long Press Timer for Context Menu
         longPressTimer.current = setTimeout(() => {
             if (onContextMenu) {
                 onContextMenu(e as any);
-                // Reset interaction state if long press triggered
                 dragStartRef.current = null;
                 setIsDragging(false);
             }
@@ -205,6 +214,7 @@ export const Node: React.FC<NodeProps> = ({
 
   const handleResizePointerDown = (e: React.PointerEvent) => {
     if (data.isLoading || data.isMinimized || isMaximized) return; 
+    
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     setIsResizing(true);
@@ -215,21 +225,17 @@ export const Node: React.FC<NodeProps> = ({
   const handlePointerMove = (e: React.PointerEvent) => {
     if (!dragStartRef.current) return;
 
-    // Mobile Threshold Check
     if (e.pointerType !== 'mouse' && !isDragging && !isResizing) {
         const dist = Math.hypot(e.clientX - dragStartRef.current.x, e.clientY - dragStartRef.current.y);
         if (dist > 10) {
-            // Moved enough to be a drag, cancel long press
             if (longPressTimer.current) {
                 clearTimeout(longPressTimer.current);
                 longPressTimer.current = null;
             }
             setIsDragging(true);
             onInteraction?.(data.id, 'drag');
-            // Optional: Select on drag start if not selected? 
-            // For now, let's keep selection strict to Tap for mobile as requested.
         } else {
-            return; // Ignore tiny movements
+            return; 
         }
     }
 
@@ -253,7 +259,6 @@ export const Node: React.FC<NodeProps> = ({
           const HEADER_HEIGHT = 40;
           const PADDING = 20; 
           const maxAllowedHeight = Math.max(150, contentHeightRef.current + HEADER_HEIGHT + PADDING);
-          
           if (newHeight > maxAllowedHeight) {
               newHeight = maxAllowedHeight;
           }
@@ -267,14 +272,11 @@ export const Node: React.FC<NodeProps> = ({
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
-    // Handle Mobile Tap
     if (e.pointerType !== 'mouse' && longPressTimer.current) {
         clearTimeout(longPressTimer.current);
         longPressTimer.current = null;
-        
-        // If we haven't started dragging effectively, it's a tap
         if (!isDragging && onSelect) {
-            onSelect(data.id, true); // Always additive (multi) on mobile
+            onSelect(data.id, true);
         }
     }
 
@@ -373,7 +375,6 @@ export const Node: React.FC<NodeProps> = ({
           onInteraction?.(data.id, null);
       });
 
-      // Auto-Size Logic
       if (data.type === 'CODE') {
           editor.onDidContentSizeChange((e: any) => {
               contentHeightRef.current = e.contentHeight;
@@ -403,7 +404,6 @@ export const Node: React.FC<NodeProps> = ({
       return 'javascript';
   };
 
-  // NPM Logic
   const searchNpm = async () => {
       if (!npmQuery.trim()) return;
       setIsSearchingNpm(true);
@@ -480,7 +480,6 @@ export const Node: React.FC<NodeProps> = ({
       }
   };
 
-  // Text Module Shortcut Handling
   const handleTextKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if ((e.ctrlKey || e.metaKey)) {
           const key = e.key.toLowerCase();
@@ -509,7 +508,6 @@ export const Node: React.FC<NodeProps> = ({
               const newText = text.substring(0, start) + wrapped + text.substring(end);
               if (onUpdateContent) onUpdateContent(data.id, newText);
               
-              // Restore selection after update (need timeout for React state update)
               setTimeout(() => {
                   if (textEditorRef.current) {
                       textEditorRef.current.selectionStart = start + wrapperLen;
@@ -520,7 +518,6 @@ export const Node: React.FC<NodeProps> = ({
       }
   };
 
-  // Styles
   let borderClass = 'border-panelBorder';
   let shadowClass = '';
   
@@ -544,7 +541,6 @@ export const Node: React.FC<NodeProps> = ({
       borderClass = 'border-indigo-500/50';
   }
 
-  // Maximized Style Override
   const maximizedStyle = isMaximized ? {
       position: 'fixed' as const,
       top: 0,
@@ -557,8 +553,9 @@ export const Node: React.FC<NodeProps> = ({
       borderWidth: 0,
   } : {
       transform: `translate(${data.position.x}px, ${data.position.y}px)`,
-      width: data.isMinimized ? '250px' : data.size.width,
-      height: data.isMinimized ? '40px' : data.size.height,
+      width: data.isMinimized ? 'auto' : data.size.width, 
+      minWidth: data.isMinimized ? '200px' : undefined,
+      height: data.isMinimized ? 'auto' : data.size.height,
   };
 
   const dynamicStyle = collaboratorInfo ? {
@@ -585,7 +582,6 @@ export const Node: React.FC<NodeProps> = ({
     >
       {shimmerOverlay}
 
-      {/* Collaborator Badge (Hidden if Maximized) */}
       {collaboratorInfo && !isMaximized && (
           <div 
             className="absolute -top-6 right-0 px-2 py-0.5 rounded text-[10px] font-bold text-white shadow-md flex items-center gap-1 z-50 animate-in fade-in slide-in-from-bottom-2"
@@ -597,8 +593,8 @@ export const Node: React.FC<NodeProps> = ({
       )}
 
       {/* Header */}
-      <div className="h-10 flex items-center justify-between px-3 border-b border-panelBorder bg-zinc-900/50 rounded-t-lg select-none shrink-0 relative z-10">
-        <div className="flex items-center gap-2 text-zinc-300 font-semibold text-sm flex-1 min-w-0">
+      <div className={`h-10 flex items-center justify-between px-3 border-b border-panelBorder bg-zinc-900/50 rounded-t-lg select-none shrink-0 relative z-10 gap-3 ${data.isMinimized ? 'rounded-b-lg border-b-0' : ''}`}>
+        <div className={`flex items-center gap-2 text-zinc-300 font-semibold text-sm min-w-0 ${data.isMinimized ? 'whitespace-nowrap' : 'flex-1'}`}>
           {!isMaximized && <GripVertical size={14} className="opacity-50 shrink-0" />}
           {isEditingTitle && !isMaximized ? (
             <input 
@@ -612,11 +608,17 @@ export const Node: React.FC<NodeProps> = ({
               autoFocus
             />
           ) : (
-             <div className={`flex items-center gap-2 group/title ${data.isMinimized ? '' : 'truncate'}`}>
+             <div className={`flex items-center gap-2 group/title ${data.isMinimized ? 'whitespace-nowrap' : 'truncate'}`}>
+                {data.lockedBy && (
+                    <div className="text-amber-500 flex items-center" title={`Locked by ${data.lockedBy.displayName}`}>
+                        <Lock size={12} />
+                    </div>
+                )}
                 {data.type === 'AI_CHAT' && <Bot size={14} className="text-indigo-400" />}
                 {data.type === 'NPM' && <Package size={14} className="text-red-500" />}
                 {data.type === 'IMAGE' && <ImageIcon size={14} className="text-purple-400" />}
                 {data.type === 'TEXT' && <StickyNote size={14} className="text-emerald-400" />}
+                {data.type === 'FOLDER' && <Folder size={14} className="text-orange-400" />}
                 <span className={data.isMinimized ? 'whitespace-nowrap' : 'truncate'}>{data.title}</span>
                 {!isMaximized && (
                     <button 
@@ -633,6 +635,17 @@ export const Node: React.FC<NodeProps> = ({
         </div>
         
         <div className="flex items-center gap-1 shrink-0">
+            {data.type === 'FOLDER' && (
+                <button
+                    onClick={handleToggleMinimize}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className="nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 text-zinc-400 hover:text-white hover:bg-zinc-800 active:scale-90 transition-transform"
+                    title={data.isMinimized ? "Expand" : "Collapse"}
+                >
+                     {data.isMinimized ? <Square size={14} /> : <Minus size={14} />}
+                </button>
+            )}
+
            {data.type === 'CODE' && (
               <div className="flex items-center gap-1">
                  <button
@@ -696,7 +709,6 @@ export const Node: React.FC<NodeProps> = ({
               >
                   {isRunning ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
               </button>
-              {/* Maximize Button */}
               <button 
                   onClick={handleToggleMaximize}
                   onPointerDown={(e) => e.stopPropagation()}
@@ -852,7 +864,6 @@ export const Node: React.FC<NodeProps> = ({
                         )}
                     </div>
                 )}
-                {/* Visual Hint for Mode */}
                 {!isEditingText && (
                     <button 
                         onClick={() => setIsEditingText(true)}
@@ -863,6 +874,23 @@ export const Node: React.FC<NodeProps> = ({
                     </button>
                 )}
             </div>
+        ) : data.type === 'FOLDER' ? (
+             <div className="w-full h-full bg-[#1e1e1e] overflow-y-auto custom-scrollbar p-2" onPointerDown={(e) => e.stopPropagation()}>
+                 <div className="flex flex-col gap-1">
+                     {folderContents && folderContents.length > 0 ? (
+                         folderContents.map((fileName, idx) => (
+                             <div key={idx} className="flex items-center gap-2 p-1.5 rounded bg-zinc-800/50 border border-zinc-700/50 text-xs text-zinc-300">
+                                 <File size={12} className="text-zinc-500" />
+                                 <span className="truncate">{fileName}</span>
+                             </div>
+                         ))
+                     ) : (
+                         <div className="text-zinc-600 text-xs italic text-center mt-4">
+                             Connect files to the Input port to add them to this folder.
+                         </div>
+                     )}
+                 </div>
+             </div>
         ) : data.type === 'NPM' ? (
              <div className="flex flex-col h-full bg-zinc-900/50">
                  <div className="p-3 border-b border-panelBorder flex gap-2">
@@ -1032,13 +1060,27 @@ export const Node: React.FC<NodeProps> = ({
                  </div>
              </div>
         ) : (
-             <iframe
-                id={`preview-iframe-${data.id}`}
-                title="preview"
-                className="w-full h-full bg-white nodrag"
-                sandbox="allow-scripts allow-same-origin allow-modals allow-pointer-lock"
-                onPointerDown={(e) => e.stopPropagation()}
-            />
+            // PREVIEW NODE LOGIC
+            <div className="w-full h-full bg-[#1e1e1e] relative">
+               {isRunning ? (
+                 <iframe
+                    id={`preview-iframe-${data.id}`}
+                    title="preview"
+                    className="w-full h-full bg-white nodrag"
+                    // REMOVED allow-same-origin to fix console error and improve security
+                    sandbox="allow-scripts allow-modals allow-pointer-lock allow-forms"
+                    onPointerDown={(e) => e.stopPropagation()}
+                 />
+               ) : (
+                 <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/50 text-zinc-500 select-none">
+                     <div className="text-center">
+                        <Play size={48} className="mx-auto mb-2 opacity-20" />
+                        <p className="text-sm font-medium">Preview Stopped</p>
+                        <p className="text-[10px] opacity-60">Click Run to start</p>
+                     </div>
+                 </div>
+               )}
+            </div>
         )}
       </div>
 
@@ -1105,4 +1147,3 @@ export const Node: React.FC<NodeProps> = ({
     </div>
   );
 };
-        

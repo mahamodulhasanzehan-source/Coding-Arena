@@ -9,13 +9,14 @@ export const NODE_DEFAULTS = {
   NPM: { width: 300, height: 350, title: 'NPM Packages', content: '' },
   IMAGE: { width: 300, height: 300, title: 'Image', content: '' },
   TEXT: { width: 300, height: 300, title: 'Note.md', content: '# New Note\n\nDouble-click to edit this markdown note.', autoHeight: false },
+  FOLDER: { width: 250, height: 300, title: 'components', content: '' },
 };
 
 export const getPortsForNode = (nodeId: string, type: NodeType): Port[] => {
   switch (type) {
     case 'CODE':
       return [
-        { id: `${nodeId}-in-file`, nodeId, type: 'input', label: 'Imports', accepts: ['CODE', 'NPM'] },
+        { id: `${nodeId}-in-file`, nodeId, type: 'input', label: 'Imports', accepts: ['CODE', 'NPM', 'FOLDER'] },
         { id: `${nodeId}-out-dom`, nodeId, type: 'output', label: 'DOM/File' },
       ];
     case 'PREVIEW':
@@ -31,6 +32,11 @@ export const getPortsForNode = (nodeId: string, type: NodeType): Port[] => {
       return [
         { id: `${nodeId}-out-pkg`, nodeId, type: 'output', label: 'Package' },
       ];
+    case 'FOLDER':
+        return [
+            { id: `${nodeId}-in-files`, nodeId, type: 'input', label: 'Files', accepts: ['CODE', 'IMAGE', 'TEXT'] },
+            { id: `${nodeId}-out-folder`, nodeId, type: 'output', label: 'Export' },
+        ];
     case 'AI_CHAT':
     case 'IMAGE':
     case 'TEXT':

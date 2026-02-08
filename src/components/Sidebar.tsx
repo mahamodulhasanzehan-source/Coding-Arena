@@ -1,7 +1,8 @@
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { NodeData } from '../types';
-import { X, FileCode, Monitor, TerminalSquare, Package, Image as ImageIcon, StickyNote } from 'lucide-react';
+import { X, FileCode, Monitor, TerminalSquare, Package, Image as ImageIcon, StickyNote, LogIn, LogOut, Folder } from 'lucide-react';
+import { signInWithGoogle, logOut, auth, onAuthStateChanged, User } from '../firebase';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -23,15 +24,60 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, nodes, onNodeClick, on
   const npmNodes = nodes.filter(n => n.type === 'NPM');
   const imageNodes = nodes.filter(n => n.type === 'IMAGE');
   const textNodes = nodes.filter(n => n.type === 'TEXT');
+  const folderNodes = nodes.filter(n => n.type === 'FOLDER');
+
+  const [user, setUser] = useState<User | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+        setUser(currentUser);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleAuthAction = async () => {
+    if (user && !user.isAnonymous) {
+        if (confirm('Are you sure you want to sign out?')) {
+            await logOut();
+        }
+    } else {
+        await signInWithGoogle();
+    }
+  };
 
   return (
     <div 
       className={`fixed top-0 right-0 h-full w-72 bg-panel border-l border-panelBorder shadow-2xl z-50 transform transition-transform duration-300 ease-in-out flex flex-col ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}
     >
       <div className="h-12 border-b border-panelBorder flex items-center justify-between px-4 shrink-0 bg-zinc-900/50">
-        <span className="font-bold text-zinc-200 tracking-tight">
-            {selectionMode?.isActive ? 'Select Context' : 'Modules'}
-        </span>
+        <div className="flex items-center gap-3">
+            <span className="font-bold text-zinc-200 tracking-tight">
+                {selectionMode?.isActive ? 'Select Context' : 'Modules'}
+            </span>
+            {!selectionMode?.isActive && (
+                 <button
+                    onClick={handleAuthAction}
+                    className="flex items-center gap-1.5 px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-xs font-medium text-zinc-300 rounded transition-colors border border-zinc-700 group"
+                    title={user && !user.isAnonymous ? "Sign Out" : "Sign In with Google"}
+                >
+                    {user && !user.isAnonymous ? (
+                        <>
+                            {user.photoURL ? (
+                                <img src={user.photoURL} alt="User" className="w-4 h-4 rounded-full border border-zinc-600" />
+                            ) : (
+                                <LogOut size={12} className="group-hover:text-red-400 transition-colors" />
+                            )}
+                            <span className="group-hover:text-red-400 transition-colors">Sign Out</span>
+                        </>
+                    ) : (
+                        <>
+                             <LogIn size={12} className="text-indigo-400" />
+                             <span className="text-indigo-100">Sign In</span>
+                        </>
+                    )}
+                </button>
+            )}
+        </div>
         <button 
             onClick={onClose}
             className="p-1 hover:bg-zinc-800 rounded text-zinc-500 hover:text-white transition-colors"
@@ -41,6 +87,25 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, nodes, onNodeClick, on
       </div>
 
       <div className="flex-1 flex flex-col min-h-0 relative">
+        {/* STRUCTURE SECTION (Orange/Grey) */}
+        <div className="flex-1 flex flex-col border-b border-panelBorder min-h-0">
+            <div className="bg-zinc-500/10 border-b border-zinc-500/20 px-4 py-2 flex items-center gap-2 text-zinc-400 font-bold text-xs uppercase tracking-wider shrink-0">
+                <Folder size={14} /> Structure
+            </div>
+            <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+                {folderNodes.map(node => (
+                    <button
+                        key={node.id}
+                        onClick={() => onNodeClick(node.id)}
+                        className="w-full text-left px-3 py-2 rounded text-zinc-400 hover:text-white hover:bg-zinc-700 text-sm font-medium transition-colors truncate"
+                    >
+                        {node.title}
+                    </button>
+                ))}
+                {folderNodes.length === 0 && <span className="text-zinc-600 text-xs font-medium px-3 py-2 italic">No folders</span>}
+            </div>
+        </div>
+
         {/* CODE SECTION (Gold) */}
         <div className="flex-1 flex flex-col border-b border-panelBorder min-h-0">
             <div className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-2 flex items-center gap-2 text-amber-500 font-bold text-xs uppercase tracking-wider shrink-0">

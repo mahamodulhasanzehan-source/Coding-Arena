@@ -1,6 +1,7 @@
-
 import { Connection, NodeData, NodeType, Port } from '../types';
 import { getPortsForNode } from '../constants';
+// @ts-ignore: Externalized in vite.config.ts, types not needed for build
+import * as Babel from '@babel/standalone';
 
 // ---- Port Calculation Math ----
 const HEADER_HEIGHT = 40; 
@@ -23,7 +24,7 @@ export const calculatePortPosition = (
   const yRelative = startY + 6 + (portIndex * PORT_STRIDE);
   const y = node.position.y + yRelative;
 
-  const width = node.isMinimized ? 250 : node.size.width;
+  const width = node.size.width;
 
   const x = type === 'input' 
     ? node.position.x - 6 
@@ -60,7 +61,6 @@ export const getAllConnectedSources = (
         .filter((n): n is NodeData => !!n);
 };
 
-// Find all nodes in the connected component of the startNode
 export const getRelatedNodes = (
   startNodeId: string,
   nodes: NodeData[],
@@ -83,7 +83,6 @@ export const getRelatedNodes = (
        }
     }
 
-    // Find all neighbors
     const neighbors = connections
       .filter(c => c.sourceNodeId === currentId || c.targetNodeId === currentId)
       .map(c => c.sourceNodeId === currentId ? c.targetNodeId : c.sourceNodeId);
@@ -94,6 +93,19 @@ export const getRelatedNodes = (
   }
   
   return related;
+};
+
+// Helper: Determine the virtual path of a node (e.g. "components/Header.js")
+const getNodePath = (node: NodeData, nodes: NodeData[], connections: Connection[]): string => {
+    const folderConn = connections.find(c => 
+        c.sourceNodeId === node.id && 
+        nodes.find(n => n.id === c.targetNodeId)?.type === 'FOLDER'
+    );
+    if (folderConn) {
+        const folder = nodes.find(n => n.id === folderConn.targetNodeId);
+        if (folder) return `${folder.title}/${node.title}`;
+    }
+    return node.title;
 };
 
 // Helper to recursively collect all code dependencies
@@ -107,14 +119,32 @@ const collectDependencies = (
     visited.add(rootNode.id);
 
     const directDeps = getAllConnectedSources(rootNode.id, 'file', nodes, connections);
-    let allDeps: NodeData[] = [...directDeps];
+    let allDeps: NodeData[] = [];
 
-    directDeps.forEach(dep => {
-        const nestedDeps = collectDependencies(dep, nodes, connections, visited);
-        allDeps = [...allDeps, ...nestedDeps];
-    });
+    for (const dep of directDeps) {
+        if (dep.type === 'FOLDER') {
+            // If connected to a folder, get contents of that folder
+            const folderContents = getAllConnectedSources(dep.id, 'files', nodes, connections);
+            allDeps = [...allDeps, ...folderContents];
+            
+            folderContents.forEach(child => {
+                const nested = collectDependencies(child, nodes, connections, visited);
+                allDeps = [...allDeps, ...nested];
+            });
+        } else {
+            allDeps.push(dep);
+            const nested = collectDependencies(dep, nodes, connections, visited);
+            allDeps = [...allDeps, ...nested];
+        }
+    }
 
     return allDeps;
+};
+
+// Helper: Sanitize filename to valid identifier
+const toIdentifier = (filename: string) => {
+    const base = filename.replace(/\.[^/.]+$/, "");
+    return base.replace(/[^a-zA-Z0-9_$]/g, "_");
 };
 
 export const compilePreview = (
@@ -123,7 +153,6 @@ export const compilePreview = (
   connections: Connection[],
   forceReload: boolean = false
 ): string => {
-  // 1. Find the main entry point connected to PREVIEW
   const rootNode = getConnectedSource(previewNodeId, 'dom', nodes, connections);
   
   if (!rootNode) {
@@ -132,181 +161,243 @@ export const compilePreview = (
       <html>
         <body style="background-color: #0f0f11; color: #71717a; font-family: sans-serif; height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0;">
           <div style="text-align: center;">
-            <p>Connect a <strong>CODE Canvas</strong> to the DOM port.</p>
+            <p>Connect a <strong>CODE Canvas</strong> (index.html or App.js) to the DOM port.</p>
           </div>
         </body>
       </html>
     `;
   }
 
-  // 2. Resolve Dependencies (Wired nodes only, recursively)
+  // 1. Collect all reachable dependencies
   const dependencyNodes = collectDependencies(rootNode, nodes, connections);
-  
-  // Remove duplicates just in case
   const uniqueDeps = Array.from(new Set(dependencyNodes.map(n => n.id)))
       .map(id => nodes.find(n => n.id === id)!)
       .filter(n => n.id !== rootNode.id); 
 
-  let finalContent = rootNode.content;
-  const connectedFilenames = new Set(uniqueDeps.map(d => d.title));
-  const missingDependencies: string[] = [];
-
-  // Wrap content based on STRICT file extension
-  const lowerTitle = rootNode.title.toLowerCase();
+  // 2. Prepare Maps
+  // We map Paths to Blob URLs
+  const pathToBlobUrl: Record<string, string> = {};
+  let cssContent = '';
   
-  if (lowerTitle.endsWith('.html') || lowerTitle.endsWith('.htm')) {
-      // HTML: Render as is
-  } else if (lowerTitle.endsWith('.js') || lowerTitle.endsWith('.ts')) {
-      // JS: Wrap in script
-      finalContent = `<script>\n${finalContent}\n</script>`;
-  } else if (lowerTitle.endsWith('.css')) {
-      // CSS: Wrap in style
-      finalContent = `<style>\n${finalContent}\n</style>`;
-  } else {
-      // Everything else (txt, md, no extension): Render as plain text
-      const escaped = finalContent
-          .replace(/&/g, "&amp;")
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;")
-          .replace(/"/g, "&quot;")
-          .replace(/'/g, "&#039;");
-          
-      finalContent = `
-        <body style="margin: 0; background-color: #1e1e1e; color: #d4d4d4;">
-            <pre style="padding: 1rem; font-family: 'JetBrains Mono', monospace; white-space: pre-wrap; word-wrap: break-word;">${escaped}</pre>
-        </body>
-      `;
-  }
-
-  // 3. Inject Dependencies based on Filenames (Only if the root is HTML-like)
-  if (lowerTitle.endsWith('.html') || lowerTitle.endsWith('.htm')) {
-      // Check CSS imports <link href="style.css">
-      finalContent = finalContent.replace(/<link[^>]+href=["']([^"']+)["'][^>]*>/gi, (match, filename) => {
-        const depNode = uniqueDeps.find(d => d.title === filename);
-        if (depNode) {
-            return `<style>\n/* Source: ${filename} */\n${depNode.content}\n</style>`;
-        } else {
-            missingDependencies.push(filename);
-            return match; 
-        }
-      });
-
-      // Check JS imports <script src="script.js">
-      finalContent = finalContent.replace(/<script[^>]+src=["']([^"']+)["'][^>]*><\/script>/gi, (match, filename) => {
-        const depNode = uniqueDeps.find(d => d.title === filename);
-        if (depNode) {
-            return `<script>\n/* Source: ${filename} */\n${depNode.content}\n</script>`;
-        } else {
-            missingDependencies.push(filename);
-            return match; 
-        }
-      });
-  }
-
-
-  // 4. Inject Console Interceptor & Multiplayer Bridge & Force Reload Timestamp
-  const errorInjections = missingDependencies.map(file => 
-    `console.error('Dependency Error: "${file}" is referenced in code but not connected via wires.');`
-  ).join('\n');
-
-  const interceptor = `
-    <script>
-      (function() {
-        const oldLog = console.log;
-        const oldError = console.error;
-        const oldWarn = console.warn;
-        const oldInfo = console.info;
-
-        function send(type, args) {
-          try {
-            const message = args.map(arg => {
-                if (arg === undefined) return 'undefined';
-                if (arg === null) return 'null';
-                if (typeof arg === 'object') return JSON.stringify(arg);
-                return String(arg);
-            }).join(' ');
-            
-            window.parent.postMessage({
-              source: 'preview-iframe',
-              nodeId: '${previewNodeId}',
-              type: type,
-              message: message,
-              timestamp: Date.now()
-            }, '*');
-          } catch (e) {
-             // Ignore serialization errors
-          }
-        }
-
-        console.log = function(...args) { oldLog.apply(console, args); send('log', args); };
-        console.error = function(...args) { oldError.apply(console, args); send('error', args); };
-        console.warn = function(...args) { oldWarn.apply(console, args); send('warn', args); };
-        console.info = function(...args) { oldInfo.apply(console, args); send('info', args); };
-        
-        window.onerror = function(msg, url, line, col, error) {
-           send('error', [msg + ' (Line ' + line + ')']);
-           return false;
-        };
-
-        // --- Multiplayer Bridge ---
-        window.broadcastState = function(state) {
-          window.parent.postMessage({
-            source: 'preview-iframe',
-            nodeId: '${previewNodeId}',
-            type: 'BROADCAST_STATE',
-            payload: state
-          }, '*');
-        };
-
-        window.onStateReceived = function(callback) {
-          window.addEventListener('message', (event) => {
-            if (event.data && event.data.type === 'STATE_UPDATE') {
-              callback(event.data.payload);
-            }
-          });
-        };
-
-        // Notify parent that iframe is ready to receive state
-        window.addEventListener('load', () => {
-            window.parent.postMessage({
-                source: 'preview-iframe',
-                nodeId: '${previewNodeId}',
-                type: 'IFRAME_READY',
-                timestamp: Date.now()
-            }, '*');
-        });
-
-        // Report Missing Dependencies immediately
-        ${errorInjections}
-      })();
-    </script>
-    ${forceReload ? `<!-- Force Reload: ${Date.now()} -->` : ''}
-  `;
-
-  // Only inject interceptor into HTML pages
-  if (lowerTitle.endsWith('.html') || lowerTitle.endsWith('.htm')) {
-       return `
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <meta charset="utf-8">
-            ${interceptor}
-          </head>
-          <body>
-            ${finalContent}
-          </body>
-        </html>
-      `;
-  } else {
-      if (lowerTitle.endsWith('.js') || lowerTitle.endsWith('.css')) {
-           return `
-            <!DOCTYPE html>
-            <html>
-            <head><meta charset="utf-8">${interceptor}</head>
-            <body>${finalContent}</body>
-            </html>
-           `;
+  const allNodes = [rootNode, ...uniqueDeps];
+  
+  // 3. Process CSS first
+  allNodes.forEach(node => {
+      if (node.title.toLowerCase().endsWith('.css')) {
+          cssContent += `\n/* ${node.title} */\n${node.content}\n`;
       }
-      return finalContent;
+  });
+
+  // 4. Process JS/JSX/TS
+  // We must transpile BEFORE creating Blobs so the browser gets pure JS
+  allNodes.forEach(node => {
+      const lower = node.title.toLowerCase();
+      if (lower.endsWith('.js') || lower.endsWith('.jsx') || lower.endsWith('.ts') || lower.endsWith('.tsx')) {
+          try {
+              let content = node.content;
+
+              // AUTO-IMPORT INJECTION
+              // If a node is connected to this node via "Imports", inject the import statement if missing
+              const imports = getAllConnectedSources(node.id, 'file', nodes, connections);
+              imports.forEach(imp => {
+                  if (imp.type === 'CODE' || imp.type === 'NPM') {
+                      const identifier = toIdentifier(imp.title);
+                      // Look for usage of identifier, but ignore if already imported
+                      const hasImport = new RegExp(`import\\s+.*?['"](.*/)?${imp.title}['"]`).test(content);
+                      
+                      // Also check if they imported using the identifier logic (e.g. import Header from './Header')
+                      const hasIdentifierImport = new RegExp(`import\\s+.*?\\b${identifier}\\b`).test(content);
+
+                      if (!hasImport && !hasIdentifierImport) {
+                          // Inject default import. 
+                          // NOTE: We use the EXACT filename as path so Import Map can pick it up.
+                          // We prefix with ./ to ensure it looks like a relative path
+                          content = `import ${identifier} from './${imp.title}';\n` + content;
+                      }
+                  }
+              });
+
+              // Transpile using Babel
+              let transformFn = (Babel as any).transform;
+              // Handle default export wrapping that occurs in some environments
+              if (!transformFn && (Babel as any).default && (Babel as any).default.transform) {
+                  transformFn = (Babel as any).default.transform;
+              }
+
+              // @ts-ignore
+              const transformed = transformFn(content, {
+                  presets: ['react', 'env'],
+                  filename: node.title
+              }).code;
+
+              const blob = new Blob([transformed], { type: 'application/javascript' });
+              const blobUrl = URL.createObjectURL(blob);
+              
+              const fullPath = getNodePath(node, nodes, connections);
+              const fileName = node.title;
+              const fileNameNoExt = fileName.replace(/\.[^/.]+$/, "");
+              
+              // Map all possible reference variations to ensure imports work
+              const paths = [
+                  fileName,
+                  `./${fileName}`,
+                  `/${fileName}`,
+                  fileNameNoExt,
+                  `./${fileNameNoExt}`,
+                  `/${fileNameNoExt}`,
+                  
+                  // Folder paths
+                  fullPath,
+                  `./${fullPath}`,
+                  `/${fullPath}`,
+                  fullPath.replace(/\.[^/.]+$/, ""),
+                  `./${fullPath.replace(/\.[^/.]+$/, "")}`,
+              ];
+
+              paths.forEach(p => {
+                  if (p) pathToBlobUrl[p] = blobUrl;
+              });
+              
+          } catch (e) {
+              console.error(`Failed to transpile ${node.title}:`, e);
+              // Fallback to raw content if babel fails
+              const blob = new Blob([node.content], { type: 'application/javascript' });
+              pathToBlobUrl[node.title] = URL.createObjectURL(blob);
+          }
+      }
+  });
+
+  // 5. Build Import Map
+  const importMap = {
+    imports: {
+      "react": "https://esm.sh/react@18.2.0",
+      "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+      "react-dom": "https://esm.sh/react-dom@18.2.0",
+      ...pathToBlobUrl 
+    }
+  };
+
+  // 6. Prepare HTML Body
+  let htmlBody = '';
+  const isHtmlRoot = rootNode.title.toLowerCase().endsWith('.html');
+
+  if (isHtmlRoot) {
+      htmlBody = rootNode.content;
+      
+      // Remove <link rel="stylesheet"> tags since we inject CSS manually
+      htmlBody = htmlBody.replace(/<link[^>]+rel=["']stylesheet["'][^>]*>/gi, '');
+      
+      // INTELLIGENT SCRIPT REPLACEMENT
+      htmlBody = htmlBody.replace(/<script\s+([^>]*?)src=["']([^"']+)["']([^>]*)><\/script>/gi, (match, p1, src, p3) => {
+          // Clean src path (remove ./ or /)
+          const cleanSrc = src.replace(/^(\.\/|\/)/, '');
+          // Find matching blob
+          const blobUrl = pathToBlobUrl[cleanSrc] || pathToBlobUrl[src] || pathToBlobUrl[`./${src}`];
+          
+          if (blobUrl) {
+              // Force type="module" so it can use imports
+              return `<script type="module" src="${blobUrl}" ${p1} ${p3}></script>`;
+          }
+          return match;
+      });
+  } else {
+      // If root is JS, create a default React mount point
+      htmlBody = '<div id="root"></div>';
   }
+
+  // 7. Final HTML Assembly
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        
+        <!-- Utilities -->
+        <script src="https://cdn.tailwindcss.com"></script>
+        
+        <!-- Injected Styles -->
+        <style>
+            ${cssContent}
+        </style>
+
+        <!-- Import Map -->
+        <script type="importmap">
+            ${JSON.stringify(importMap)}
+        </script>
+
+        <!-- Global React Injection (Fixes "React is not defined") -->
+        <script type="module">
+            import React from 'react';
+            import ReactDOM from 'react-dom/client';
+            window.React = React;
+            window.ReactDOM = ReactDOM;
+        </script>
+
+        <!-- Console Interceptor -->
+        <script>
+          (function() {
+            const oldLog = console.log;
+            const oldError = console.error;
+            const oldWarn = console.warn;
+            const oldInfo = console.info;
+
+            function send(type, args) {
+              try {
+                const message = args.map(arg => {
+                    if (arg === undefined) return 'undefined';
+                    if (arg === null) return 'null';
+                    if (typeof arg === 'object') return JSON.stringify(arg);
+                    return String(arg);
+                }).join(' ');
+                
+                window.parent.postMessage({
+                  source: 'preview-iframe',
+                  nodeId: '${previewNodeId}',
+                  type: type,
+                  message: message,
+                  timestamp: Date.now()
+                }, '*');
+              } catch (e) {}
+            }
+
+            console.log = function(...args) { oldLog.apply(console, args); send('log', args); };
+            console.error = function(...args) { oldError.apply(console, args); send('error', args); };
+            console.warn = function(...args) { oldWarn.apply(console, args); send('warn', args); };
+            console.info = function(...args) { oldInfo.apply(console, args); send('info', args); };
+            
+            window.onerror = function(msg, url, line, col, error) {
+               send('error', [msg + ' (Line ' + line + ')']);
+               return false;
+            };
+          })();
+        </script>
+      </head>
+      <body>
+        ${htmlBody}
+
+        <!-- Entry Point Execution (if Root is JS) -->
+        ${!isHtmlRoot ? `
+        <script type="module">
+            import Entry from '${pathToBlobUrl[rootNode.title] || rootNode.title}';
+            
+            // Auto-Mount React if default export is a component and root is empty
+            const rootEl = document.getElementById('root');
+            if (rootEl && rootEl.innerHTML.trim() === '' && Entry) {
+                if (typeof Entry === 'function') {
+                    try {
+                        const root = window.ReactDOM.createRoot(rootEl);
+                        root.render(window.React.createElement(Entry));
+                        console.log('Auto-mounted default export from ${rootNode.title}');
+                    } catch(e) {
+                        console.error("Auto-mount failed:", e);
+                    }
+                }
+            }
+        </script>` : ''}
+        
+        ${forceReload ? `<!-- Force Reload: ${Date.now()} -->` : ''}
+      </body>
+    </html>
+  `;
 };
