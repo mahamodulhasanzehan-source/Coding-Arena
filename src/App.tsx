@@ -252,6 +252,7 @@ export default function App() {
   const dragStartRef = useRef<{ x: number, y: number } | null>(null);
   const touchStartPos = useRef<{ x: number, y: number } | null>(null);
   const compileTimeoutRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const lastContentHash = useRef<string>('');
 
   // --- MANUAL EVENT LISTENER ATTACHMENT TO FIX PASSIVE LISTENER ERROR ---
   useEffect(() => {
@@ -377,6 +378,28 @@ export default function App() {
 
   // --- Live Preview Re-compilation ---
   useEffect(() => {
+      // 1. Calculate a signature for the current content state
+      // This includes ONLY fields that affect the generated code.
+      // We exclude 'size', 'position', 'isMinimized', etc.
+      const currentContentHash = JSON.stringify({
+          nodes: state.nodes.map(n => ({ 
+              id: n.id, 
+              title: n.title, 
+              content: n.content, 
+              type: n.type 
+          })),
+          connections: state.connections,
+          running: state.runningPreviewIds
+      });
+
+      // 2. Compare with previous signature
+      // If content hasn't changed, we SKIP the compilation step entirely.
+      // This prevents UI interactions (like minimize/expand) from triggering a preview reload/flash.
+      if (currentContentHash === lastContentHash.current) {
+          return;
+      }
+      lastContentHash.current = currentContentHash;
+
       state.runningPreviewIds.forEach(previewId => {
           if (compileTimeoutRef.current[previewId]) clearTimeout(compileTimeoutRef.current[previewId]);
           
@@ -1128,6 +1151,20 @@ export default function App() {
             touchAction: 'none'
         }}
       >
+        {/* Selection Box Rendered Outside Transform Context to Fix Scaling/Origin Bug */}
+        {selectionBox && (
+            <div 
+                className="absolute bg-blue-500/10 border border-blue-500 z-[999]"
+                style={{
+                    left: selectionBox.x,
+                    top: selectionBox.y,
+                    width: selectionBox.w,
+                    height: selectionBox.h,
+                    pointerEvents: 'none'
+                }}
+            />
+        )}
+
         <div 
             style={{ 
                 transform: `translate(${state.pan.x}px, ${state.pan.y}px) scale(${state.zoom})`,
@@ -1139,19 +1176,7 @@ export default function App() {
             }}
         >
             <div className="pointer-events-none w-full h-full relative">
-                {selectionBox && (
-                    <div 
-                        className="absolute bg-blue-500/10 border border-blue-500 z-[999]"
-                        style={{
-                            left: selectionBox.x,
-                            top: selectionBox.y,
-                            width: selectionBox.w,
-                            height: selectionBox.h,
-                            pointerEvents: 'none'
-                        }}
-                    />
-                )}
-
+                
                 <svg className="absolute top-0 left-0 w-full h-full overflow-visible pointer-events-none z-0">
                     {snapLines.map((line, i) => (
                         <line 
