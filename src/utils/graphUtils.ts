@@ -1,8 +1,6 @@
 
 import { Connection, NodeData, NodeType, Port } from '../types';
 import { getPortsForNode } from '../constants';
-// @ts-ignore: Externalized in vite.config.ts, types not needed for build
-import * as Babel from '@babel/standalone';
 
 // ---- Port Calculation Math ----
 const HEADER_HEIGHT = 40; 
@@ -10,6 +8,7 @@ const PORT_START_Y = 52;
 const PORT_STRIDE = 40; 
 const PORT_OFFSET_X = 12; 
 
+// FIX 1a: Correctly calculate port position when minimized
 export const calculatePortPosition = (
   node: NodeData,
   portId: string,
@@ -21,7 +20,11 @@ export const calculatePortPosition = (
 
   if (portIndex === -1) return { x: node.position.x, y: node.position.y };
 
-  const startY = node.isMinimized ? 14 : PORT_START_Y;
+  // When minimized, align with the center of the 40px header (approx 20px)
+  const startY = node.isMinimized ? 20 : PORT_START_Y;
+  // If minimized, we reduce stride or keep it. Keeping it ensures multiple ports don't overlap if they exist.
+  // However, minimized nodes usually shouldn't have many ports visible or they should stack. 
+  // For visual correctness, we keep the stride but start higher.
   const yRelative = startY + 6 + (portIndex * PORT_STRIDE);
   const y = node.position.y + yRelative;
 
@@ -62,51 +65,33 @@ export const getAllConnectedSources = (
         .filter((n): n is NodeData => !!n);
 };
 
+// Added getRelatedNodes for AI context
 export const getRelatedNodes = (
   startNodeId: string,
   nodes: NodeData[],
-  connections: Connection[],
-  typeFilter?: NodeType
+  connections: Connection[]
 ): NodeData[] => {
-  const visited = new Set<string>();
-  const queue = [startNodeId];
-  const related: NodeData[] = [];
+    const related = new Set<string>();
+    const queue = [startNodeId];
+    related.add(startNodeId);
 
-  while (queue.length > 0) {
-    const currentId = queue.shift()!;
-    if (visited.has(currentId)) continue;
-    visited.add(currentId);
-
-    const node = nodes.find(n => n.id === currentId);
-    if (node) {
-       if (!typeFilter || node.type === typeFilter) {
-           related.push(node);
-       }
+    while (queue.length > 0) {
+        const currentId = queue.shift()!;
+        
+        // Find neighbors (both input and output)
+        const neighbors = connections
+            .filter(c => c.sourceNodeId === currentId || c.targetNodeId === currentId)
+            .map(c => c.sourceNodeId === currentId ? c.targetNodeId : c.sourceNodeId);
+            
+        for (const neighborId of neighbors) {
+            if (!related.has(neighborId)) {
+                related.add(neighborId);
+                queue.push(neighborId);
+            }
+        }
     }
-
-    const neighbors = connections
-      .filter(c => c.sourceNodeId === currentId || c.targetNodeId === currentId)
-      .map(c => c.sourceNodeId === currentId ? c.targetNodeId : c.sourceNodeId);
     
-    neighbors.forEach(nid => {
-        if (!visited.has(nid)) queue.push(nid);
-    });
-  }
-  
-  return related;
-};
-
-// Helper: Determine the virtual path of a node (e.g. "components/Header.js")
-const getNodePath = (node: NodeData, nodes: NodeData[], connections: Connection[]): string => {
-    const folderConn = connections.find(c => 
-        c.sourceNodeId === node.id && 
-        nodes.find(n => n.id === c.targetNodeId)?.type === 'FOLDER'
-    );
-    if (folderConn) {
-        const folder = nodes.find(n => n.id === folderConn.targetNodeId);
-        if (folder) return `${folder.title}/${node.title}`;
-    }
-    return node.title;
+    return nodes.filter(n => related.has(n.id));
 };
 
 // Helper to recursively collect all code dependencies
@@ -120,328 +105,173 @@ const collectDependencies = (
     visited.add(rootNode.id);
 
     const directDeps = getAllConnectedSources(rootNode.id, 'file', nodes, connections);
-    let allDeps: NodeData[] = [];
+    // Also check for folder connections (Folder Module Support)
+    const folderDeps = getAllConnectedSources(rootNode.id, 'files', nodes, connections); // Connection from folder to file
+    
+    let allDeps: NodeData[] = [...directDeps];
 
-    for (const dep of directDeps) {
-        if (dep.type === 'FOLDER') {
-            // If connected to a folder, get contents of that folder
-            const folderContents = getAllConnectedSources(dep.id, 'files', nodes, connections);
-            allDeps = [...allDeps, ...folderContents];
-            
-            folderContents.forEach(child => {
-                const nested = collectDependencies(child, nodes, connections, visited);
-                allDeps = [...allDeps, ...nested];
-            });
-        } else {
-            allDeps.push(dep);
-            const nested = collectDependencies(dep, nodes, connections, visited);
-            allDeps = [...allDeps, ...nested];
-        }
+    // Identify if any direct dep is a FOLDER
+    const folderNodes = directDeps.filter(d => d.type === 'FOLDER');
+    if (folderNodes.length > 0) {
+        // Collect children of these folders
+        folderNodes.forEach(folder => {
+             const children = connections
+                .filter(c => c.targetNodeId === folder.id && c.targetPortId.includes('in-files'))
+                .map(c => nodes.find(n => n.id === c.sourceNodeId))
+                .filter((n): n is NodeData => !!n);
+             allDeps.push(...children);
+        });
     }
+
+    // Recurse
+    [...directDeps, ...folderDeps].forEach(dep => {
+        const nestedDeps = collectDependencies(dep, nodes, connections, visited);
+        allDeps = [...allDeps, ...nestedDeps];
+    });
 
     return allDeps;
 };
 
-// Helper: Sanitize filename to valid identifier
-const toIdentifier = (filename: string) => {
-    const base = filename.replace(/\.[^/.]+$/, "");
-    return base.replace(/[^a-zA-Z0-9_$]/g, "_");
-};
-
+// FIX 4: Robust Preview Compilation with Blobs
 export const compilePreview = (
   previewNodeId: string,
   nodes: NodeData[],
   connections: Connection[],
   forceReload: boolean = false
 ): string => {
+  // 1. Find the main entry point connected to PREVIEW
   const rootNode = getConnectedSource(previewNodeId, 'dom', nodes, connections);
   
   if (!rootNode) {
     return `
       <!DOCTYPE html>
       <html>
-        <head>
-            <style>body { background-color: #0f0f11; color: #71717a; font-family: sans-serif; height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; }</style>
-        </head>
-        <body>
+        <body style="background-color: #0f0f11; color: #71717a; font-family: sans-serif; height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0;">
           <div style="text-align: center;">
-            <p>Connect a <strong>CODE Canvas</strong> (index.html or App.js) to the DOM port.</p>
+            <p>Connect a <strong>CODE Canvas</strong> to the DOM port.</p>
           </div>
         </body>
       </html>
     `;
   }
 
-  // 1. Collect all reachable dependencies
+  // 2. Resolve Dependencies
   const dependencyNodes = collectDependencies(rootNode, nodes, connections);
+  
+  // Filter unique and self
   const uniqueDeps = Array.from(new Set(dependencyNodes.map(n => n.id)))
       .map(id => nodes.find(n => n.id === id)!)
       .filter(n => n.id !== rootNode.id); 
 
-  // 2. Prepare Maps
-  const pathToBlobUrl: Record<string, string> = {};
-  let cssContent = '';
+  // 3. Create Blobs for Dependencies
+  // This ensures external scripts/css load correctly with attributes (defer/module) preserved
+  const blobs: Record<string, string> = {};
   
-  const allNodes = [rootNode, ...uniqueDeps];
-  
-  // 3. Process CSS first
-  allNodes.forEach(node => {
-      if (node.title.toLowerCase().endsWith('.css')) {
-          cssContent += `\n/* ${node.title} */\n${node.content}\n`;
+  uniqueDeps.forEach(dep => {
+      let mimeType = 'text/javascript';
+      if (dep.title.endsWith('.css')) mimeType = 'text/css';
+      else if (dep.title.endsWith('.json')) mimeType = 'application/json';
+      else if (dep.title.endsWith('.html')) mimeType = 'text/html';
+      
+      const blob = new Blob([dep.content], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      blobs[dep.title] = url;
+      // Also register sans-extension for module resolution convenience if needed
+      if (dep.title.includes('.')) {
+          const base = dep.title.split('.')[0];
+          if (!blobs[base]) blobs[base] = url;
       }
   });
 
-  // 4. Process JS/JSX/TS - create Blobs for modules
-  allNodes.forEach(node => {
-      const lower = node.title.toLowerCase();
-      if (lower.endsWith('.js') || lower.endsWith('.jsx') || lower.endsWith('.ts') || lower.endsWith('.tsx')) {
-          try {
-              let content = node.content;
+  let finalContent = rootNode.content;
 
-              // AUTO-IMPORT INJECTION: Detect connections and inject import statements if missing
-              // This is crucial for implicit connections visualized by wires
-              const imports = getAllConnectedSources(node.id, 'file', nodes, connections);
-              const injections: string[] = [];
-              
-              imports.forEach(imp => {
-                  if (imp.type === 'CODE' || imp.type === 'NPM') {
-                      const identifier = toIdentifier(imp.title);
-                      // Look for usage of identifier, but ignore if already imported
-                      // We look for "import ... from ...imp.title..."
-                      const hasImportRegex = new RegExp(`import\\s+.*?['"](.*/)?${imp.title.replace('.', '\\.')}['"]`);
-                      const hasImport = hasImportRegex.test(content);
-                      
-                      // Also check if the identifier is even used in the code to avoid unused imports
-                      const isUsed = new RegExp(`\\b${identifier}\\b`).test(content);
+  // Wrap raw JS/CSS if root is not HTML
+  const lowerTitle = rootNode.title.toLowerCase();
+  if (lowerTitle.endsWith('.js') || lowerTitle.endsWith('.ts')) {
+      finalContent = `<script type="module">\n${finalContent}\n</script>`;
+  } else if (lowerTitle.endsWith('.css')) {
+      finalContent = `<style>\n${finalContent}\n</style>`;
+  }
 
-                      if (!hasImport && isUsed) {
-                          // Inject default import.
-                          injections.push(`import ${identifier} from './${imp.title}';`);
-                      }
-                  }
-              });
-              
-              if (injections.length > 0) {
-                  content = injections.join('\n') + '\n' + content;
-              }
-
-              // Transpile using Babel
-              let transformFn = (Babel as any).transform;
-              if (!transformFn && (Babel as any).default && (Babel as any).default.transform) {
-                  transformFn = (Babel as any).default.transform;
-              }
-
-              let transformedCode = content;
-              if (transformFn) {
-                 // IMPORTANT: 'modules: false' prevents Babel from converting ESM to CJS (require)
-                 // which browser cannot handle. We want browser-native ESM.
-                 // @ts-ignore
-                 const res = transformFn(content, {
-                     presets: [
-                         'react', 
-                         ['env', { modules: false, targets: { browsers: "> 1%, not dead" } }]
-                     ],
-                     filename: node.title
-                 });
-                 transformedCode = res.code;
-              }
-
-              const blob = new Blob([transformedCode], { type: 'application/javascript' });
-              const blobUrl = URL.createObjectURL(blob);
-              
-              const fullPath = getNodePath(node, nodes, connections);
-              const fileName = node.title;
-              // Handle extensions and paths
-              const fileNameNoExt = fileName.replace(/\.[^/.]+$/, "");
-              
-              // Register multiple paths for the same file to handle various import styles
-              // Map: Button.jsx -> blob, ./Button.jsx -> blob, Button -> blob
-              const paths = new Set<string>();
-              paths.add(fileName);
-              paths.add(`./${fileName}`);
-              paths.add(`/${fileName}`);
-              
-              if (fileName !== fileNameNoExt) {
-                  paths.add(fileNameNoExt);
-                  paths.add(`./${fileNameNoExt}`);
-                  paths.add(`/${fileNameNoExt}`);
-              }
-              
-              if (fullPath && fullPath !== fileName) {
-                  paths.add(fullPath);
-                  paths.add(`./${fullPath}`);
-                  paths.add(`/${fullPath}`);
-                  
-                  // Also handle folder paths without extension
-                  const fullPathNoExt = fullPath.replace(/\.[^/.]+$/, "");
-                  if (fullPath !== fullPathNoExt) {
-                      paths.add(fullPathNoExt);
-                      paths.add(`./${fullPathNoExt}`);
-                      paths.add(`/${fullPathNoExt}`);
-                  }
-              }
-
-              paths.forEach(p => {
-                  pathToBlobUrl[p] = blobUrl;
-              });
-              
-          } catch (e: any) {
-              console.error(`Failed to transpile ${node.title}:`, e);
-              // Register an error script to throw immediately in the preview
-              const errBlob = new Blob([`console.error("Transpilation Error in ${node.title}: ${e.message.replace(/"/g, '\\"')}");`], { type: 'application/javascript' });
-              pathToBlobUrl[node.title] = URL.createObjectURL(errBlob);
-          }
-      }
-  });
-
-  // 5. Build Import Map
-  const importMap = {
-    imports: {
-      "react": "https://esm.sh/react@18.2.0",
-      "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-      "react-dom": "https://esm.sh/react-dom@18.2.0",
-      ...pathToBlobUrl 
+  // 4. Inject Dependencies via Blob URLs
+  // This preserves attributes like 'defer', 'async', 'type="module"'!
+  
+  // Replace <link href="style.css"> -> <link href="blob:...">
+  finalContent = finalContent.replace(/<link([^>]+)href=["']([^"']+)["']([^>]*)>/gi, (match, p1, href, p3) => {
+    // Check exact match or path match
+    const filename = href.split('/').pop();
+    if (filename && blobs[filename]) {
+        return `<link${p1}href="${blobs[filename]}"${p3}>`;
     }
-  };
+    return match;
+  });
 
-  // 6. Error Interceptor Script
-  const interceptorScript = `
+  // Replace <script src="script.js"> -> <script src="blob:...">
+  finalContent = finalContent.replace(/<script([^>]+)src=["']([^"']+)["']([^>]*)><\/script>/gi, (match, p1, src, p3) => {
+    const filename = src.split('/').pop();
+    if (filename && blobs[filename]) {
+        return `<script${p1}src="${blobs[filename]}"${p3}></script>`;
+    }
+    return match;
+  });
+
+  // 5. Inject Console Interceptor
+  const interceptor = `
     <script>
       (function() {
-        const PREVIEW_ID = '${previewNodeId}';
-        
-        function send(type, args) {
-            try {
-                // Safe serialization to prevent cyclic error issues
-                const message = args.map(arg => {
-                    if (arg === undefined) return 'undefined';
-                    if (arg === null) return 'null';
-                    if (arg instanceof Error) return arg.toString();
-                    if (typeof arg === 'object') {
-                        try {
-                            return JSON.stringify(arg);
-                        } catch(e) {
-                            return '[Object]';
-                        }
-                    }
-                    return String(arg);
-                }).join(' ');
-                
-                window.parent.postMessage({
-                    source: 'preview-iframe',
-                    nodeId: PREVIEW_ID,
-                    type: type,
-                    message: message,
-                    timestamp: Date.now()
-                }, '*');
-            } catch (e) {
-                // If everything fails, send a simple string
-                window.parent.postMessage({
-                    source: 'preview-iframe',
-                    nodeId: PREVIEW_ID,
-                    type: 'error',
-                    message: 'Logging Error: ' + e.message,
-                    timestamp: Date.now()
-                }, '*');
-            }
-        }
-
         const oldLog = console.log;
         const oldError = console.error;
         const oldWarn = console.warn;
         const oldInfo = console.info;
+
+        function send(type, args) {
+          try {
+            const message = args.map(arg => {
+                if (arg === undefined) return 'undefined';
+                if (arg === null) return 'null';
+                if (arg instanceof Error) return arg.toString();
+                if (typeof arg === 'object') {
+                    try { return JSON.stringify(arg); } catch(e) { return '[Object]'; }
+                }
+                return String(arg);
+            }).join(' ');
+            
+            window.parent.postMessage({
+              source: 'preview-iframe',
+              nodeId: '${previewNodeId}',
+              type: type,
+              message: message,
+              timestamp: Date.now()
+            }, '*');
+          } catch (e) {
+             // Ignore serialization errors
+          }
+        }
 
         console.log = function(...args) { oldLog.apply(console, args); send('log', args); };
         console.error = function(...args) { oldError.apply(console, args); send('error', args); };
         console.warn = function(...args) { oldWarn.apply(console, args); send('warn', args); };
         console.info = function(...args) { oldInfo.apply(console, args); send('info', args); };
         
-        window.addEventListener('error', function(event) {
-           send('error', [event.message + ' (' + (event.filename || 'script') + ':' + event.lineno + ')']);
-        });
-
-        window.addEventListener('unhandledrejection', function(event) {
-           send('error', ['Unhandled Promise Rejection: ' + event.reason]);
-        });
+        window.onerror = function(msg, url, line, col, error) {
+           send('error', [msg + ' (Line ' + line + ')']);
+           return false;
+        };
       })();
     </script>
+    ${forceReload ? `<!-- Force Reload: ${Date.now()} -->` : ''}
   `;
-
-  // 7. Assemble HTML
-  let htmlBody = '';
-  const isHtmlRoot = rootNode.title.toLowerCase().endsWith('.html');
-
-  if (isHtmlRoot) {
-      htmlBody = rootNode.content;
-      htmlBody = htmlBody.replace(/<link[^>]+rel=["']stylesheet["'][^>]*>/gi, ''); // Remove existing styles since we injected CSS content
-      
-      // Inject module imports for scripts
-      htmlBody = htmlBody.replace(/<script\s+([^>]*?)src=["']([^"']+)["']([^>]*)><\/script>/gi, (match, p1, src, p3) => {
-          // If it's a known internal file, use module type so importmap applies
-          // We check if we have a mapping for it
-          const cleanSrc = src.replace(/^(\.\/|\/)/, '');
-          const isInternal = pathToBlobUrl[cleanSrc] || pathToBlobUrl[src] || pathToBlobUrl[`./${src}`];
-          
-          if (isInternal) {
-              // We don't replace the SRC with blob URL here because importmap handles it!
-              // We just ensure type="module" is present.
-              // Actually, if we use importmap, we can keep the src as is (e.g. src="./App.js")
-              // providing type="module" is set.
-              if (!p1.includes('type="module"') && !p3.includes('type="module"')) {
-                  return `<script type="module" src="${src}" ${p1} ${p3}></script>`;
-              }
-          }
-          return match;
-      });
-  } else {
-      // JS Root (React App Entry)
-      htmlBody = '<div id="root"></div>';
-  }
 
   return `
     <!DOCTYPE html>
     <html>
       <head>
         <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <script src="https://cdn.tailwindcss.com"></script>
-        ${interceptorScript}
-        <style>
-            ${cssContent}
-        </style>
-        <script type="importmap">
-            ${JSON.stringify(importMap)}
-        </script>
-        <script type="module">
-            import React from 'react';
-            import ReactDOM from 'react-dom/client';
-            window.React = React;
-            window.ReactDOM = ReactDOM;
-        </script>
+        ${interceptor}
       </head>
       <body>
-        ${htmlBody}
-        ${!isHtmlRoot ? `
-        <script type="module">
-            // Mount the root node
-            // We use the raw title as specifier, relying on importmap to resolve it to blob
-            import Entry from './${rootNode.title}';
-            
-            const rootEl = document.getElementById('root');
-            if (rootEl && Entry) {
-                // Determine if Entry is a React component or just side-effects
-                if (typeof Entry === 'function' || typeof Entry === 'object') {
-                    try {
-                        const root = window.ReactDOM.createRoot(rootEl);
-                        root.render(window.React.createElement(Entry));
-                    } catch(e) {
-                        console.error("Auto-mount failed:", e);
-                    }
-                }
-            }
-        </script>` : ''}
+        ${finalContent}
       </body>
     </html>
   `;
 };
-        
