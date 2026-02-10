@@ -273,18 +273,55 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+      const unsubscribe = onAuthStateChanged(auth, async (user) => {
+          if (user) {
+              const userInfo = { uid: user.uid, displayName: user.displayName || user.email || 'Anonymous' };
+              setCurrentUser(userInfo);
+              setSyncStatus('saving'); 
+              try {
+                  const docRef = doc(db, "nodecode_projects", user.uid);
+                  const docSnap = await getDoc(docRef);
+                  if (docSnap.exists() && docSnap.data().state) {
+                      try {
+                          dispatch({ type: 'LOAD_STATE', payload: JSON.parse(docSnap.data().state) });
+                          setSyncStatus('synced');
+                      } catch (e) { console.error(e); setSyncStatus('error'); }
+                  } else { setSyncStatus('synced'); }
+              } catch (err) { console.error(err); setSyncStatus('error'); }
+          } else { setCurrentUser(null); setSyncStatus('offline'); }
+      });
+      return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    
+    // Fix: Zoom by default on wheel, prevent scrolling
     const onWheel = (e: WheelEvent) => { 
-        if(e.ctrlKey || e.metaKey) {
-            e.preventDefault(); 
-            dispatch({ type: 'ZOOM', payload: { zoom: Math.min(Math.max(0.1, stateRef.current.zoom + -e.deltaY * 0.001), 5) } }); 
-        } else {
-             dispatch({ type: 'PAN', payload: { x: stateRef.current.pan.x - e.deltaX, y: stateRef.current.pan.y - e.deltaY } });
-        }
+        e.preventDefault(); 
+        const containerRect = container.getBoundingClientRect();
+        const mouseX = e.clientX - containerRect.left;
+        const mouseY = e.clientY - containerRect.top;
+
+        // Zoom logic
+        const zoomFactor = -e.deltaY * 0.001;
+        const newZoom = Math.min(Math.max(0.1, stateRef.current.zoom + zoomFactor), 5);
+        
+        // Calculate pinch/zoom point
+        const dx = (mouseX - stateRef.current.pan.x) / stateRef.current.zoom;
+        const dy = (mouseY - stateRef.current.pan.y) / stateRef.current.zoom;
+        
+        const newPanX = mouseX - dx * newZoom;
+        const newPanY = mouseY - dy * newZoom;
+
+        dispatch({ type: 'ZOOM', payload: { zoom: newZoom } });
+        dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
     };
+
     const onTouchStart = (e: TouchEvent) => { if (e.touches.length === 2) e.preventDefault(); };
     const onTouchMove = (e: TouchEvent) => { if (e.touches.length === 2) e.preventDefault(); };
+    
     container.addEventListener('wheel', onWheel, { passive: false });
     container.addEventListener('touchstart', onTouchStart, { passive: false });
     container.addEventListener('touchmove', onTouchMove, { passive: false });
@@ -410,7 +447,12 @@ export default function App() {
         const saveData = setTimeout(async () => {
              const stateToSave = { nodes: state.nodes, connections: state.connections, runningPreviewIds: state.runningPreviewIds, pan: state.pan, zoom: state.zoom };
              localStorage.setItem('nodecode_project_local', JSON.stringify(stateToSave));
-             setSyncStatus('synced');
+             if (currentUser) {
+                 try {
+                     await setDoc(doc(db, "nodecode_projects", currentUser.uid), { state: JSON.stringify(stateToSave), updatedAt: new Date().toISOString() }, { merge: true });
+                     setSyncStatus('synced');
+                 } catch (e) { console.error(e); setSyncStatus('error'); }
+             } else { setSyncStatus('offline'); }
              isLocalChange.current = false; 
         }, 1000);
         return () => clearTimeout(saveData);
@@ -495,8 +537,39 @@ export default function App() {
       if (!confirm("Reset project?")) return;
       localStorage.removeItem('nodecode_project_local'); window.location.reload(); 
   };
-  const handleToggleLock = (id: string) => { /* Lock logic */ };
-  const handleForceUnlock = (id: string) => { /* Unlock logic */ };
+  
+  // Lock Handlers (Fixed)
+  const handleToggleLock = (nodeId: string) => {
+      if (!currentUser) return;
+      let targets = [nodeId];
+      if (state.selectedNodeIds.includes(nodeId)) targets = state.selectedNodeIds;
+      
+      const targetNode = state.nodes.find(n => n.id === nodeId);
+      if (!targetNode) return;
+      
+      const isLocking = !targetNode.lockedBy;
+      
+      const validIds = targets.filter(id => {
+          const node = state.nodes.find(n => n.id === id);
+          if (!node) return false;
+          // Can I lock it? (Must be unlocked)
+          if (isLocking) return !node.lockedBy; 
+          // Can I unlock it? (Must be locked by me)
+          return node.lockedBy?.uid === currentUser.uid;
+      });
+      
+      if (validIds.length > 0) { 
+          dispatchLocal({ type: 'LOCK_NODES', payload: { ids: validIds, user: isLocking ? currentUser : undefined } }); 
+      }
+      setContextMenu(null);
+  };
+
+  const handleForceUnlock = (nodeId: string) => {
+      if (!confirm("Force unlock this node? This will remove the lock for everyone.")) return;
+      dispatchLocal({ type: 'LOCK_NODES', payload: { ids: [nodeId], user: undefined } });
+      setContextMenu(null);
+  };
+
   const handleClearImage = (id: string) => { dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id, content: '' } }); };
   const handleAddNode = (type: NodeType) => { 
       if(!contextMenu) return; 
@@ -507,7 +580,47 @@ export default function App() {
       dispatchLocal({ type: 'ADD_NODE', payload: { id: `node-${Date.now()}`, type, title: d.title, content: d.content, position: {x, y}, size: {width: d.width, height: d.height}, autoHeight: type==='CODE'?false:undefined } });
       setContextMenu(null);
   };
-  const handleFindNearest = () => { dispatch({ type: 'PAN', payload: { x: 0, y: 0 } }); dispatch({ type: 'ZOOM', payload: { zoom: 1 } }); };
+  
+  // Find Nearest Logic (Fixed to go to node, not 0,0)
+  const handleFindNearest = () => {
+    const viewportCenterX = window.innerWidth / 2;
+    const viewportCenterY = window.innerHeight / 2;
+    
+    // Calculate world center
+    const worldCenterX = (viewportCenterX - state.pan.x) / state.zoom;
+    const worldCenterY = (viewportCenterY - state.pan.y) / state.zoom;
+    
+    let nearestNode: NodeData | null = null;
+    let minDist = Infinity;
+    
+    // Find closest node to current center
+    displayNodes.forEach(n => {
+        const nW = n.size.width;
+        const nH = n.isMinimized ? 40 : n.size.height;
+        const nCenterX = n.position.x + nW / 2;
+        const nCenterY = n.position.y + nH / 2;
+        
+        const dist = Math.hypot(nCenterX - worldCenterX, nCenterY - worldCenterY);
+        if (dist < minDist) { minDist = dist; nearestNode = n; }
+    });
+
+    if (nearestNode) {
+        const target = nearestNode as NodeData;
+        setHighlightedNodeId(target.id);
+        setTimeout(() => setHighlightedNodeId(null), 2000);
+
+        const nW = target.size.width;
+        const nH = target.isMinimized ? 40 : target.size.height;
+        const targetCenterX = target.position.x + nW / 2;
+        const targetCenterY = target.position.y + nH / 2;
+        
+        // Center the target in the viewport
+        const newPanX = viewportCenterX - (targetCenterX * state.zoom);
+        const newPanY = viewportCenterY - (targetCenterY * state.zoom);
+        
+        dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
+    }
+  };
   
   const handleInjectImport = (srcId: string, pkg: string) => { /* NPM logic */ };
   const handleFixError = (id: string, err: string) => { /* AI Fix logic */ };
@@ -608,19 +721,21 @@ export default function App() {
   const handleBgPointerDown = (e: React.PointerEvent) => {
       if ((e.target as HTMLElement).id !== 'canvas-bg') return;
       e.currentTarget.setPointerCapture(e.pointerId);
-      setIsPanning(true);
-      dragStartRef.current = { x: e.clientX, y: e.clientY };
       
-      if (!e.shiftKey && !state.selectionMode?.isActive) {
-          dispatchLocal({ type: 'SET_SELECTED_NODES', payload: [] });
-      }
-      
-      if (e.shiftKey) {
+      // Fix: Check for Ctrl/Meta/Shift for Selection Box
+      if (e.shiftKey || e.ctrlKey || e.metaKey) {
           const rect = containerRef.current?.getBoundingClientRect();
           if (rect) {
              const x = (e.clientX - rect.left - state.pan.x) / state.zoom;
              const y = (e.clientY - rect.top - state.pan.y) / state.zoom;
              setSelectionBox({ x, y, w: 0, h: 0, startX: x, startY: y });
+          }
+      } else {
+          setIsPanning(true);
+          dragStartRef.current = { x: e.clientX, y: e.clientY };
+          
+          if (!state.selectionMode?.isActive) {
+              dispatchLocal({ type: 'SET_SELECTED_NODES', payload: [] });
           }
       }
   };
