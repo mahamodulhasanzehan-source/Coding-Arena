@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { NodeData } from '../types';
 import { X, FileCode, Monitor, TerminalSquare, Package, Image as ImageIcon, StickyNote, LogIn, LogOut, Folder } from 'lucide-react';
@@ -93,11 +92,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, nodes, onNodeClick, on
                 <Folder size={14} /> Structure
             </div>
             <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
-                {folderNodes.map(node => (
+                {folderNodes.map((node, i) => (
                     <button
                         key={node.id}
                         onClick={() => onNodeClick(node.id)}
-                        className="w-full text-left px-3 py-2 rounded text-zinc-400 hover:text-white hover:bg-zinc-700 text-sm font-medium transition-colors truncate"
+                        style={{ animationDelay: `${i * 30}ms` }}
+                        className="w-full text-left px-3 py-2 rounded text-zinc-400 hover:text-white hover:bg-zinc-700 text-sm font-medium transition-colors truncate animate-in fade-in slide-in-from-left-4 fill-mode-backwards"
                     >
                         {node.title}
                     </button>
@@ -112,11 +112,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, nodes, onNodeClick, on
                 <FileCode size={14} /> Code
             </div>
             <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
-                {codeNodes.map(node => (
+                {codeNodes.map((node, i) => (
                     <button
                         key={node.id}
                         onClick={() => selectionMode?.isActive ? selectionMode.onToggle(node.id) : onNodeClick(node.id)}
-                        className={`w-full text-left px-3 py-2 rounded text-sm font-medium transition-colors truncate flex items-center justify-between group
+                        style={{ animationDelay: `${i * 30}ms` }}
+                        className={`w-full text-left px-3 py-2 rounded text-sm font-medium transition-colors truncate flex items-center justify-between group animate-in fade-in slide-in-from-left-4 fill-mode-backwards
                             ${selectionMode?.isActive && selectionMode.selectedIds.includes(node.id) 
                                 ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' 
                                 : 'text-zinc-400 hover:text-amber-400 hover:bg-amber-500/10'}`}
@@ -137,11 +138,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, nodes, onNodeClick, on
                 <StickyNote size={14} /> Text / Notes
             </div>
             <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
-                {textNodes.map(node => (
+                {textNodes.map((node, i) => (
                     <button
                         key={node.id}
                         onClick={() => onNodeClick(node.id)}
-                        className="w-full text-left px-3 py-2 rounded text-zinc-400 hover:text-emerald-400 hover:bg-emerald-500/10 text-sm font-medium transition-colors truncate"
+                        style={{ animationDelay: `${i * 30}ms` }}
+                        className="w-full text-left px-3 py-2 rounded text-zinc-400 hover:text-emerald-400 hover:bg-emerald-500/10 text-sm font-medium transition-colors truncate animate-in fade-in slide-in-from-left-4 fill-mode-backwards"
                     >
                         {node.title}
                     </button>
@@ -156,11 +158,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, nodes, onNodeClick, on
                 <ImageIcon size={14} /> Images
             </div>
             <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
-                {imageNodes.map(node => (
+                {imageNodes.map((node, i) => (
                     <button
                         key={node.id}
                         onClick={() => onNodeClick(node.id)}
-                        className="w-full text-left px-3 py-2 rounded text-zinc-400 hover:text-purple-400 hover:bg-purple-500/10 text-sm font-medium transition-colors truncate"
+                        style={{ animationDelay: `${i * 30}ms` }}
+                        className="w-full text-left px-3 py-2 rounded text-zinc-400 hover:text-purple-400 hover:bg-purple-500/10 text-sm font-medium transition-colors truncate animate-in fade-in slide-in-from-left-4 fill-mode-backwards"
                     >
                         {node.title}
                     </button>
@@ -175,11 +178,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, nodes, onNodeClick, on
                 <Package size={14} /> Packages
             </div>
             <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
-                {npmNodes.map(node => (
+                {npmNodes.map((node, i) => (
                     <button
                         key={node.id}
                         onClick={() => onNodeClick(node.id)}
-                        className="w-full text-left px-3 py-2 rounded text-zinc-400 hover:text-red-400 hover:bg-red-500/10 text-sm font-medium transition-colors truncate"
+                        style={{ animationDelay: `${i * 30}ms` }}
+                        className="w-full text-left px-3 py-2 rounded text-zinc-400 hover:text-red-400 hover:bg-red-500/10 text-sm font-medium transition-colors truncate animate-in fade-in slide-in-from-left-4 fill-mode-backwards"
                     >
                         {node.title}
                     </button>
@@ -194,11 +198,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, nodes, onNodeClick, on
                 <Monitor size={14} /> Preview
             </div>
             <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
-                {previewNodes.map(node => (
+                {previewNodes.map((node, i) => (
                     <button
                         key={node.id}
                         onClick={() => onNodeClick(node.id)}
-                        className="w-full text-left px-3 py-2 rounded text-zinc-400 hover:text-blue-400 hover:bg-blue-500/10 text-sm font-medium transition-colors truncate"
+                        style={{ animationDelay: `${i * 30}ms` }}
+                        className="w-full text-left px-3 py-2 rounded text-zinc-400 hover:text-blue-400 hover:bg-blue-500/10 text-sm font-medium transition-colors truncate animate-in fade-in slide-in-from-left-4 fill-mode-backwards"
                     >
                         {node.title}
                     </button>
@@ -213,11 +218,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, nodes, onNodeClick, on
                 <TerminalSquare size={14} /> Terminal
             </div>
             <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
-                {terminalNodes.map(node => (
+                {terminalNodes.map((node, i) => (
                     <button
                         key={node.id}
                         onClick={() => onNodeClick(node.id)}
-                        className="w-full text-left px-3 py-2 rounded text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 text-sm font-medium transition-colors truncate"
+                        style={{ animationDelay: `${i * 30}ms` }}
+                        className="w-full text-left px-3 py-2 rounded text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 text-sm font-medium transition-colors truncate animate-in fade-in slide-in-from-left-4 fill-mode-backwards"
                     >
                         {node.title}
                     </button>
@@ -228,10 +234,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, nodes, onNodeClick, on
       </div>
       
       {selectionMode?.isActive && (
-          <div className="p-4 border-t border-panelBorder bg-zinc-900">
+          <div className="p-4 border-t border-panelBorder bg-zinc-900 animate-in slide-in-from-bottom-2">
               <button 
                 onClick={selectionMode.onConfirm}
-                className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-sm font-bold transition-colors shadow-lg shadow-indigo-500/20"
+                className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-sm font-bold transition-colors shadow-lg shadow-indigo-500/20 active:scale-95 transition-transform"
               >
                   Confirm Selection
               </button>

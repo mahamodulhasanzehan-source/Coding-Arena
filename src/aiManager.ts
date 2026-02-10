@@ -1,5 +1,4 @@
-
-import { GoogleGenAI, FunctionDeclaration, Type } from "@google/genai";
+import { GoogleGenAI, FunctionDeclaration, Type, Tool } from "@google/genai";
 import { NodeData, GraphState, Action, Connection } from './types';
 import { getRelatedNodes } from './utils/graphUtils';
 
@@ -99,7 +98,7 @@ const renameFileFunction: FunctionDeclaration = {
     }
 };
 
-const TOOLS = [{ functionDeclarations: [updateCodeFunction, deleteFileFunction, moveFileFunction, connectFilesFunction, renameFileFunction] }];
+const TOOLS: Tool[] = [{ functionDeclarations: [updateCodeFunction, deleteFileFunction, moveFileFunction, connectFilesFunction, renameFileFunction] }];
 
 // --- 3. HELPERS ---
 
@@ -261,12 +260,14 @@ const processToolCalls = (
         } else if (call.name === 'moveFile') {
             const args = call.args as any;
             const { filename, targetFolderName } = args;
-            const targetNode = tempNodes.find(n => n.title === filename && (n.type === 'CODE' || n.type === 'IMAGE' || n.type === 'TEXT'));
-            
-            if (targetNode && checkPermission(targetNode.id)) {
+            // Robust finding: support path or title
+            let targetNode = findNodeByPathOrTitle(filename, tempNodes, state.connections);
+            if (!targetNode) targetNode = tempNodes.find(n => n.title === filename);
+
+            if (targetNode && (targetNode.type === 'CODE' || targetNode.type === 'IMAGE' || targetNode.type === 'TEXT') && checkPermission(targetNode.id)) {
                 // 1. AGGRESSIVE DISCONNECT
                 // Disconnect from everything EXCEPT Outputs (Preview/Terminal)
-                const outgoingConns = state.connections.filter(c => c.sourceNodeId === targetNode.id);
+                const outgoingConns = state.connections.filter(c => c.sourceNodeId === targetNode!.id);
                 const connectionsToRemove = outgoingConns.filter(c => {
                      const t = tempNodes.find(n => n.id === c.targetNodeId);
                      if (!t) return true;
@@ -364,6 +365,7 @@ export const handleAiMessage = async (nodeId: string, text: string, context: AiC
     if (!node) return;
     
     // AUTHORITY EXPANSION
+    // We only traverse nodes that are actually connected. Unconnected nodes are ignored.
     const relatedNodes = getRelatedNodes(nodeId, state.nodes, state.connections);
     const allContextNodeIds = Array.from(new Set([
         ...relatedNodes.map(n => n.id), 
@@ -384,7 +386,10 @@ export const handleAiMessage = async (nodeId: string, text: string, context: AiC
     dispatch({ type: 'ADD_MESSAGE', payload: { id: nodeId, message: { role: 'user', text } } });
     nodesToLock.forEach(id => dispatch({ type: 'SET_NODE_LOADING', payload: { id, isLoading: true } }));
 
-    const structureContext = state.nodes
+    // CRITICAL: Filter state.nodes to ONLY those in allContextNodeIds to prevent contamination
+    const nodesInContext = state.nodes.filter(n => allContextNodeIds.includes(n.id));
+
+    const structureContext = nodesInContext
       .filter(n => n.type === 'CODE' || n.type === 'IMAGE' || n.type === 'TEXT' || n.type === 'FOLDER')
       .map(n => {
           if (n.type === 'FOLDER') return `[FOLDER] ${n.title}`;
@@ -452,13 +457,20 @@ export const handleAiGeneration = async (
     const startNode = state.nodes.find(n => n.id === nodeId);
     if (!startNode || startNode.type !== 'CODE' || !checkPermission(nodeId)) return;
     
+    // Strict Context Isolation: Only Traverse Connected Nodes
     const relatedNodes = getRelatedNodes(nodeId, state.nodes, state.connections);
-    const targetNodes = relatedNodes.filter(n => n.type === 'CODE' || n.type === 'FOLDER');
+    const relatedIds = new Set(relatedNodes.map(n => n.id));
+    relatedIds.add(nodeId); // Ensure start node is included
+
+    // Filter the global node list to ONLY relevant nodes
+    const nodesInContext = state.nodes.filter(n => relatedIds.has(n.id));
+    
+    const targetNodes = nodesInContext.filter(n => n.type === 'CODE' || n.type === 'FOLDER');
     
     targetNodes.forEach(n => dispatch({ type: 'SET_NODE_LOADING', payload: { id: n.id, isLoading: true } }));
     
     try {
-        const structureContext = state.nodes
+        const structureContext = nodesInContext
           .filter(n => n.type === 'CODE' || n.type === 'IMAGE' || n.type === 'TEXT' || n.type === 'FOLDER')
           .map(n => {
               const path = getNodePath(n, state.nodes, state.connections);
@@ -466,13 +478,25 @@ export const handleAiGeneration = async (
           })
           .join('\n');
 
+        // IMPORTANT: Inject Content of Connected Files
+        // Without this, the AI hallucinates because it can't see the code it's supposed to use.
+        const fileContext = nodesInContext
+            .filter(n => n.type === 'CODE')
+            .map(n => {
+                const path = getNodePath(n, state.nodes, state.connections);
+                return `File Path: ${path}\nContent:\n${n.content}`;
+            })
+            .join('\n\n');
+
         const dynamicSystemInstruction = `${SYSTEM_INSTRUCTIONS}
 
-        CURRENT PROJECT FILES (Structural Context):
+        CURRENT PROJECT FILES (Structural Context - Connected Nodes Only):
         ${structureContext}
         `;
 
-        const userPrompt = action === 'optimize' ? `Optimize the file ${startNode.title}.` : `Request: ${promptText}\n\n(Focus on ${startNode.title}...)`;
+        const userPrompt = action === 'optimize' 
+            ? `Optimize the file ${startNode.title}.` 
+            : `Request: ${promptText}\n\n(Focus on ${startNode.title}...)\n\nCONTEXTUAL FILE CONTENTS:\n${fileContext}`;
 
         await performGeminiCall(async (ai) => {
              const result = await ai.models.generateContent({ 
