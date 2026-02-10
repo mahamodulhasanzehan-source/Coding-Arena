@@ -312,12 +312,18 @@ export const compilePreview = (
         
         function send(type, args) {
             try {
-                // Filter out some noise if necessary, but generally send everything
+                // Safe serialization to prevent cyclic error issues
                 const message = args.map(arg => {
                     if (arg === undefined) return 'undefined';
                     if (arg === null) return 'null';
                     if (arg instanceof Error) return arg.toString();
-                    if (typeof arg === 'object') return JSON.stringify(arg);
+                    if (typeof arg === 'object') {
+                        try {
+                            return JSON.stringify(arg);
+                        } catch(e) {
+                            return '[Object]';
+                        }
+                    }
                     return String(arg);
                 }).join(' ');
                 
@@ -329,7 +335,14 @@ export const compilePreview = (
                     timestamp: Date.now()
                 }, '*');
             } catch (e) {
-                console.warn('Failed to send log to parent', e);
+                // If everything fails, send a simple string
+                window.parent.postMessage({
+                    source: 'preview-iframe',
+                    nodeId: PREVIEW_ID,
+                    type: 'error',
+                    message: 'Logging Error: ' + e.message,
+                    timestamp: Date.now()
+                }, '*');
             }
         }
 
@@ -344,7 +357,7 @@ export const compilePreview = (
         console.info = function(...args) { oldInfo.apply(console, args); send('info', args); };
         
         window.addEventListener('error', function(event) {
-           send('error', [event.message + ' (' + event.filename + ':' + event.lineno + ')']);
+           send('error', [event.message + ' (' + (event.filename || 'script') + ':' + event.lineno + ')']);
         });
 
         window.addEventListener('unhandledrejection', function(event) {
@@ -431,3 +444,4 @@ export const compilePreview = (
     </html>
   `;
 };
+        

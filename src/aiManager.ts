@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, FunctionDeclaration, Type, Tool } from "@google/genai";
 import { NodeData, GraphState, Action, Connection } from './types';
 import { getRelatedNodes } from './utils/graphUtils';
@@ -6,31 +7,25 @@ import { getRelatedNodes } from './utils/graphUtils';
 declare const process: any;
 
 // --- 1. THE BRAIN: System Instructions ---
-const SYSTEM_INSTRUCTIONS = `You are a coding assistant in NodeCode Studio.
+const SYSTEM_INSTRUCTIONS = `You are an expert full-stack coding assistant in NodeCode Studio.
 
-RULES:
-1. To EDIT content, use 'updateFile'. 
-   - You can specify a path like 'folder/file.ext'.
-   - If a folder path is provided, the file will be automatically wired into that folder.
-   - If the file exists, its content is updated.
-2. To MOVE or REWIRE a file into a folder, use 'moveFile(filename, folderName)'. 
-   - This operates on EXISTING files.
-   - It performs a "Cut and Paste" in the graph: it UNPLUGS the file from its current code/folder parents and PLUGS it into the new target folder.
-   - Use this for requests like "Move JS files to components" or "Rewire these to the folder".
-   - To move to root, leave targetFolderName empty.
-   - You can call this multiple times to move multiple files.
-3. To WIRE dependencies manually, use 'connectFiles(sourceName, targetName)'.
-   - Use this to link a file (source) to another file (target) that imports it.
-   - IMPORTANT: If targetName is a FOLDER, this acts like a Move: it disconnects the source from old parents.
-4. To RENAME a file, use 'renameFile(oldName, newName)'.
-   - Renaming only changes the Title.
-5. BATCH OPERATIONS:
-   - You can return multiple tool calls in a single response.
-   - If asked to "Move all JS files to src", call 'moveFile' for each JS file.
+CRITICAL RULES:
+1. **NEVER DELETE FILES** unless the user explicitly asks to "delete" or "remove" a specific file. 
+   - Prefer updating existing files over deleting and recreating them.
+   - If a file exists, use 'updateFile' to modify it.
+2. **WRITE COMPLETE CODE**:
+   - Do not use placeholders like "// ... rest of code".
+   - Write fully functional, interactive, and polished code.
+   - Ensure HTML/CSS/JS are properly linked and functional.
+3. **FILE OPERATIONS**:
+   - To EDIT content, use 'updateFile'. Supports paths (e.g., 'folder/file.ext').
+   - To MOVE/REWIRE, use 'moveFile(filename, folderName)'.
+   - To WIRE dependencies, use 'connectFiles(sourceName, targetName)'.
+   - To RENAME, use 'renameFile(oldName, newName)'.
 
 FOLDER STRUCTURE:
    - Files connected to a "Folder Node" are conceptually inside it.
-   - Paths are resolved visually: 'components/Button.tsx' means Button.tsx node is wired to components Folder node.
+   - Paths are resolved visually.
 `;
 
 // --- 2. THE HANDS: Tool Definitions ---
@@ -49,7 +44,7 @@ const updateCodeFunction: FunctionDeclaration = {
 
 const deleteFileFunction: FunctionDeclaration = {
     name: 'deleteFile',
-    description: 'Delete a file (node) from the project.',
+    description: 'Delete a file (node) from the project. ONLY use if explicitly requested by user.',
     parameters: {
         type: Type.OBJECT,
         properties: {
@@ -479,7 +474,6 @@ export const handleAiGeneration = async (
           .join('\n');
 
         // IMPORTANT: Inject Content of Connected Files
-        // Without this, the AI hallucinates because it can't see the code it's supposed to use.
         const fileContext = nodesInContext
             .filter(n => n.type === 'CODE')
             .map(n => {
@@ -496,7 +490,7 @@ export const handleAiGeneration = async (
 
         const userPrompt = action === 'optimize' 
             ? `Optimize the file ${startNode.title}.` 
-            : `Request: ${promptText}\n\n(Focus on ${startNode.title}...)\n\nCONTEXTUAL FILE CONTENTS:\n${fileContext}`;
+            : `Request: ${promptText}\n\nIMPORTANT: Write complete, functional code for this request. Do not use placeholders. Modify connected files if needed.\n\nCONTEXTUAL FILE CONTENTS:\n${fileContext}`;
 
         await performGeminiCall(async (ai) => {
              const result = await ai.models.generateContent({ 
@@ -523,3 +517,4 @@ export const handleAiGeneration = async (
         targetNodes.forEach(n => dispatch({ type: 'SET_NODE_LOADING', payload: { id: n.id, isLoading: false } })); 
     }
 };
+        

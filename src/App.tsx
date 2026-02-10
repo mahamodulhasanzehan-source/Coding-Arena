@@ -1,4 +1,3 @@
-
 import React, { useReducer, useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { Node } from './components/Node';
 import { Wire } from './components/Wire';
@@ -1217,6 +1216,17 @@ export default function App() {
                             .map(c => state.nodes.find(n => n.id === c.sourceNodeId)?.title)
                             .filter((t): t is string => !!t);
                     }
+
+                    // Calculate Collaborator Info
+                    const interactingCollaborator = state.collaborators.find(c => 
+                        (c.draggingNodeId === node.id || c.editingNodeId === node.id) && c.id !== sessionId
+                    );
+                    
+                    const collabInfo = interactingCollaborator ? {
+                        name: 'Remote User',
+                        color: interactingCollaborator.color,
+                        action: interactingCollaborator.draggingNodeId === node.id ? 'dragging' as const : 'editing' as const
+                    } : undefined;
                     
                     return (
                         <div key={node.id} onContextMenu={(e) => { e.stopPropagation(); handleContextMenu(e, node.id); }}>
@@ -1227,6 +1237,8 @@ export default function App() {
                                 isRunning={state.runningPreviewIds.includes(node.id)}
                                 isMaximized={false}
                                 scale={state.zoom}
+                                pan={state.pan}
+                                collaboratorInfo={collabInfo}
                                 isConnected={isConnected}
                                 onMove={handleNodeMove}
                                 onDragEnd={handleNodeDragEnd}
@@ -1284,6 +1296,7 @@ export default function App() {
                   isRunning={state.runningPreviewIds.includes(maximizedNode.id)}
                   isMaximized={true}
                   scale={1}
+                  pan={{x: 0, y: 0}}
                   isConnected={() => false}
                   onMove={() => {}}
                   onResize={() => {}}

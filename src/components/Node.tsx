@@ -13,6 +13,7 @@ interface NodeProps {
   isRunning?: boolean;
   isMaximized?: boolean; 
   scale: number;
+  pan: Position; // Needed for maximized offset calculation
   isConnected: (portId: string) => boolean;
   onMove: (id: string, pos: Position) => void;
   onResize: (id: string, size: Size) => void;
@@ -48,6 +49,7 @@ export const Node = React.memo<NodeProps>(({
   isRunning = false,
   isMaximized = false,
   scale,
+  pan,
   isConnected,
   onMove,
   onResize,
@@ -542,16 +544,17 @@ export const Node = React.memo<NodeProps>(({
       borderClass = 'border-indigo-500/50';
   }
 
+  // MAXIMIZATION: Counter-transform to fill viewport while staying in component tree
   const maximizedStyle = isMaximized ? {
-      position: 'fixed' as const,
-      top: 0,
-      left: 0,
-      width: '100vw',
-      height: '100vh',
+      position: 'absolute' as const,
+      top: `${-pan.y / scale}px`,
+      left: `${-pan.x / scale}px`,
+      width: `calc(100vw / ${scale})`,
+      height: `calc(100vh / ${scale})`,
       zIndex: 9999,
-      transform: 'none',
-      borderRadius: 0,
+      transform: 'none', // Reset node's own position transform
       borderWidth: 0,
+      borderRadius: 0,
   } : {
       transform: `translate(${data.position.x}px, ${data.position.y}px)`,
       width: data.isMinimized ? 'auto' : data.size.width, 
@@ -582,16 +585,6 @@ export const Node = React.memo<NodeProps>(({
       onContextMenu={(e) => e.preventDefault()}
     >
       {shimmerOverlay}
-
-      {collaboratorInfo && !isMaximized && (
-          <div 
-            className="absolute -top-6 right-0 px-2 py-0.5 rounded text-[10px] font-bold text-white shadow-md flex items-center gap-1 z-50 animate-in fade-in slide-in-from-bottom-2"
-            style={{ backgroundColor: collaboratorInfo.color }}
-          >
-              <User size={10} />
-              {collaboratorInfo.name} {collaboratorInfo.action === 'editing' ? 'is typing...' : 'is moving...'}
-          </div>
-      )}
 
       {/* Header */}
       <div className={`h-10 flex items-center justify-between px-3 border-b border-panelBorder bg-zinc-900/50 rounded-t-lg select-none shrink-0 relative z-10 gap-3 ${data.isMinimized ? 'rounded-b-lg border-b-0' : ''}`}>
@@ -636,17 +629,6 @@ export const Node = React.memo<NodeProps>(({
         </div>
         
         <div className="flex items-center gap-1 shrink-0">
-            {data.type === 'FOLDER' && (
-                <button
-                    onClick={handleToggleMinimize}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    className="nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 text-zinc-400 hover:text-white hover:bg-zinc-800 active:scale-90 transition-transform"
-                    title={data.isMinimized ? "Expand" : "Collapse"}
-                >
-                     {data.isMinimized ? <Square size={14} /> : <Minus size={14} />}
-                </button>
-            )}
-
            {data.type === 'CODE' && (
               <div className="flex items-center gap-1">
                  <button
@@ -710,52 +692,49 @@ export const Node = React.memo<NodeProps>(({
               >
                   {isRunning ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
               </button>
-              <button 
-                  onClick={handleToggleMaximize}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  className="nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 text-zinc-400 hover:text-white hover:bg-zinc-800 active:scale-90 transition-transform"
-                  title={isMaximized ? "Minimize" : "Maximize"}
+            </div>
+          )}
+
+          {data.type !== 'CODE' && (
+              <button
+                onClick={handleToggleMaximize}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="nodrag p-1.5 rounded transition-colors cursor-pointer relative z-10 text-zinc-400 hover:text-white hover:bg-zinc-800 active:scale-90 transition-transform"
+                title={isMaximized ? "Restore" : "Maximize"}
               >
                   {isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
               </button>
-            </div>
           )}
         </div>
       </div>
 
+       {/* Floating Prompt Input */}
        {isPromptOpen && (
-          <div className="px-2 pt-2 pb-1 bg-zinc-900/95 backdrop-blur border-b border-panelBorder animate-in slide-in-from-top-2 duration-200 z-30 nodrag shadow-xl">
+          <div className="px-2 pt-2 pb-1 bg-zinc-900/90 backdrop-blur border-b border-panelBorder animate-in slide-in-from-top-2 duration-200 z-30 nodrag">
               <div className="relative">
                   <textarea
                     ref={promptInputRef}
                     value={promptText}
                     onChange={(e) => setPromptText(e.target.value)}
                     onKeyDown={handlePromptKeyDown}
-                    placeholder="Describe how to change this code..."
-                    className="w-full bg-zinc-950 border border-blue-500/30 rounded-md p-2 text-xs font-medium text-zinc-200 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none custom-scrollbar"
+                    placeholder="Type instructions... (Shift+Enter for new line)"
+                    className="w-full bg-zinc-950 border border-blue-500/30 rounded-md p-2 text-xs text-zinc-200 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none custom-scrollbar"
                     style={{ minHeight: '60px' }}
                     onPointerDown={(e) => e.stopPropagation()}
                   />
                   <button 
                     onClick={submitPrompt}
-                    className="absolute bottom-2 right-2 p-1 bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors active:scale-90 transition-transform"
+                    className="absolute bottom-2 right-2 p-1 bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors"
                     title="Generate"
                   >
                       <ArrowRight size={12} />
-                  </button>
-                  <button
-                    onClick={() => setIsPromptOpen(false)}
-                    className="absolute top-[-2px] right-[-2px] p-1 text-zinc-500 hover:text-zinc-300 active:scale-90 transition-transform"
-                    title="Close"
-                  >
-                      <X size={10} />
                   </button>
               </div>
           </div>
       )}
 
       {/* Content Area */}
-      <div className={`flex-1 relative group nodrag flex flex-col min-h-0 overflow-hidden ${data.isLoading ? 'pointer-events-none opacity-80' : ''} ${data.isMinimized ? 'hidden' : ''}`}>
+      <div className={`flex-1 relative group nodrag flex flex-col min-h-0 overflow-hidden ${data.isMinimized ? 'hidden' : ''}`}>
         {data.type === 'CODE' ? (
             <div className="w-full h-full bg-[#1e1e1e]" onPointerDown={(e) => e.stopPropagation()}>
                  <MonacoEditor
@@ -770,128 +749,15 @@ export const Node = React.memo<NodeProps>(({
                         minimap: { enabled: true, scale: 0.5 },
                         fontSize: 13,
                         fontFamily: '"JetBrains Mono", monospace',
-                        fontWeight: '500', 
                         lineNumbers: 'on',
                         scrollBeyondLastLine: false,
                         automaticLayout: true,
                         tabSize: 2,
                         wordWrap: 'on',
                         padding: { top: 10, bottom: 10 },
-                        readOnly: data.isLoading,
-                        scrollbar: {
-                            vertical: 'auto',
-                            handleMouseWheel: true,
-                        },
-                        overviewRulerLanes: 0,
-                        hideCursorInOverviewRuler: true,
-                        overviewRulerBorder: false,
                     }}
                  />
             </div>
-        ) : data.type === 'IMAGE' ? (
-             <div 
-                className={`w-full h-full bg-[#1e1e1e] flex items-center justify-center relative overflow-hidden transition-colors ${isDragOver ? 'bg-zinc-800 ring-2 ring-indigo-500' : ''}`}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
-             >
-                {data.content ? (
-                    <img 
-                        src={data.content} 
-                        alt={data.title} 
-                        className="w-full h-full object-contain pointer-events-none select-none"
-                    />
-                ) : (
-                    <div className="flex flex-col items-center gap-2 text-zinc-500 font-medium pointer-events-none">
-                        <ImageIcon size={32} />
-                        <span className="text-xs">Drag image here</span>
-                    </div>
-                )}
-             </div>
-        ) : data.type === 'TEXT' ? (
-            <div className="w-full h-full bg-[#1e1e1e] overflow-hidden flex flex-col relative" onPointerDown={(e) => e.stopPropagation()}>
-                {isEditingText ? (
-                    <>
-                        <textarea
-                            ref={textEditorRef}
-                            className="w-full h-full bg-[#1e1e1e] text-zinc-300 p-4 font-sans text-sm resize-none focus:outline-none custom-scrollbar pb-10"
-                            value={data.content}
-                            onChange={(e) => onUpdateContent?.(data.id, e.target.value)}
-                            onBlur={() => setIsEditingText(false)}
-                            onKeyDown={handleTextKeyDown}
-                            placeholder="Write your note here... (Markdown supported)"
-                        />
-                         <button 
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={() => setIsEditingText(false)}
-                            className="absolute bottom-2 right-2 p-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-full transition-colors shadow-lg z-10"
-                            title="Save Note"
-                        >
-                            <Check size={12} />
-                        </button>
-                    </>
-                ) : (
-                    <div 
-                        className="w-full h-full p-4 overflow-y-auto custom-scrollbar prose prose-invert prose-sm max-w-none select-text"
-                        onDoubleClick={() => setIsEditingText(true)}
-                        title="Double-click to edit"
-                    >
-                        {data.content ? (
-                            <Markdown 
-                                options={{
-                                    overrides: {
-                                        a: {
-                                            component: ({ children, href, ...props }) => (
-                                                <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline" {...props}>{children}</a>
-                                            )
-                                        },
-                                        code: {
-                                            component: ({ children, className, ...props }) => (
-                                                <code className={`${className} bg-zinc-800 px-1 py-0.5 rounded text-xs font-mono text-amber-200`} {...props}>{children}</code>
-                                            )
-                                        },
-                                        pre: {
-                                            component: ({ children, ...props }) => (
-                                                <pre className="bg-zinc-900 p-2 rounded-md overflow-x-auto text-xs my-2 border border-zinc-800" {...props}>{children}</pre>
-                                            )
-                                        }
-                                    }
-                                }}
-                            >
-                                {data.content}
-                            </Markdown>
-                        ) : (
-                            <div className="text-zinc-600 italic">Double-click to edit...</div>
-                        )}
-                    </div>
-                )}
-                {!isEditingText && (
-                    <button 
-                        onClick={() => setIsEditingText(true)}
-                        className="absolute bottom-2 right-2 p-1.5 bg-zinc-800/80 hover:bg-zinc-700 text-zinc-400 rounded-full transition-colors opacity-0 group-hover:opacity-100"
-                        title="Edit Note"
-                    >
-                        <Pencil size={12} />
-                    </button>
-                )}
-            </div>
-        ) : data.type === 'FOLDER' ? (
-             <div className="w-full h-full bg-[#1e1e1e] overflow-y-auto custom-scrollbar p-2" onPointerDown={(e) => e.stopPropagation()}>
-                 <div className="flex flex-col gap-1">
-                     {folderContents && folderContents.length > 0 ? (
-                         folderContents.map((fileName, idx) => (
-                             <div key={idx} className="flex items-center gap-2 p-1.5 rounded bg-zinc-800/50 border border-zinc-700/50 text-xs text-zinc-300">
-                                 <File size={12} className="text-zinc-500" />
-                                 <span className="truncate">{fileName}</span>
-                             </div>
-                         ))
-                     ) : (
-                         <div className="text-zinc-600 text-xs italic text-center mt-4">
-                             Connect files to the Input port to add them to this folder.
-                         </div>
-                     )}
-                 </div>
-             </div>
         ) : data.type === 'NPM' ? (
              <div className="flex flex-col h-full bg-zinc-900/50">
                  <div className="p-3 border-b border-panelBorder flex gap-2">
@@ -899,7 +765,7 @@ export const Node = React.memo<NodeProps>(({
                         <Search size={14} className="absolute left-2.5 top-2.5 text-zinc-500" />
                         <input 
                             type="text" 
-                            className="w-full bg-zinc-950 border border-zinc-700 rounded pl-8 pr-2 py-2 text-xs font-medium text-white focus:outline-none focus:border-red-500"
+                            className="w-full bg-zinc-950 border border-zinc-700 rounded pl-8 pr-2 py-2 text-xs text-white focus:outline-none focus:border-red-500"
                             placeholder="Search npm..."
                             value={npmQuery}
                             onChange={(e) => setNpmQuery(e.target.value)}
@@ -909,7 +775,7 @@ export const Node = React.memo<NodeProps>(({
                      </div>
                      <button 
                         onClick={searchNpm} 
-                        className="bg-red-600 hover:bg-red-500 text-white p-2 rounded transition-colors active:scale-90 transition-transform"
+                        className="bg-red-600 hover:bg-red-500 text-white p-2 rounded transition-colors"
                         disabled={isSearchingNpm}
                         onPointerDown={(e) => e.stopPropagation()}
                      >
@@ -921,11 +787,11 @@ export const Node = React.memo<NodeProps>(({
                          <div key={pkg.package.name} className="bg-zinc-800 p-2 rounded border border-zinc-700 hover:border-zinc-500 transition-colors flex justify-between items-start group">
                              <div>
                                  <div className="font-bold text-zinc-200 text-xs">{pkg.package.name}</div>
-                                 <div className="text-[10px] text-zinc-500 font-medium truncate max-w-[160px]">{pkg.package.description}</div>
+                                 <div className="text-[10px] text-zinc-500 truncate max-w-[160px]">{pkg.package.description}</div>
                              </div>
                              <button 
                                 onClick={() => handleInjectPackage(pkg.package.name)}
-                                className="p-1.5 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded transition-colors active:scale-90 transition-transform"
+                                className="p-1.5 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded transition-colors"
                                 title="Inject Import into connected Code"
                                 onPointerDown={(e) => e.stopPropagation()}
                              >
@@ -934,7 +800,7 @@ export const Node = React.memo<NodeProps>(({
                          </div>
                      ))}
                      {npmResults.length === 0 && !isSearchingNpm && (
-                         <div className="text-center text-zinc-600 text-xs font-medium mt-10 italic">
+                         <div className="text-center text-zinc-600 text-xs mt-10 italic">
                              Search for packages to add imports.
                          </div>
                      )}
@@ -943,42 +809,30 @@ export const Node = React.memo<NodeProps>(({
         ) : data.type === 'TERMINAL' ? (
              <div 
                 ref={terminalContainerRef}
-                className="w-full h-full bg-black p-2 font-mono text-xs font-medium overflow-y-auto custom-scrollbar select-text nodrag"
+                className="w-full h-full bg-black p-2 font-mono text-xs overflow-y-auto custom-scrollbar select-text nodrag"
                 onPointerDown={(e) => e.stopPropagation()} 
              >
                 {(!logs || logs.length === 0) ? (
                     <span className="text-zinc-600 italic">Waiting for logs...</span>
                 ) : (
                     logs.map((log, i) => (
-                        <div key={i} className={`group flex items-start justify-between mb-1 border-b border-zinc-900 pb-0.5 animate-in fade-in slide-in-from-left-1 ${
+                        <div key={i} className={`mb-1 border-b border-zinc-900 pb-0.5 animate-in fade-in slide-in-from-left-1 ${
                             log.type === 'error' ? 'text-red-400' : 
                             log.type === 'warn' ? 'text-yellow-400' : 
                             'text-zinc-300'
                         }`}>
-                            <div className="break-all">
-                                <span className="text-zinc-600 mr-2">[{new Date(log.timestamp).toLocaleTimeString()}]</span>
-                                {log.message}
-                            </div>
-                            {log.type === 'error' && onFixError && (
-                                <button
-                                    onClick={() => onFixError(data.id, log.message)}
-                                    className="opacity-0 group-hover:opacity-100 p-1 bg-zinc-800 hover:bg-blue-600 text-zinc-400 hover:text-white rounded ml-2 transition-all flex items-center gap-1 shrink-0 active:scale-90"
-                                    title="Fix with AI"
-                                    onPointerDown={(e) => e.stopPropagation()}
-                                >
-                                    <Sparkles size={12} />
-                                    <span className="text-[10px] font-bold">Fix</span>
-                                </button>
-                            )}
+                            <span className="text-zinc-600 mr-2">[{new Date(log.timestamp).toLocaleTimeString()}]</span>
+                            {log.message}
                         </div>
                     ))
                 )}
              </div>
         ) : data.type === 'AI_CHAT' ? (
              <div className="flex flex-col h-full bg-zinc-950">
+                 {/* Chat History */}
                  <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-3 space-y-3 custom-scrollbar">
                      {(!data.messages || data.messages.length === 0) && (
-                         <div className="text-center text-zinc-600 text-xs font-medium mt-10">
+                         <div className="text-center text-zinc-600 text-xs mt-10">
                              <Bot size={24} className="mx-auto mb-2 opacity-50" />
                              <p>Ask me anything about your code.</p>
                          </div>
@@ -990,7 +844,7 @@ export const Node = React.memo<NodeProps>(({
                              }`}>
                                  {msg.role === 'user' ? <User size={14} /> : <Bot size={14} />}
                              </div>
-                             <div className={`p-2 rounded-lg text-xs font-medium whitespace-pre-wrap max-w-[85%] ${
+                             <div className={`p-2 rounded-lg text-xs whitespace-pre-wrap max-w-[85%] ${
                                  msg.role === 'user' 
                                     ? 'bg-zinc-800 text-zinc-200' 
                                     : 'bg-indigo-900/30 text-indigo-100 border border-indigo-500/20'
@@ -1015,11 +869,12 @@ export const Node = React.memo<NodeProps>(({
                      )}
                  </div>
                  
+                 {/* Input Area */}
                  <div className="p-2 border-t border-zinc-800 bg-zinc-900/50">
                      {(data.contextNodeIds?.length || 0) > 0 && (
                          <div className="flex flex-wrap gap-1 mb-2 px-1">
                              {data.contextNodeIds!.map(nodeId => (
-                                 <div key={nodeId} className="flex items-center gap-1 bg-amber-500/10 text-amber-500 text-[10px] font-bold px-1.5 py-0.5 rounded border border-amber-500/20">
+                                 <div key={nodeId} className="flex items-center gap-1 bg-amber-500/10 text-amber-500 text-[10px] px-1.5 py-0.5 rounded border border-amber-500/20">
                                      <FileCode size={10} />
                                      <span>File Selected</span> 
                                  </div>
@@ -1030,7 +885,7 @@ export const Node = React.memo<NodeProps>(({
                      <div className="relative flex items-center gap-2">
                         <button 
                             onClick={(e) => { e.stopPropagation(); onStartContextSelection?.(data.id); }}
-                            className="p-1.5 rounded bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700 transition-colors shrink-0 active:scale-90 transition-transform"
+                            className="p-1.5 rounded bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700 transition-colors shrink-0"
                             title="Select files for context"
                             onPointerDown={(e) => e.stopPropagation()}
                             disabled={data.isLoading}
@@ -1043,13 +898,13 @@ export const Node = React.memo<NodeProps>(({
                             onChange={(e) => setChatInput(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && handleSendChat()}
                             placeholder={data.isLoading ? "Thinking..." : "Ask Gemini..."}
-                            className="flex-1 bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-xs font-medium text-white focus:outline-none focus:border-indigo-500 transition-colors nodrag select-text disabled:opacity-50"
+                            className="flex-1 bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 transition-colors nodrag select-text disabled:opacity-50"
                             onPointerDown={(e) => e.stopPropagation()}
                             disabled={data.isLoading}
                         />
                         <button 
                             onClick={(e) => { e.stopPropagation(); handleSendChat(); }}
-                            className={`p-1.5 rounded text-white transition-colors shrink-0 flex items-center justify-center active:scale-90 transition-transform ${
+                            className={`p-1.5 rounded text-white transition-colors shrink-0 flex items-center justify-center ${
                                 data.isLoading ? 'bg-indigo-600/50 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-500'
                             }`}
                             onPointerDown={(e) => e.stopPropagation()}
@@ -1060,72 +915,134 @@ export const Node = React.memo<NodeProps>(({
                      </div>
                  </div>
              </div>
-        ) : (
-            // PREVIEW NODE LOGIC
-            <div className="w-full h-full bg-[#1e1e1e] relative">
-               {isRunning ? (
-                 <iframe
-                    id={`preview-iframe-${data.id}`}
-                    title="preview"
-                    className="w-full h-full bg-white nodrag"
-                    // ADDED allow-same-origin to allow blob url loading
-                    sandbox="allow-scripts allow-modals allow-pointer-lock allow-forms allow-same-origin"
-                    onPointerDown={(e) => e.stopPropagation()}
-                 />
-               ) : (
-                 <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/50 text-zinc-500 select-none">
-                     <div className="text-center">
-                        <Play size={48} className="mx-auto mb-2 opacity-20" />
-                        <p className="text-sm font-medium">Preview Stopped</p>
-                        <p className="text-[10px] opacity-60">Click Run to start</p>
-                     </div>
-                 </div>
-               )}
+        ) : data.type === 'IMAGE' ? (
+            <div 
+                className={`w-full h-full bg-zinc-950 flex flex-col items-center justify-center relative overflow-hidden transition-colors ${
+                    isDragOver ? 'bg-indigo-500/20 border-2 border-dashed border-indigo-500' : ''
+                }`}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+            >
+                {data.content ? (
+                    <img src={data.content} alt={data.title} className="max-w-full max-h-full object-contain pointer-events-none" />
+                ) : (
+                    <div className="text-zinc-600 text-center pointer-events-none">
+                        <ImageIcon size={32} className="mx-auto mb-2 opacity-50" />
+                        <p className="text-xs">Drag & Drop Image</p>
+                    </div>
+                )}
             </div>
+        ) : data.type === 'TEXT' ? (
+            <div className="w-full h-full bg-zinc-900 overflow-hidden flex flex-col group/text">
+                {isEditingText ? (
+                    <textarea
+                        ref={textEditorRef}
+                        className="flex-1 w-full h-full bg-zinc-900 p-4 text-sm text-zinc-200 focus:outline-none resize-none font-mono"
+                        value={data.content}
+                        onChange={(e) => onUpdateContent?.(data.id, e.target.value)}
+                        onBlur={() => setIsEditingText(false)}
+                        onKeyDown={handleTextKeyDown}
+                        placeholder="# Title..."
+                        onPointerDown={(e) => e.stopPropagation()}
+                    />
+                ) : (
+                    <div 
+                        className="flex-1 w-full h-full p-4 overflow-y-auto custom-scrollbar prose prose-invert prose-sm max-w-none select-text"
+                        onDoubleClick={() => setIsEditingText(true)}
+                        onPointerDown={(e) => e.stopPropagation()}
+                    >
+                        {data.content ? (
+                            <Markdown options={{ forceBlock: true }}>{data.content}</Markdown>
+                        ) : (
+                            <p className="text-zinc-600 italic">Double-click to edit...</p>
+                        )}
+                    </div>
+                )}
+                {!isEditingText && (
+                    <button 
+                        onClick={() => setIsEditingText(true)}
+                        className="absolute bottom-3 right-3 p-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 rounded-full shadow-lg opacity-0 group-hover/text:opacity-100 transition-opacity"
+                    >
+                        <Pencil size={14} />
+                    </button>
+                )}
+            </div>
+        ) : data.type === 'FOLDER' ? (
+            <div className="w-full h-full bg-zinc-900/50 p-2 overflow-y-auto custom-scrollbar">
+                {folderContents && folderContents.length > 0 ? (
+                    <div className="grid grid-cols-2 gap-2">
+                        {folderContents.map((fileName, idx) => (
+                            <div key={idx} className="flex flex-col items-center justify-center p-2 bg-zinc-800/50 rounded hover:bg-zinc-700/50 transition-colors text-center group/file cursor-default">
+                                <div className="w-8 h-8 flex items-center justify-center bg-zinc-900 rounded mb-1 text-zinc-500 group-hover/file:text-zinc-300 transition-colors">
+                                    <File size={16} />
+                                </div>
+                                <span className="text-[10px] text-zinc-400 truncate w-full px-1">{fileName}</span>
+                            </div>
+                        ))}
+                    </div>
+                ) : (
+                    <div className="flex flex-col items-center justify-center h-full text-zinc-600 gap-2 opacity-50">
+                        <Folder size={32} />
+                        <span className="text-xs">Empty Folder</span>
+                    </div>
+                )}
+            </div>
+        ) : (
+             <iframe
+                id={`preview-iframe-${data.id}`}
+                title="preview"
+                className="w-full h-full bg-white nodrag"
+                sandbox="allow-scripts allow-same-origin allow-modals"
+                onPointerDown={(e) => e.stopPropagation()}
+            />
         )}
       </div>
 
-      {/* Inputs (Left) - Hidden when maximized */}
-      {!isMaximized && (
-      <div 
-        className={`absolute -left-3 flex flex-col gap-[28px] pointer-events-none transition-all duration-200 ease-out`}
-        style={{ top: data.isMinimized ? '14px' : '52px' }}
-      >
+      {/* Inputs (Left) */}
+      <div className={`absolute top-[52px] -left-3 flex flex-col gap-[28px] pointer-events-none ${data.isMinimized ? 'hidden' : ''}`}>
         {inputs.map((port) => {
             const connected = isConnected(port.id);
             return (
-              <div key={port.id} className="relative group flex items-center h-3 pointer-events-auto" title={port.label}>
+              <div 
+                key={port.id} 
+                className="relative group flex items-center h-3 pointer-events-auto"
+                title={port.label}
+              >
                 <div 
-                  className={`w-3 h-3 border border-zinc-900 rounded-full transition-all cursor-crosshair nodrag ${connected ? 'bg-yellow-500' : 'bg-zinc-600 hover:bg-zinc-400'}`}
+                  className={`w-3 h-3 border border-zinc-900 rounded-full transition-all cursor-crosshair nodrag ${
+                    connected ? 'bg-yellow-500' : 'bg-zinc-600 hover:bg-zinc-400'
+                  }`}
                   onPointerDown={(e) => onPortDown(e, port.id, data.id, true)}
                   onContextMenu={(e) => onPortContextMenu(e, port.id)}
                   data-port-id={port.id}
                   data-node-id={data.id}
                 />
-                <span className="absolute left-4 text-[10px] font-bold text-zinc-400 uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity bg-black/90 border border-zinc-800 px-1.5 py-0.5 rounded pointer-events-none whitespace-nowrap z-50">
+                <span className="absolute left-4 text-[10px] text-zinc-500 uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity bg-black/80 px-1 rounded pointer-events-none whitespace-nowrap z-50">
                   {port.label}
                 </span>
               </div>
             );
         })}
       </div>
-      )}
-      
-      {/* Outputs (Right) - Hidden when maximized */}
-      {!isMaximized && (
-      <div 
-        className={`absolute -right-3 flex flex-col gap-[28px] pointer-events-none transition-all duration-200 ease-out`}
-        style={{ top: data.isMinimized ? '14px' : '52px' }}
-      >
+
+      {/* Outputs (Right) */}
+      <div className={`absolute top-[52px] -right-3 flex flex-col gap-[28px] pointer-events-none ${data.isMinimized ? 'hidden' : ''}`}>
         {outputs.map((port) => {
             const connected = isConnected(port.id);
             return (
-              <div key={port.id} className="relative group flex items-center justify-end h-3 pointer-events-auto" title={port.label}>
-                 <span className="absolute right-4 text-[10px] font-bold text-zinc-400 uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity bg-black/90 border border-zinc-800 px-1.5 py-0.5 rounded pointer-events-none whitespace-nowrap z-50">
+              <div 
+                key={port.id} 
+                className="relative group flex items-center justify-end h-3 pointer-events-auto"
+                title={port.label}
+              >
+                 <span className="absolute right-4 text-[10px] text-zinc-500 uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity bg-black/80 px-1 rounded pointer-events-none whitespace-nowrap z-50">
                   {port.label}
                 </span>
                 <div 
-                  className={`w-3 h-3 border border-zinc-900 rounded-full transition-all cursor-crosshair nodrag ${connected ? 'bg-yellow-500' : 'bg-zinc-600 hover:bg-zinc-400'}`}
+                  className={`w-3 h-3 border border-zinc-900 rounded-full transition-all cursor-crosshair nodrag ${
+                    connected ? 'bg-yellow-500' : 'bg-zinc-600 hover:bg-zinc-400'
+                  }`}
                   onPointerDown={(e) => onPortDown(e, port.id, data.id, false)}
                   onContextMenu={(e) => onPortContextMenu(e, port.id)}
                   data-port-id={port.id}
@@ -1135,11 +1052,11 @@ export const Node = React.memo<NodeProps>(({
             );
         })}
       </div>
-      )}
-      
+
+      {/* Resize Handle */}
       {!data.isMinimized && !isMaximized && (
           <div 
-            className={`absolute bottom-0 right-0 w-4 h-4 flex items-center justify-center opacity-50 hover:opacity-100 nodrag z-20 cursor-se-resize`}
+            className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize flex items-center justify-center opacity-50 hover:opacity-100 nodrag z-20"
             onPointerDown={handleResizePointerDown}
           >
             <div className="w-1.5 h-1.5 bg-zinc-500 rounded-full" />
