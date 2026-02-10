@@ -692,10 +692,6 @@ export const Node = React.memo<NodeProps>(({
               >
                   {isRunning ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
               </button>
-            </div>
-          )}
-
-          {data.type !== 'CODE' && (
               <button
                 onClick={handleToggleMaximize}
                 onPointerDown={(e) => e.stopPropagation()}
@@ -704,6 +700,7 @@ export const Node = React.memo<NodeProps>(({
               >
                   {isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
               </button>
+            </div>
           )}
         </div>
       </div>
@@ -971,13 +968,11 @@ export const Node = React.memo<NodeProps>(({
         ) : data.type === 'FOLDER' ? (
             <div className="w-full h-full bg-zinc-900/50 p-2 overflow-y-auto custom-scrollbar">
                 {folderContents && folderContents.length > 0 ? (
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="flex flex-col gap-1">
                         {folderContents.map((fileName, idx) => (
-                            <div key={idx} className="flex flex-col items-center justify-center p-2 bg-zinc-800/50 rounded hover:bg-zinc-700/50 transition-colors text-center group/file cursor-default">
-                                <div className="w-8 h-8 flex items-center justify-center bg-zinc-900 rounded mb-1 text-zinc-500 group-hover/file:text-zinc-300 transition-colors">
-                                    <File size={16} />
-                                </div>
-                                <span className="text-[10px] text-zinc-400 truncate w-full px-1">{fileName}</span>
+                            <div key={idx} className="flex items-center gap-2 p-2 bg-zinc-800/50 rounded hover:bg-zinc-700/50 transition-colors group/file cursor-default">
+                                <FileCode size={14} className="text-zinc-500 group-hover/file:text-zinc-300" />
+                                <span className="text-xs text-zinc-400 truncate w-full">{fileName}</span>
                             </div>
                         ))}
                     </div>
@@ -1000,7 +995,7 @@ export const Node = React.memo<NodeProps>(({
       </div>
 
       {/* Inputs (Left) */}
-      <div className={`absolute top-[52px] -left-3 flex flex-col gap-[28px] pointer-events-none ${data.isMinimized ? 'hidden' : ''}`}>
+      <div className="absolute top-[52px] -left-3 flex flex-col gap-[28px] pointer-events-none">
         {inputs.map((port) => {
             const connected = isConnected(port.id);
             return (
@@ -1027,7 +1022,7 @@ export const Node = React.memo<NodeProps>(({
       </div>
 
       {/* Outputs (Right) */}
-      <div className={`absolute top-[52px] -right-3 flex flex-col gap-[28px] pointer-events-none ${data.isMinimized ? 'hidden' : ''}`}>
+      <div className="absolute top-[52px] -right-3 flex flex-col gap-[28px] pointer-events-none">
         {outputs.map((port) => {
             const connected = isConnected(port.id);
             return (

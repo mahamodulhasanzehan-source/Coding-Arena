@@ -377,9 +377,6 @@ export default function App() {
 
   // --- Live Preview Re-compilation ---
   useEffect(() => {
-      // 1. Calculate a signature for the current content state
-      // This includes ONLY fields that affect the generated code.
-      // We exclude 'size', 'position', 'isMinimized', etc.
       const currentContentHash = JSON.stringify({
           nodes: state.nodes.map(n => ({ 
               id: n.id, 
@@ -391,9 +388,6 @@ export default function App() {
           running: state.runningPreviewIds
       });
 
-      // 2. Compare with previous signature
-      // If content hasn't changed, we SKIP the compilation step entirely.
-      // This prevents UI interactions (like minimize/expand) from triggering a preview reload/flash.
       if (currentContentHash === lastContentHash.current) {
           return;
       }
@@ -452,9 +446,6 @@ export default function App() {
             return node;
         });
   }, [state.nodes, state.collaborators, sessionId, hiddenNodeIds]);
-
-  const regularNodes = useMemo(() => displayNodes.filter(n => n.id !== maximizedNodeId), [displayNodes, maximizedNodeId]);
-  const maximizedNode = useMemo(() => displayNodes.find(n => n.id === maximizedNodeId), [displayNodes, maximizedNodeId]);
 
   const dispatchLocal = (action: Action) => {
       if (['ADD_NODE', 'DELETE_NODE', 'UPDATE_NODE_POSITION', 'UPDATE_NODE_SIZE', 'UPDATE_NODE_CONTENT', 'UPDATE_NODE_TITLE', 'UPDATE_NODE_TYPE', 'CONNECT', 'DISCONNECT', 'TOGGLE_PREVIEW', 'SET_NODE_LOADING', 'UPDATE_NODE_SHARED_STATE', 'TOGGLE_MINIMIZE', 'SET_SELECTED_NODES', 'LOCK_NODES'].includes(action.type)) {
@@ -980,7 +971,7 @@ export default function App() {
     let nearestNode: NodeData | null = null;
     let minDist = Infinity;
     
-    regularNodes.forEach(n => {
+    displayNodes.forEach(n => {
         const nW = n.size.width;
         const nH = n.isMinimized ? 40 : n.size.height;
         const nCenterX = n.position.x + nW / 2;
@@ -1026,8 +1017,8 @@ export default function App() {
       }
       
       const SNAP_THRESHOLD = 5;
-      const otherNodes = regularNodes.filter(n => n.id !== id && !state.selectedNodeIds.includes(n.id));
-      const myNode = regularNodes.find(n => n.id === id);
+      const otherNodes = displayNodes.filter(n => n.id !== id && !state.selectedNodeIds.includes(n.id));
+      const myNode = displayNodes.find(n => n.id === id);
       if (!myNode) return;
       
       const myW = myNode.size.width;
@@ -1060,7 +1051,7 @@ export default function App() {
           }
       });
       setSnapLines(newSnapLines);
-  }, [state.nodes, state.selectedNodeIds, regularNodes]);
+  }, [state.nodes, state.selectedNodeIds, displayNodes]);
   
   const handleNodeDragEnd = (id: string) => { setSnapLines([]); };
 
@@ -1192,8 +1183,8 @@ export default function App() {
                     {state.connections.map(conn => {
                         if (hiddenNodeIds.has(conn.sourceNodeId) || hiddenNodeIds.has(conn.targetNodeId)) return null;
 
-                        const sourceNode = regularNodes.find(n => n.id === conn.sourceNodeId);
-                        const targetNode = regularNodes.find(n => n.id === conn.targetNodeId);
+                        const sourceNode = displayNodes.find(n => n.id === conn.sourceNodeId);
+                        const targetNode = displayNodes.find(n => n.id === conn.targetNodeId);
                         if (!sourceNode || !targetNode) return null;
                         const start = calculatePortPosition(sourceNode, conn.sourcePortId, 'output');
                         const end = calculatePortPosition(targetNode, conn.targetPortId, 'input');
@@ -1201,7 +1192,7 @@ export default function App() {
                     })}
                 </svg>
 
-                {regularNodes.map(node => {
+                {displayNodes.map(node => {
                     let logs: LogEntry[] = [];
                     let folderContents: string[] = [];
                     
@@ -1235,7 +1226,7 @@ export default function App() {
                                 isSelected={state.selectedNodeIds.includes(node.id)}
                                 isHighlighted={node.id === highlightedNodeId}
                                 isRunning={state.runningPreviewIds.includes(node.id)}
-                                isMaximized={false}
+                                isMaximized={maximizedNodeId === node.id}
                                 scale={state.zoom}
                                 pan={state.pan}
                                 collaboratorInfo={collabInfo}
@@ -1285,43 +1276,6 @@ export default function App() {
             </div>
         </div>
       </div>
-
-      {maximizedNode && (
-          <div className="fixed inset-0 z-[9999] bg-black">
-              <Node
-                  key={maximizedNode.id}
-                  data={maximizedNode}
-                  isSelected={false}
-                  isHighlighted={false}
-                  isRunning={state.runningPreviewIds.includes(maximizedNode.id)}
-                  isMaximized={true}
-                  scale={1}
-                  pan={{x: 0, y: 0}}
-                  isConnected={() => false}
-                  onMove={() => {}}
-                  onResize={() => {}}
-                  onDelete={() => {}}
-                  onToggleRun={handleToggleRun}
-                  onRefresh={handleRefresh}
-                  onPortDown={() => {}}
-                  onPortContextMenu={() => {}}
-                  onContextMenu={() => {}}
-                  onUpdateTitle={() => {}}
-                  onUpdateContent={() => {}}
-                  onSendMessage={() => {}}
-                  onStartContextSelection={() => {}}
-                  onAiAction={() => {}}
-                  onCancelAi={() => {}}
-                  onInjectImport={() => {}}
-                  onFixError={() => {}}
-                  onInteraction={() => {}}
-                  onToggleMinimize={() => {}}
-                  onToggleMaximize={() => setMaximizedNodeId(null)}
-                  onSelect={() => {}}
-                  logs={[]}
-              />
-          </div>
-      )}
 
       {contextMenu && (
         <>

@@ -260,7 +260,17 @@ const processToolCalls = (
             if (!targetNode) targetNode = tempNodes.find(n => n.title === filename);
 
             if (targetNode && (targetNode.type === 'CODE' || targetNode.type === 'IMAGE' || targetNode.type === 'TEXT') && checkPermission(targetNode.id)) {
-                // 1. AGGRESSIVE DISCONNECT
+                // 1. IDENTIFY PARENTS BEFORE DISCONNECTING
+                // Find what modules currently import/use this file (connected to inputs)
+                // We do NOT count Folders or Previews here, only Code modules that import it.
+                const parentConnections = state.connections.filter(c => 
+                    c.sourceNodeId === targetNode!.id && 
+                    state.nodes.find(n => n.id === c.targetNodeId)?.type === 'CODE'
+                );
+                
+                const parentCodeIds = parentConnections.map(c => c.targetNodeId);
+
+                // 2. AGGRESSIVE DISCONNECT
                 // Disconnect from everything EXCEPT Outputs (Preview/Terminal)
                 const outgoingConns = state.connections.filter(c => c.sourceNodeId === targetNode!.id);
                 const connectionsToRemove = outgoingConns.filter(c => {
@@ -286,7 +296,15 @@ const processToolCalls = (
                         toolOutput += `\n[Created Folder ${targetFolderName}]`;
                     }
                     
+                    // Connect File -> Folder
                     dispatch({ type: 'CONNECT', payload: { id: `conn-${Date.now()}-${Math.random()}`, sourceNodeId: targetNode.id, sourcePortId: `${targetNode.id}-out-dom`, targetNodeId: folderNode.id, targetPortId: `${folderNode.id}-in-files` } });
+                    
+                    // 3. AUTO-REWIRE PARENTS TO FOLDER
+                    // If the file was imported by 'index.html', now 'index.html' needs to import 'Folder'.
+                    parentCodeIds.forEach(parentId => {
+                        dispatch({ type: 'CONNECT', payload: { id: `conn-rewire-${Date.now()}-${Math.random()}`, sourceNodeId: folderNode!.id, sourcePortId: `${folderNode!.id}-out-folder`, targetNodeId: parentId, targetPortId: `${parentId}-in-file` } });
+                    });
+
                     toolOutput += `\n[Moved ${filename} to ${targetFolderName}]`;
                 } else {
                     toolOutput += `\n[Moved ${filename} to Root]`;
@@ -517,4 +535,3 @@ export const handleAiGeneration = async (
         targetNodes.forEach(n => dispatch({ type: 'SET_NODE_LOADING', payload: { id: n.id, isLoading: false } })); 
     }
 };
-        
