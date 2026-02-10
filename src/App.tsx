@@ -4,9 +4,10 @@ import { Node } from './components/Node';
 import { Wire } from './components/Wire';
 import { ContextMenu } from './components/ContextMenu';
 import { Sidebar } from './components/Sidebar';
+import { CollaboratorCursor } from './components/CollaboratorCursor';
 import { GraphState, Action, NodeData, NodeType, LogEntry, Position } from './types';
 import { NODE_DEFAULTS } from './constants';
-import { compilePreview, calculatePortPosition, getConnectedSource } from './utils/graphUtils';
+import { compilePreview, calculatePortPosition, getConnectedSource, getAllConnectedSources } from './utils/graphUtils';
 import { Menu, Cloud, CloudOff, UploadCloud, Download, Search, AlertTriangle } from 'lucide-react';
 import { auth, onAuthStateChanged, db, doc, getDoc, setDoc, deleteDoc } from './firebase';
 import JSZip from 'jszip';
@@ -215,14 +216,6 @@ function graphReducer(state: GraphState, action: Action): GraphState {
 
 type SyncStatus = 'synced' | 'saving' | 'offline' | 'error';
 
-// Helper for collision detection
-const checkIntersection = (r1: {x:number, y:number, w:number, h:number}, r2: {x:number, y:number, w:number, h:number}) => {
-    return !(r2.x >= r1.x + r1.w || 
-             r2.x + r2.w <= r1.x || 
-             r2.y >= r1.y + r1.h || 
-             r2.y + r2.h <= r1.y);
-};
-
 export default function App() {
   const [state, dispatch] = useReducer(graphReducer, initialState);
   const stateRef = useRef(state); 
@@ -263,14 +256,72 @@ export default function App() {
   const lastContentHash = useRef<string>('');
 
   useEffect(() => {
-    // Load local state
-    const saved = localStorage.getItem('nodecode_project_local');
-    if (saved) {
-        try {
-            dispatch({ type: 'LOAD_STATE', payload: JSON.parse(saved) });
-        } catch (e) { console.error("Failed to load local state", e); }
-    }
+    const container = containerRef.current;
+    if (!container) return;
+
+    const onWheel = (e: WheelEvent) => {
+        e.preventDefault();
+        const currentState = stateRef.current;
+        const rect = container.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        
+        const zoomFactor = -e.deltaY * 0.001;
+        const newZoom = Math.min(Math.max(0.1, currentState.zoom + zoomFactor), 5);
+        
+        const dx = (mouseX - currentState.pan.x) / currentState.zoom;
+        const dy = (mouseY - currentState.pan.y) / currentState.zoom;
+        
+        const newPanX = mouseX - dx * newZoom;
+        const newPanY = mouseY - dy * newZoom;
+
+        dispatch({ type: 'ZOOM', payload: { zoom: newZoom } });
+        dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
+    };
+
+    const onTouchStart = (e: TouchEvent) => {
+        if (e.touches.length === 2) { e.preventDefault(); }
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+        if (e.touches.length === 2) { e.preventDefault(); }
+    };
+
+    container.addEventListener('wheel', onWheel, { passive: false });
+    container.addEventListener('touchstart', onTouchStart, { passive: false });
+    container.addEventListener('touchmove', onTouchMove, { passive: false });
+
+    return () => {
+        container.removeEventListener('wheel', onWheel);
+        container.removeEventListener('touchstart', onTouchStart);
+        container.removeEventListener('touchmove', onTouchMove);
+    };
+  }, []); 
+
+  useEffect(() => {
+    const handleMessage = (e: MessageEvent) => {
+      if (e.data?.source === 'preview-iframe') {
+        const { nodeId, type, message, timestamp } = e.data;
+        dispatch({ type: 'ADD_LOG', payload: { nodeId, log: { type, message, timestamp } } });
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
   }, []);
+
+  useEffect(() => {
+      const handleKeyDown = (e: KeyboardEvent) => {
+          if (e.key === 'Escape') {
+              if (maximizedNodeId) {
+                  setMaximizedNodeId(null);
+              } else if (state.selectedNodeIds.length > 0) {
+                  dispatch({ type: 'SET_SELECTED_NODES', payload: [] });
+              }
+          }
+      };
+      window.addEventListener('keydown', handleKeyDown);
+      return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [maximizedNodeId, state.selectedNodeIds]);
 
   useEffect(() => {
       const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -286,153 +337,85 @@ export default function App() {
                           dispatch({ type: 'LOAD_STATE', payload: JSON.parse(docSnap.data().state) });
                           setSyncStatus('synced');
                       } catch (e) { console.error(e); setSyncStatus('error'); }
-                  } else { setSyncStatus('synced'); }
+                  } else { loadLocalOrDefaults(); setSyncStatus('synced'); }
               } catch (err) { console.error(err); setSyncStatus('error'); }
-          } else { setCurrentUser(null); setSyncStatus('offline'); }
+          } else { setCurrentUser(null); setSyncStatus('offline'); loadLocalOrDefaults(); }
       });
       return () => unsubscribe();
   }, []);
 
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    
-    // Fix: Zoom by default on wheel, prevent scrolling
-    const onWheel = (e: WheelEvent) => { 
-        e.preventDefault(); 
-        const containerRect = container.getBoundingClientRect();
-        const mouseX = e.clientX - containerRect.left;
-        const mouseY = e.clientY - containerRect.top;
+  const loadLocalOrDefaults = () => {
+      const local = localStorage.getItem('nodecode_project_local');
+      if (local) {
+          try { dispatch({ type: 'LOAD_STATE', payload: JSON.parse(local) }); } catch(e) {}
+      } else {
+          const codeDefaults = NODE_DEFAULTS.CODE;
+          const previewDefaults = NODE_DEFAULTS.PREVIEW;
+          const defaultNodes: NodeData[] = [
+              { id: 'node-1', type: 'CODE', position: { x: 100, y: 100 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'index.html', content: '<h1>Hello World</h1>\n<link href="style.css" rel="stylesheet">\n<script src="app.js"></script>', autoHeight: true },
+              { id: 'node-2', type: 'CODE', position: { x: 100, y: 450 }, size: { width: codeDefaults.width, height: codeDefaults.height }, title: 'style.css', content: 'body { background: #222; color: #fff; font-family: sans-serif; }', autoHeight: true },
+              { id: 'node-3', type: 'PREVIEW', position: { x: 600, y: 100 }, size: { width: previewDefaults.width, height: previewDefaults.height }, title: previewDefaults.title, content: previewDefaults.content }
+          ];
+          dispatch({ type: 'LOAD_STATE', payload: { nodes: defaultNodes, connections: [], pan: {x:0, y:0}, zoom: 1 } });
+      }
+  };
 
-        // Zoom logic
-        const zoomFactor = -e.deltaY * 0.001;
-        const newZoom = Math.min(Math.max(0.1, stateRef.current.zoom + zoomFactor), 5);
-        
-        // Calculate pinch/zoom point
-        const dx = (mouseX - stateRef.current.pan.x) / stateRef.current.zoom;
-        const dy = (mouseY - stateRef.current.pan.y) / stateRef.current.zoom;
-        
-        const newPanX = mouseX - dx * newZoom;
-        const newPanY = mouseY - dy * newZoom;
-
-        dispatch({ type: 'ZOOM', payload: { zoom: newZoom } });
-        dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
-    };
-
-    const onTouchStart = (e: TouchEvent) => { if (e.touches.length === 2) e.preventDefault(); };
-    const onTouchMove = (e: TouchEvent) => { if (e.touches.length === 2) e.preventDefault(); };
-    
-    container.addEventListener('wheel', onWheel, { passive: false });
-    container.addEventListener('touchstart', onTouchStart, { passive: false });
-    container.addEventListener('touchmove', onTouchMove, { passive: false });
-    return () => { container.removeEventListener('wheel', onWheel); container.removeEventListener('touchstart', onTouchStart); container.removeEventListener('touchmove', onTouchMove); };
-  }, []);
-  
-  // Listen for iframe messages
-  useEffect(() => {
-      const handleMessage = (e: MessageEvent) => {
-          if (e.data.source === 'preview-iframe' && e.data.nodeId) {
-              dispatch({ 
-                  type: 'ADD_LOG', 
-                  payload: { 
-                      nodeId: e.data.nodeId, 
-                      log: { type: e.data.type, message: e.data.message, timestamp: e.data.timestamp } 
-                  } 
-              });
-          }
-      };
-      window.addEventListener('message', handleMessage);
-      return () => window.removeEventListener('message', handleMessage);
-  }, []);
-
-  // --- Live Preview Re-compilation ---
   useEffect(() => {
       const currentContentHash = JSON.stringify({
           nodes: state.nodes.map(n => ({ id: n.id, title: n.title, content: n.content, type: n.type })),
           connections: state.connections,
           running: state.runningPreviewIds
       });
+
       if (currentContentHash === lastContentHash.current) return;
       lastContentHash.current = currentContentHash;
+
       state.runningPreviewIds.forEach(previewId => {
           if (compileTimeoutRef.current[previewId]) clearTimeout(compileTimeoutRef.current[previewId]);
           compileTimeoutRef.current[previewId] = setTimeout(() => {
               const iframe = document.getElementById(`preview-iframe-${previewId}`) as HTMLIFrameElement;
-              if (iframe) iframe.srcdoc = compilePreview(previewId, state.nodes, state.connections);
+              if (iframe) {
+                  const compiled = compilePreview(previewId, state.nodes, state.connections);
+                  if (iframe.srcdoc !== compiled) iframe.srcdoc = compiled;
+              }
           }, 500); 
       });
   }, [state.nodes, state.connections, state.runningPreviewIds]);
 
   const hiddenNodeIds = useMemo(() => {
       const ids = new Set<string>();
-      const getChildren = (folderId: string) => state.connections.filter(c => c.targetNodeId === folderId && c.targetPortId.includes('in-files')).map(c => c.sourceNodeId);
-      const traverse = (parentId: string) => { getChildren(parentId).forEach(childId => { if (!ids.has(childId)) { ids.add(childId); const childNode = state.nodes.find(n => n.id === childId); if (childNode && childNode.type === 'FOLDER') traverse(childId); } }); };
-      state.nodes.forEach(node => { if (node.type === 'FOLDER' && node.isMinimized) traverse(node.id); });
+      const getChildren = (folderId: string) => {
+           return state.connections
+              .filter(c => c.targetNodeId === folderId && c.targetPortId.includes('in-files'))
+              .map(c => c.sourceNodeId);
+      };
+      const traverse = (parentId: string) => {
+          const children = getChildren(parentId);
+          children.forEach(childId => {
+              if (!ids.has(childId)) {
+                  ids.add(childId);
+                  const childNode = state.nodes.find(n => n.id === childId);
+                  if (childNode && childNode.type === 'FOLDER') traverse(childId);
+              }
+          });
+      };
+      state.nodes.forEach(node => {
+          if (node.type === 'FOLDER' && node.isMinimized) traverse(node.id);
+      });
       return ids;
   }, [state.nodes, state.connections]);
 
-  const displayNodes = useMemo(() => state.nodes.filter(n => !hiddenNodeIds.has(n.id)).map(node => { const collaborator = state.collaborators.find(c => c.draggingNodeId === node.id && c.id !== sessionId); if (collaborator && collaborator.draggingPosition) return { ...node, position: collaborator.draggingPosition, _remoteDrag: true }; return node; }), [state.nodes, state.collaborators, sessionId, hiddenNodeIds]);
-  const regularNodes = useMemo(() => displayNodes.filter(n => n.id !== maximizedNodeId), [displayNodes, maximizedNodeId]);
-  const maximizedNode = useMemo(() => displayNodes.find(n => n.id === maximizedNodeId), [displayNodes, maximizedNodeId]);
-
-  // FIX 2: Collision Logic for Alignment
-  const canAlign = (type: 'horizontal' | 'vertical', selectedIds: string[]) => {
-      if (selectedIds.length < 2) return false;
-      const nodes = state.nodes.filter(n => selectedIds.includes(n.id));
-      const otherNodes = state.nodes.filter(n => !selectedIds.includes(n.id));
-      
-      const newPositions = nodes.map(n => ({ ...n }));
-      
-      if (type === 'horizontal') {
-          const avgY = nodes.reduce((sum, n) => sum + n.position.y + n.size.height/2, 0) / nodes.length;
-          newPositions.forEach(n => n.position = { x: n.position.x, y: avgY - n.size.height/2 });
-      } else {
-          const avgX = nodes.reduce((sum, n) => sum + n.position.x + n.size.width/2, 0) / nodes.length;
-          newPositions.forEach(n => n.position = { x: avgX - n.size.width/2, y: n.position.y });
-      }
-
-      for (let i = 0; i < newPositions.length; i++) {
-          for (let j = i + 1; j < newPositions.length; j++) {
-              const r1 = { x: newPositions[i].position.x, y: newPositions[i].position.y, w: newPositions[i].size.width, h: newPositions[i].size.height };
-              const r2 = { x: newPositions[j].position.x, y: newPositions[j].position.y, w: newPositions[j].size.width, h: newPositions[j].size.height };
-              if (checkIntersection(r1, r2)) return false;
-          }
-      }
-
-      for (const n of newPositions) {
-          for (const o of otherNodes) {
-              const r1 = { x: n.position.x, y: n.position.y, w: n.size.width, h: n.size.height };
-              const r2 = { x: o.position.x, y: o.position.y, w: o.size.width, h: o.size.height };
-              if (checkIntersection(r1, r2)) return false;
-          }
-      }
-      return true;
-  };
-
-  const handleContextMenu = (e: React.MouseEvent | React.TouchEvent | React.PointerEvent, nodeId?: string, portId?: string) => {
-    e.preventDefault();
-    if (isPanning) return;
-    let clientX, clientY;
-    if ('touches' in e) { const touch = e.touches[0] || e.changedTouches[0]; clientX = touch.clientX; clientY = touch.clientY; } else { clientX = (e as React.MouseEvent).clientX; clientY = (e as React.MouseEvent).clientY; }
-    
-    const selectedIds = state.selectedNodeIds.includes(nodeId || '') ? state.selectedNodeIds : (nodeId ? [nodeId] : []);
-    const canAlignH = canAlign('horizontal', selectedIds);
-    const canAlignV = canAlign('vertical', selectedIds);
-
-    setContextMenu({
-        x: clientX,
-        y: clientY,
-        targetNodeId: nodeId,
-        targetPortId: portId,
-        targetNode: nodeId ? state.nodes.find(n => n.id === nodeId) : undefined,
-        canAlignHorizontal: canAlignH,
-        canAlignVertical: canAlignV,
-        canDistributeHorizontal: selectedIds.length > 2,
-        canDistributeVertical: selectedIds.length > 2,
-        canCompactHorizontal: canAlignH,
-        canCompactVertical: canAlignV
-    });
-  };
+  const displayNodes = useMemo(() => {
+    return state.nodes
+        .filter(n => !hiddenNodeIds.has(n.id)) 
+        .map(node => {
+            const collaborator = state.collaborators.find(c => c.draggingNodeId === node.id && c.id !== sessionId);
+            if (collaborator && collaborator.draggingPosition) {
+                return { ...node, position: collaborator.draggingPosition, _remoteDrag: true };
+            }
+            return node;
+        });
+  }, [state.nodes, state.collaborators, sessionId, hiddenNodeIds]);
 
   const dispatchLocal = (action: Action) => {
       if (['ADD_NODE', 'DELETE_NODE', 'UPDATE_NODE_POSITION', 'UPDATE_NODE_SIZE', 'UPDATE_NODE_CONTENT', 'UPDATE_NODE_TITLE', 'UPDATE_NODE_TYPE', 'CONNECT', 'DISCONNECT', 'TOGGLE_PREVIEW', 'SET_NODE_LOADING', 'UPDATE_NODE_SHARED_STATE', 'TOGGLE_MINIMIZE', 'SET_SELECTED_NODES', 'LOCK_NODES'].includes(action.type)) {
@@ -457,583 +440,603 @@ export default function App() {
         }, 1000);
         return () => clearTimeout(saveData);
     }
-  }, [state.nodes, state.connections, state.runningPreviewIds, state.pan, state.zoom, currentUser]);
+  }, [state.nodes, state.connections, state.runningPreviewIds, state.pan, state.zoom, currentUser]); 
 
-  // FIX 3: Folder Export Logic
-  const handleDownloadZip = async () => {
-    const zip = new JSZip();
-    const projectFolder = zip.folder("project");
-    
-    const fileToFolderMap = new Map<string, string>();
-    state.connections.forEach(conn => {
-        const target = state.nodes.find(n => n.id === conn.targetNodeId);
-        if (target?.type === 'FOLDER' && conn.targetPortId.includes('in-files')) {
-            fileToFolderMap.set(conn.sourceNodeId, target.title);
-        }
-    });
+  // --- Alignment Collision Check ---
+  const checkAlignmentCollision = (type: 'horizontal' | 'vertical', selectedIds: string[]): boolean => {
+      const selected = state.nodes.filter(n => selectedIds.includes(n.id));
+      if (selected.length < 2) return false;
+      const unselected = state.nodes.filter(n => !selectedIds.includes(n.id) && !hiddenNodeIds.has(n.id));
 
-    state.nodes.forEach(node => {
-        if (node.type === 'CODE' || node.type === 'TEXT' || node.type === 'IMAGE') {
-            const folderName = fileToFolderMap.get(node.id);
-            let content: string | Blob = node.content;
-            
-            if (node.type === 'IMAGE' && node.content.startsWith('data:')) {
-                const base64Data = node.content.split(',')[1];
-                content = base64Data;
-                projectFolder?.file(folderName ? `${folderName}/${node.title}` : node.title, content, { base64: true });
-            } else {
-                projectFolder?.file(folderName ? `${folderName}/${node.title}` : node.title, content);
-            }
-        }
-    });
-    const content = await zip.generateAsync({ type: "blob" });
-    const url = window.URL.createObjectURL(content);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = "project.zip";
-    a.click();
-    window.URL.revokeObjectURL(url);
-  };
-
-  const handleAlign = (type: 'horizontal' | 'vertical') => {
-      if (state.selectedNodeIds.length < 2) return;
-      const nodes = state.nodes.filter(n => state.selectedNodeIds.includes(n.id));
+      let targetPos: Record<string, Position> = {};
+      
       if (type === 'horizontal') {
-          const avgY = nodes.reduce((sum, n) => sum + n.position.y + n.size.height/2, 0) / nodes.length;
-          nodes.forEach(n => dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id: n.id, position: { x: n.position.x, y: avgY - n.size.height/2 } } }));
-      } else {
-          const avgX = nodes.reduce((sum, n) => sum + n.position.x + n.size.width/2, 0) / nodes.length;
-          nodes.forEach(n => dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id: n.id, position: { x: avgX - n.size.width/2, y: n.position.y } } }));
-      }
-      setContextMenu(null);
-  };
-  
-  const handleDistribute = (type: 'horizontal' | 'vertical') => {
-      const nodes = state.nodes.filter(n => state.selectedNodeIds.includes(n.id));
-      if (nodes.length < 3) return;
-      if (type === 'horizontal') {
-          nodes.sort((a, b) => a.position.x - b.position.x);
-          const start = nodes[0].position.x;
-          const end = nodes[nodes.length - 1].position.x;
-          const total = end - start;
-          const gap = total / (nodes.length - 1);
-          nodes.forEach((n, i) => dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id: n.id, position: { x: start + (gap * i), y: n.position.y } } }));
-      } else {
-          nodes.sort((a, b) => a.position.y - b.position.y);
-          const start = nodes[0].position.y;
-          const end = nodes[nodes.length - 1].position.y;
-          const total = end - start;
-          const gap = total / (nodes.length - 1);
-          nodes.forEach((n, i) => dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id: n.id, position: { x: n.position.x, y: start + (gap * i) } } }));
-      }
-      setContextMenu(null);
-  };
-
-  const handleCompact = (type: 'horizontal' | 'vertical') => { setContextMenu(null); }; 
-  
-  const handleNodeMove = useCallback((id: string, newPos: Position) => { dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id, position: newPos } }); }, []);
-  const handleNodeDragEnd = (id: string) => { setSnapLines([]); };
-  const handleReset = async () => { 
-      if (!confirm("Reset project?")) return;
-      localStorage.removeItem('nodecode_project_local'); window.location.reload(); 
-  };
-  
-  // Lock Handlers (Fixed)
-  const handleToggleLock = (nodeId: string) => {
-      if (!currentUser) return;
-      let targets = [nodeId];
-      if (state.selectedNodeIds.includes(nodeId)) targets = state.selectedNodeIds;
-      
-      const targetNode = state.nodes.find(n => n.id === nodeId);
-      if (!targetNode) return;
-      
-      const isLocking = !targetNode.lockedBy;
-      
-      const validIds = targets.filter(id => {
-          const node = state.nodes.find(n => n.id === id);
-          if (!node) return false;
-          // Can I lock it? (Must be unlocked)
-          if (isLocking) return !node.lockedBy; 
-          // Can I unlock it? (Must be locked by me)
-          return node.lockedBy?.uid === currentUser.uid;
-      });
-      
-      if (validIds.length > 0) { 
-          dispatchLocal({ type: 'LOCK_NODES', payload: { ids: validIds, user: isLocking ? currentUser : undefined } }); 
-      }
-      setContextMenu(null);
-  };
-
-  const handleForceUnlock = (nodeId: string) => {
-      if (!confirm("Force unlock this node? This will remove the lock for everyone.")) return;
-      dispatchLocal({ type: 'LOCK_NODES', payload: { ids: [nodeId], user: undefined } });
-      setContextMenu(null);
-  };
-
-  const handleClearImage = (id: string) => { dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id, content: '' } }); };
-  const handleAddNode = (type: NodeType) => { 
-      if(!contextMenu) return; 
-      const rect = containerRef.current?.getBoundingClientRect(); if(!rect) return;
-      const x = (contextMenu.x - rect.left - state.pan.x) / state.zoom;
-      const y = (contextMenu.y - rect.top - state.pan.y) / state.zoom;
-      const d = NODE_DEFAULTS[type];
-      dispatchLocal({ type: 'ADD_NODE', payload: { id: `node-${Date.now()}`, type, title: d.title, content: d.content, position: {x, y}, size: {width: d.width, height: d.height}, autoHeight: type==='CODE'?false:undefined } });
-      setContextMenu(null);
-  };
-  
-  // Find Nearest Logic (Fixed to go to node, not 0,0)
-  const handleFindNearest = () => {
-    const viewportCenterX = window.innerWidth / 2;
-    const viewportCenterY = window.innerHeight / 2;
-    
-    // Calculate world center
-    const worldCenterX = (viewportCenterX - state.pan.x) / state.zoom;
-    const worldCenterY = (viewportCenterY - state.pan.y) / state.zoom;
-    
-    let nearestNode: NodeData | null = null;
-    let minDist = Infinity;
-    
-    // Find closest node to current center
-    displayNodes.forEach(n => {
-        const nW = n.size.width;
-        const nH = n.isMinimized ? 40 : n.size.height;
-        const nCenterX = n.position.x + nW / 2;
-        const nCenterY = n.position.y + nH / 2;
-        
-        const dist = Math.hypot(nCenterX - worldCenterX, nCenterY - worldCenterY);
-        if (dist < minDist) { minDist = dist; nearestNode = n; }
-    });
-
-    if (nearestNode) {
-        const target = nearestNode as NodeData;
-        setHighlightedNodeId(target.id);
-        setTimeout(() => setHighlightedNodeId(null), 2000);
-
-        const nW = target.size.width;
-        const nH = target.isMinimized ? 40 : target.size.height;
-        const targetCenterX = target.position.x + nW / 2;
-        const targetCenterY = target.position.y + nH / 2;
-        
-        // Center the target in the viewport
-        const newPanX = viewportCenterX - (targetCenterX * state.zoom);
-        const newPanY = viewportCenterY - (targetCenterY * state.zoom);
-        
-        dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
-    }
-  };
-  
-  const handleInjectImport = (srcId: string, pkg: string) => { /* NPM logic */ };
-  const handleFixError = (id: string, err: string) => { /* AI Fix logic */ };
-
-  // --- IMPLEMENTED HANDLERS ---
-  const checkPermission = (nodeId: string) => {
-      const node = state.nodes.find(n => n.id === nodeId);
-      if (!node) return false;
-      if (!node.lockedBy) return true;
-      if (!currentUser) return false;
-      return node.lockedBy.uid === currentUser.uid;
-  };
-
-  const isConnected = (portId: string) => {
-      return state.connections.some(c => c.sourcePortId === portId || c.targetPortId === portId);
-  };
-
-  const handleToggleRun = (id: string) => {
-      const isRunning = state.runningPreviewIds.includes(id);
-      dispatchLocal({ type: 'TOGGLE_PREVIEW', payload: { nodeId: id, isRunning: !isRunning } });
-  };
-
-  const handleRefresh = (id: string) => {
-      const iframe = document.getElementById(`preview-iframe-${id}`) as HTMLIFrameElement;
-      if (iframe) {
-          iframe.srcdoc = compilePreview(id, state.nodes, state.connections, true);
-      }
-  };
-
-  const handleUpdateTitle = (id: string, title: string) => {
-      if (checkPermission(id)) {
-          dispatchLocal({ type: 'UPDATE_NODE_TITLE', payload: { id, title } });
-      }
-  };
-
-  const handleStartContextSelection = (id: string) => {
-      dispatchLocal({ 
-          type: 'SET_SELECTION_MODE', 
-          payload: { 
-              isActive: true, 
-              requestingNodeId: id, 
-              selectedIds: state.nodes.find(n => n.id === id)?.contextNodeIds || [] 
-          } 
-      });
-      setIsSidebarOpen(true);
-  };
-
-  const handleToggleSelectNode = (id: string, multi: boolean) => {
-      if (state.selectionMode?.isActive) {
-          const currentSelected = state.selectionMode.selectedIds;
-          const newSelected = currentSelected.includes(id)
-              ? currentSelected.filter(sid => sid !== id)
-              : [...currentSelected, id];
-          dispatchLocal({ 
-              type: 'SET_SELECTION_MODE', 
-              payload: { ...state.selectionMode, selectedIds: newSelected } 
+          // Align centers vertically (Y-axis)
+          const avgY = selected.reduce((sum, n) => sum + n.position.y + (n.isMinimized ? 40 : n.size.height)/2, 0) / selected.length;
+          selected.forEach(n => {
+              const h = n.isMinimized ? 40 : n.size.height;
+              targetPos[n.id] = { x: n.position.x, y: avgY - h/2 };
           });
-          return;
+      } else {
+          // Align centers horizontally (X-axis)
+          const avgX = selected.reduce((sum, n) => sum + n.position.x + n.size.width/2, 0) / selected.length;
+          selected.forEach(n => {
+              const w = n.size.width;
+              targetPos[n.id] = { x: avgX - w/2, y: n.position.y };
+          });
       }
+
+      // Check collisions
+      const allToCheck = [...selected.map(n => ({...n, position: targetPos[n.id]})), ...unselected];
       
-      let newSelectedIds = multi ? [...state.selectedNodeIds] : [id];
-      if (multi) {
-          if (newSelectedIds.includes(id)) {
-              newSelectedIds = newSelectedIds.filter(sid => sid !== id);
-          } else {
-              newSelectedIds.push(id);
+      for (let i = 0; i < selected.length; i++) {
+          const s = selected[i];
+          const sPos = targetPos[s.id];
+          const sW = s.size.width;
+          const sH = s.isMinimized ? 40 : s.size.height;
+
+          // Check against all other nodes (including other selected nodes at their NEW positions)
+          for (let j = 0; j < allToCheck.length; j++) {
+              const other = allToCheck[j];
+              if (other.id === s.id) continue;
+              
+              const oW = other.size.width;
+              const oH = other.isMinimized ? 40 : other.size.height;
+              
+              const overlap = (
+                  sPos.x < other.position.x + oW &&
+                  sPos.x + sW > other.position.x &&
+                  sPos.y < other.position.y + oH &&
+                  sPos.y + sH > other.position.y
+              );
+              
+              if (overlap) return true; // Collision detected
           }
       }
-      dispatchLocal({ type: 'SET_SELECTED_NODES', payload: newSelectedIds });
+      return false;
   };
-  
+
+
+  const handleContextMenu = (e: React.MouseEvent | React.TouchEvent | React.PointerEvent, nodeId?: string, portId?: string) => {
+    e.preventDefault();
+    if (isPanning) return;
+
+    let clientX, clientY;
+    if ('touches' in e) {
+        const touch = e.touches[0] || e.changedTouches[0];
+        clientX = touch.clientX;
+        clientY = touch.clientY;
+    } else {
+        clientX = (e as React.MouseEvent).clientX;
+        clientY = (e as React.MouseEvent).clientY;
+    }
+
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    
+    // Determine alignment availability with Collision Check
+    const selectedCount = state.selectedNodeIds.length;
+    
+    // Default collision assumption is true (blocked) if we can't calculate, but actually we default to false (allowed) if safe
+    const isSafeHorizontal = selectedCount > 1 ? !checkAlignmentCollision('horizontal', state.selectedNodeIds) : false;
+    const isSafeVertical = selectedCount > 1 ? !checkAlignmentCollision('vertical', state.selectedNodeIds) : false;
+    const canDistribute = selectedCount > 2;
+
+    setContextMenu({
+        x: clientX,
+        y: clientY,
+        targetNodeId: nodeId,
+        targetPortId: portId,
+        targetNode: nodeId ? state.nodes.find(n => n.id === nodeId) : undefined,
+        canAlignHorizontal: isSafeHorizontal,
+        canAlignVertical: isSafeVertical,
+        canDistributeHorizontal: canDistribute, // Simple check for now
+        canDistributeVertical: canDistribute,
+        canCompactHorizontal: isSafeHorizontal,
+        canCompactVertical: isSafeVertical
+    });
+  };
+
+  const isConnected = useCallback((portId: string) => {
+      return state.connections.some(c => c.sourcePortId === portId || c.targetPortId === portId);
+  }, [state.connections]);
+
+  const handleToggleRun = (nodeId: string) => {
+      const isRunning = state.runningPreviewIds.includes(nodeId);
+      dispatchLocal({ type: 'TOGGLE_PREVIEW', payload: { nodeId, isRunning: !isRunning } });
+  };
+
+  const handleRefresh = (nodeId: string) => {
+      const iframe = document.getElementById(`preview-iframe-${nodeId}`) as HTMLIFrameElement;
+      if (iframe) iframe.srcdoc = compilePreview(nodeId, state.nodes, state.connections, true);
+  };
+
   const handlePortDown = (e: React.PointerEvent, portId: string, nodeId: string, isInput: boolean) => {
-      e.stopPropagation();
-      e.currentTarget.setPointerCapture(e.pointerId);
-      
+      e.stopPropagation(); e.preventDefault();
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return;
       const node = state.nodes.find(n => n.id === nodeId);
       if (!node) return;
-      
       const portPos = calculatePortPosition(node, portId, isInput ? 'input' : 'output');
-      
-      setDragWire({
-          x1: portPos.x,
-          y1: portPos.y,
-          x2: portPos.x,
-          y2: portPos.y,
-          startPortId: portId,
-          startNodeId: nodeId,
-          isInput
-      });
+      setDragWire({ x1: portPos.x, y1: portPos.y, x2: portPos.x, y2: portPos.y, startPortId: portId, startNodeId: nodeId, isInput });
   };
 
   const handlePortContextMenu = (e: React.MouseEvent, portId: string) => {
-      e.preventDefault();
-      e.stopPropagation();
+      e.stopPropagation(); e.preventDefault();
       handleContextMenu(e, undefined, portId);
   };
 
   const handleBgPointerDown = (e: React.PointerEvent) => {
-      if ((e.target as HTMLElement).id !== 'canvas-bg') return;
+      if (e.button !== 0 && e.button !== 1) return; 
+      if ((e.target as HTMLElement).closest('.nodrag')) return;
+      if (e.button === 0 && !e.shiftKey && !e.ctrlKey) { dispatchLocal({ type: 'SET_SELECTED_NODES', payload: [] }); }
       e.currentTarget.setPointerCapture(e.pointerId);
-      
-      // Fix: Check for Ctrl/Meta/Shift for Selection Box
-      if (e.shiftKey || e.ctrlKey || e.metaKey) {
-          const rect = containerRef.current?.getBoundingClientRect();
-          if (rect) {
-             const x = (e.clientX - rect.left - state.pan.x) / state.zoom;
-             const y = (e.clientY - rect.top - state.pan.y) / state.zoom;
-             setSelectionBox({ x, y, w: 0, h: 0, startX: x, startY: y });
-          }
+      if (e.button === 0 && (e.shiftKey || e.ctrlKey || e.metaKey)) {
+          const rect = containerRef.current!.getBoundingClientRect();
+          const x = e.clientX - rect.left;
+          const y = e.clientY - rect.top;
+          setSelectionBox({ x, y, w: 0, h: 0, startX: x, startY: y });
       } else {
           setIsPanning(true);
           dragStartRef.current = { x: e.clientX, y: e.clientY };
-          
-          if (!state.selectionMode?.isActive) {
-              dispatchLocal({ type: 'SET_SELECTED_NODES', payload: [] });
-          }
       }
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
-      if (isPanning && dragStartRef.current && !selectionBox) {
+      if (dragWire) {
+          const rect = containerRef.current!.getBoundingClientRect();
+          const x = (e.clientX - rect.left - state.pan.x) / state.zoom;
+          const y = (e.clientY - rect.top - state.pan.y) / state.zoom;
+          setDragWire({ ...dragWire, x2: x, y2: y });
+          return;
+      }
+      if (isPanning && dragStartRef.current) {
           const dx = e.clientX - dragStartRef.current.x;
           const dy = e.clientY - dragStartRef.current.y;
           dispatch({ type: 'PAN', payload: { x: state.pan.x + dx, y: state.pan.y + dy } });
           dragStartRef.current = { x: e.clientX, y: e.clientY };
+          return;
       }
-
-      if (dragWire) {
-           const rect = containerRef.current?.getBoundingClientRect();
-           if (rect) {
-               const x = (e.clientX - rect.left - state.pan.x) / state.zoom;
-               const y = (e.clientY - rect.top - state.pan.y) / state.zoom;
-               setDragWire({ ...dragWire, x2: x, y2: y });
-           }
-      }
-
-      if (selectionBox && containerRef.current) {
-           const rect = containerRef.current.getBoundingClientRect();
-           const currentX = (e.clientX - rect.left - state.pan.x) / state.zoom;
-           const currentY = (e.clientY - rect.top - state.pan.y) / state.zoom;
-           
-           const x = Math.min(selectionBox.startX, currentX);
-           const y = Math.min(selectionBox.startY, currentY);
-           const w = Math.abs(currentX - selectionBox.startX);
-           const h = Math.abs(currentY - selectionBox.startY);
-           
-           setSelectionBox({ ...selectionBox, x, y, w, h });
+      if (selectionBox) {
+          const rect = containerRef.current!.getBoundingClientRect();
+          const currentX = e.clientX - rect.left;
+          const currentY = e.clientY - rect.top;
+          const x = Math.min(selectionBox.startX, currentX);
+          const y = Math.min(selectionBox.startY, currentY);
+          const w = Math.abs(currentX - selectionBox.startX);
+          const h = Math.abs(currentY - selectionBox.startY);
+          setSelectionBox({ ...selectionBox, x, y, w, h });
       }
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
       e.currentTarget.releasePointerCapture(e.pointerId);
-      setIsPanning(false);
-      dragStartRef.current = null;
-
-      if (selectionBox) {
-          const selected = state.nodes.filter(n => 
-              n.position.x >= selectionBox.x && 
-              n.position.x + n.size.width <= selectionBox.x + selectionBox.w &&
-              n.position.y >= selectionBox.y && 
-              n.position.y + n.size.height <= selectionBox.y + selectionBox.h
-          ).map(n => n.id);
-          
-          dispatchLocal({ type: 'SET_SELECTED_NODES', payload: selected });
-          setSelectionBox(null);
-      }
-
       if (dragWire) {
-          const elements = document.elementsFromPoint(e.clientX, e.clientY);
-          const portEl = elements.find(el => el.hasAttribute('data-port-id'));
-          
-          if (portEl) {
-              const targetPortId = portEl.getAttribute('data-port-id');
-              const targetNodeId = portEl.getAttribute('data-node-id');
-              
+          const element = document.elementFromPoint(e.clientX, e.clientY);
+          const portDiv = element?.closest('[data-port-id]');
+          if (portDiv) {
+              const targetPortId = portDiv.getAttribute('data-port-id');
+              const targetNodeId = portDiv.getAttribute('data-node-id');
               if (targetPortId && targetNodeId && targetNodeId !== dragWire.startNodeId) {
-                   dispatchLocal({
-                      type: 'CONNECT',
-                      payload: {
-                          id: `conn-${Date.now()}`,
-                          sourceNodeId: dragWire.isInput ? targetNodeId : dragWire.startNodeId,
-                          sourcePortId: dragWire.isInput ? targetPortId : dragWire.startPortId,
-                          targetNodeId: dragWire.isInput ? dragWire.startNodeId : targetNodeId,
-                          targetPortId: dragWire.isInput ? dragWire.startPortId : targetPortId
-                      }
-                  });
+                  let sourceNodeId = dragWire.startNodeId;
+                  let sourcePortId = dragWire.startPortId;
+                  let finalTargetNodeId = targetNodeId;
+                  let finalTargetPortId = targetPortId;
+                  if (dragWire.isInput) {
+                       sourceNodeId = targetNodeId;
+                       sourcePortId = targetPortId;
+                       finalTargetNodeId = dragWire.startNodeId;
+                       finalTargetPortId = dragWire.startPortId;
+                  }
+                  dispatchLocal({ type: 'CONNECT', payload: { id: `conn-${Date.now()}`, sourceNodeId, sourcePortId, targetNodeId: finalTargetNodeId, targetPortId: finalTargetPortId } });
               }
           }
           setDragWire(null);
       }
-  };
-
-  const handleTouchStart = (e: React.TouchEvent) => {
-      if (e.touches.length === 2) {
-          isPinching.current = true;
-          const dist = Math.hypot(
-              e.touches[0].clientX - e.touches[1].clientX,
-              e.touches[0].clientY - e.touches[1].clientY
-          );
-          lastTouchDist.current = dist;
-          touchStartPos.current = {
-              x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
-              y: (e.touches[0].clientY + e.touches[1].clientY) / 2
-          };
+      setIsPanning(false);
+      dragStartRef.current = null;
+      if (selectionBox) {
+          const worldX = (selectionBox.x - state.pan.x) / state.zoom;
+          const worldY = (selectionBox.y - state.pan.y) / state.zoom;
+          const worldW = selectionBox.w / state.zoom;
+          const worldH = selectionBox.h / state.zoom;
+          const selected = state.nodes.filter(n => {
+              const nx = n.position.x;
+              const ny = n.position.y;
+              const nw = n.size.width;
+              const nh = n.isMinimized ? 40 : n.size.height;
+              return (nx < worldX + worldW && nx + nw > worldX && ny < worldY + worldH && ny + nh > worldY);
+          }).map(n => n.id);
+          if (selected.length > 0) { dispatchLocal({ type: 'SET_SELECTED_NODES', payload: selected }); }
+          setSelectionBox(null);
       }
   };
 
-  const handleTouchMove = (e: React.TouchEvent) => {
-      if (isPinching.current && e.touches.length === 2 && lastTouchDist.current && touchStartPos.current) {
-          const dist = Math.hypot(
-              e.touches[0].clientX - e.touches[1].clientX,
-              e.touches[0].clientY - e.touches[1].clientY
-          );
-          const center = {
-              x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
-              y: (e.touches[0].clientY + e.touches[1].clientY) / 2
-          };
-
-          const deltaZoom = dist / lastTouchDist.current;
-          const newZoom = Math.min(Math.max(0.1, state.zoom * deltaZoom), 5);
-          
-          const dx = center.x - touchStartPos.current.x;
-          const dy = center.y - touchStartPos.current.y;
-
-          dispatch({ type: 'ZOOM', payload: { zoom: newZoom } });
-          dispatch({ type: 'PAN', payload: { x: state.pan.x + dx, y: state.pan.y + dy } });
-
-          lastTouchDist.current = dist;
-          touchStartPos.current = center;
+  const handleAlign = (type: 'horizontal' | 'vertical') => {
+      // Re-verify collision before applying
+      if (checkAlignmentCollision(type, state.selectedNodeIds)) {
+          alert("Cannot align: Alignment would cause nodes to overlap.");
+          return;
       }
+      if (state.selectedNodeIds.length < 2) return;
+      const nodes = state.nodes.filter(n => state.selectedNodeIds.includes(n.id));
+      
+      if (type === 'horizontal') {
+          const avgY = nodes.reduce((sum, n) => sum + n.position.y + (n.isMinimized ? 40 : n.size.height)/2, 0) / nodes.length;
+          nodes.forEach(n => {
+              const newY = avgY - (n.isMinimized ? 40 : n.size.height)/2;
+              dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id: n.id, position: { x: n.position.x, y: newY } } });
+          });
+      } else {
+          const avgX = nodes.reduce((sum, n) => sum + n.position.x + n.size.width/2, 0) / nodes.length;
+          nodes.forEach(n => {
+              const newX = avgX - n.size.width/2;
+              dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id: n.id, position: { x: newX, y: n.position.y } } });
+          });
+      }
+      setContextMenu(null);
   };
 
-  const handleTouchEnd = () => {
-      isPinching.current = false;
-      lastTouchDist.current = null;
-      touchStartPos.current = null;
+  // ... (handleDistribute, handleCompact remain similar but assume basic math is safe if no collision checker enforced there yet, can be added later)
+  const handleDistribute = (type: 'horizontal' | 'vertical') => {
+      // ... logic from before
+      if (state.selectedNodeIds.length < 3) return;
+      const nodes = state.nodes.filter(n => state.selectedNodeIds.includes(n.id));
+      
+      if (type === 'horizontal') {
+          nodes.sort((a, b) => a.position.x - b.position.x);
+          const start = nodes[0].position.x;
+          const end = nodes[nodes.length - 1].position.x;
+          const totalDist = end - start;
+          const gap = totalDist / (nodes.length - 1);
+          nodes.forEach((n, i) => dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id: n.id, position: { x: start + (gap * i), y: n.position.y } } }));
+      } else {
+          nodes.sort((a, b) => a.position.y - b.position.y);
+          const start = nodes[0].position.y;
+          const end = nodes[nodes.length - 1].position.y;
+          const totalDist = end - start;
+          const gap = totalDist / (nodes.length - 1);
+          nodes.forEach((n, i) => dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id: n.id, position: { x: n.position.x, y: start + (gap * i) } } }));
+      }
+      setContextMenu(null);
+  };
+  const handleCompact = (type: 'horizontal' | 'vertical') => {
+      if (state.selectedNodeIds.length < 2) return;
+      const nodes = state.nodes.filter(n => state.selectedNodeIds.includes(n.id));
+      const PADDING = 20;
+      if (type === 'horizontal') {
+          nodes.sort((a, b) => a.position.x - b.position.x);
+          let currentX = nodes[0].position.x;
+          nodes.forEach(n => {
+              dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id: n.id, position: { x: currentX, y: n.position.y } } });
+              currentX += n.size.width + PADDING;
+          });
+      } else {
+          nodes.sort((a, b) => a.position.y - b.position.y);
+          let currentY = nodes[0].position.y;
+          nodes.forEach(n => {
+              dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id: n.id, position: { x: n.position.x, y: currentY } } });
+              const h = n.isMinimized ? 40 : n.size.height;
+              currentY += h + PADDING;
+          });
+      }
+      setContextMenu(null);
   };
 
-  // AI Wrappers
-  const handleSendMessageWrapper = async (nodeId: string, text: string) => { await handleAiMessage(nodeId, text, { state, dispatch: dispatchLocal, checkPermission, onHighlight: (id) => setHighlightedNodeId(id) }); };
-  const handleAiGenerateWrapper = async (nodeId: string, action: 'optimize' | 'prompt', promptText?: string) => { await handleAiGeneration(nodeId, action, promptText, { state, dispatch: dispatchLocal, checkPermission, onHighlight: (id) => setHighlightedNodeId(id) }); };
-  const handleCancelAi = (id: string) => dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id, isLoading: false } });
+  const checkPermission = (nodeId: string): boolean => {
+      const node = state.nodes.find(n => n.id === nodeId);
+      if (!node) return false;
+      if (!node.lockedBy) return true;
+      if (currentUser && node.lockedBy.uid === currentUser.uid) return true;
+      alert(`This file is locked by "${node.lockedBy.displayName}".`);
+      return false;
+  };
+  const handleReset = async () => {
+      const pwd = prompt("Enter password to reset project:");
+      if (pwd !== "password") { if (pwd !== null) alert("Incorrect password."); return; }
+      if (!confirm("Are you sure? This will delete all local and cloud data for this project.")) return;
+      setSyncStatus('saving');
+      try { if (currentUser) await deleteDoc(doc(db, "nodecode_projects", currentUser.uid)); } catch (e) { console.error(e); }
+      localStorage.removeItem('nodecode_project_local');
+      window.location.reload();
+  };
+  const handleHighlightNode = (id: string) => { setHighlightedNodeId(id); setTimeout(() => { setHighlightedNodeId(null); }, 2000); };
+  const handleStartContextSelection = (nodeId: string) => {
+      const node = state.nodes.find(n => n.id === nodeId);
+      dispatch({ type: 'SET_SELECTION_MODE', payload: { isActive: true, requestingNodeId: nodeId, selectedIds: node?.contextNodeIds || [] } });
+      setIsSidebarOpen(true);
+  };
+  const handleToggleSelection = (nodeId: string) => {
+      if (!state.selectionMode?.isActive) return;
+      const current = state.selectionMode.selectedIds;
+      const next = current.includes(nodeId) ? current.filter(id => id !== nodeId) : [...current, nodeId];
+      dispatch({ type: 'SET_SELECTION_MODE', payload: { ...state.selectionMode, selectedIds: next } });
+  };
+  const handleConfirmSelection = () => {
+      if (!state.selectionMode?.isActive) return;
+      dispatch({ type: 'UPDATE_CONTEXT_NODES', payload: { id: state.selectionMode.requestingNodeId, nodeIds: state.selectionMode.selectedIds } });
+      dispatch({ type: 'SET_SELECTION_MODE', payload: { isActive: false } });
+      setIsSidebarOpen(false);
+  };
+  const handleSendMessageWrapper = async (nodeId: string, text: string) => {
+      await handleAiMessage(nodeId, text, { state, dispatch: dispatchLocal, checkPermission, onHighlight: handleHighlightNode });
+  };
+  const handleAiGenerateWrapper = async (nodeId: string, action: 'optimize' | 'prompt', promptText?: string) => {
+      await handleAiGeneration(nodeId, action, promptText, { state, dispatch: dispatchLocal, checkPermission, onHighlight: handleHighlightNode });
+  };
+  const handleCancelAi = (nodeId: string) => dispatchLocal({ type: 'SET_NODE_LOADING', payload: { id: nodeId, isLoading: false } });
+  const handleFixError = (nodeId: string, error: string) => {
+      const node = state.nodes.find(n => n.id === nodeId);
+      if (!node) return;
+      const connectedPreview = getConnectedSource(nodeId, 'logs', state.nodes, state.connections);
+      if (!connectedPreview) return;
+      const connectedCode = getConnectedSource(connectedPreview.id, 'dom', state.nodes, state.connections);
+      if (!connectedCode || !checkPermission(connectedCode.id)) return;
+      handleAiGenerateWrapper(connectedCode.id, 'prompt', `Fix this error: ${error}`);
+  };
+  const handleInjectImport = (sourceNodeId: string, packageName: string) => {
+      const connections = state.connections.filter(c => c.sourceNodeId === sourceNodeId);
+      connections.forEach(conn => {
+          const target = state.nodes.find(n => n.id === conn.targetNodeId);
+          if (target && target.type === 'CODE' && checkPermission(target.id)) {
+               if (!target.content.includes(packageName)) {
+                   const importStatement = `import '${packageName}';`;
+                   const newContent = `${importStatement}\n${target.content}`;
+                   dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id: target.id, content: newContent } });
+               }
+          }
+      });
+  };
 
   return (
     <div 
-      className="w-screen h-screen bg-canvas overflow-hidden flex flex-col text-zinc-100 font-sans select-none touch-none"
-      onContextMenu={(e) => e.preventDefault()}
-    >
-      <div className={`absolute top-4 left-4 z-50 pointer-events-none select-none flex items-center gap-3 transition-opacity duration-200 ${maximizedNodeId ? 'opacity-0' : 'opacity-100'}`}>
-        <div className="pointer-events-auto">
-            <h1 className="text-xl font-bold tracking-tight text-white drop-shadow-md">Coding Arena</h1>
-            <p className="text-xs font-medium text-zinc-500">Local Session</p>
-        </div>
-        <div className="flex items-center gap-1.5 px-3 py-1 bg-zinc-900/80 border border-zinc-800 rounded-full backdrop-blur-sm pointer-events-auto">
-            <Cloud size={14} className="text-emerald-500" />
-            <span className="text-[10px] uppercase font-bold tracking-wider text-zinc-400">Live</span>
-        </div>
-      </div>
-
-      <div className={`absolute top-4 right-4 z-50 flex flex-col gap-2 items-end transition-opacity duration-200 ${maximizedNodeId ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
-        <button onClick={handleReset} className="px-3 py-1.5 bg-red-900/80 hover:bg-red-800 text-xs font-medium text-red-100 border border-red-700 rounded flex items-center gap-2 pointer-events-auto cursor-pointer shadow-lg">
-            <AlertTriangle size={12} /> Reset
-        </button>
-        <button onClick={() => setIsSidebarOpen(true)} className="px-3 py-2 bg-zinc-900/80 hover:bg-zinc-800 text-xs text-zinc-400 border border-zinc-800 rounded flex items-center justify-center pointer-events-auto cursor-pointer">
-            <Menu size={16} />
-        </button>
-        <button onClick={handleDownloadZip} className="px-3 py-2 bg-zinc-900/80 hover:bg-blue-600/50 text-xs text-zinc-400 hover:text-white border border-zinc-800 rounded flex items-center justify-center pointer-events-auto cursor-pointer">
-            <Download size={16} />
-        </button>
-        <button onClick={handleFindNearest} className="px-3 py-2 bg-zinc-900/80 hover:bg-emerald-600/50 text-xs text-zinc-400 hover:text-white border border-zinc-800 rounded flex items-center justify-center pointer-events-auto cursor-pointer">
-            <Search size={16} />
-        </button>
-      </div>
-
-      <Sidebar 
-        isOpen={isSidebarOpen} 
-        nodes={state.nodes} 
-        onNodeClick={(id) => { setHighlightedNodeId(id); setTimeout(() => setHighlightedNodeId(null), 2000); }} 
-        onClose={() => setIsSidebarOpen(false)}
-        selectionMode={state.selectionMode?.isActive ? { isActive: true, selectedIds: state.selectionMode.selectedIds, onToggle: (id) => handleToggleSelectNode(id, true), onConfirm: () => setIsSidebarOpen(false) } : undefined}
-      />
-
-      <div 
         ref={containerRef}
-        id="canvas-bg"
-        className="flex-1 relative cursor-grab active:cursor-grabbing"
-        onContextMenu={(e) => handleContextMenu(e)}
+        className="w-full h-screen bg-[#09090b] overflow-hidden relative selection-box-container touch-none"
         onPointerDown={handleBgPointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-        style={{
-            backgroundImage: 'radial-gradient(#3f3f46 2px, transparent 2px)',
-            backgroundSize: `${Math.max(20 * state.zoom, 10)}px ${Math.max(20 * state.zoom, 10)}px`,
-            backgroundPosition: `${state.pan.x}px ${state.pan.y}px`,
-            touchAction: 'none'
-        }}
-      >
+        onContextMenu={(e) => handleContextMenu(e)}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => e.preventDefault()}
+    >
+       {/* Grid Background */}
+        <div 
+            className="absolute inset-0 pointer-events-none opacity-20"
+            style={{
+                backgroundImage: 'radial-gradient(#3f3f46 1px, transparent 1px)',
+                backgroundSize: `${20 * state.zoom}px ${20 * state.zoom}px`,
+                backgroundPosition: `${state.pan.x}px ${state.pan.y}px`
+            }}
+        />
+
+        {/* Wires */}
+        <svg className="absolute inset-0 pointer-events-none overflow-visible w-full h-full">
+            <g transform={`translate(${state.pan.x}, ${state.pan.y}) scale(${state.zoom})`}>
+                {state.connections.map(conn => {
+                    const sourceNode = state.nodes.find(n => n.id === conn.sourceNodeId);
+                    const targetNode = state.nodes.find(n => n.id === conn.targetNodeId);
+                    if (!sourceNode || !targetNode) return null;
+                    
+                    const sourcePort = calculatePortPosition(sourceNode, conn.sourcePortId, 'output');
+                    const targetPort = calculatePortPosition(targetNode, conn.targetPortId, 'input');
+                    
+                    return (
+                        <Wire 
+                            key={conn.id} 
+                            x1={sourcePort.x} y1={sourcePort.y} 
+                            x2={targetPort.x} y2={targetPort.y} 
+                        />
+                    );
+                })}
+                {dragWire && (
+                    <Wire 
+                        x1={dragWire.x1} y1={dragWire.y1} 
+                        x2={dragWire.x2} y2={dragWire.y2} 
+                        active 
+                    />
+                )}
+            </g>
+        </svg>
+
+        {/* Nodes */}
+        {displayNodes.map(node => (
+            <Node
+                key={node.id}
+                data={node}
+                scale={state.zoom}
+                pan={state.pan}
+                isSelected={state.selectedNodeIds.includes(node.id)}
+                isHighlighted={highlightedNodeId === node.id}
+                isRunning={state.runningPreviewIds.includes(node.id)}
+                isMaximized={maximizedNodeId === node.id}
+                isConnected={isConnected}
+                onMove={(id, pos) => dispatchLocal({ type: 'UPDATE_NODE_POSITION', payload: { id, position: pos } })}
+                onResize={(id, size) => dispatchLocal({ type: 'UPDATE_NODE_SIZE', payload: { id, size } })}
+                onDelete={(id) => { if(checkPermission(id)) dispatchLocal({ type: 'DELETE_NODE', payload: id }); }}
+                onToggleRun={handleToggleRun}
+                onRefresh={handleRefresh}
+                onPortDown={handlePortDown}
+                onPortContextMenu={handlePortContextMenu}
+                onContextMenu={(e) => handleContextMenu(e, node.id)}
+                onUpdateTitle={(id, title) => { if(checkPermission(id)) dispatchLocal({ type: 'UPDATE_NODE_TITLE', payload: { id, title } }); }}
+                onUpdateContent={(id, content) => { if(checkPermission(id)) dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id, content } }); }}
+                onSendMessage={handleSendMessageWrapper}
+                onStartContextSelection={handleStartContextSelection}
+                onAiAction={handleAiGenerateWrapper}
+                onCancelAi={handleCancelAi}
+                onInjectImport={handleInjectImport}
+                onFixError={handleFixError}
+                onInteraction={(id, type) => dispatchLocal({ type: 'SET_NODE_INTERACTION', payload: { nodeId: id, type } })}
+                onToggleMinimize={(id) => dispatchLocal({ type: 'TOGGLE_MINIMIZE', payload: { id } })}
+                onToggleMaximize={(id) => setMaximizedNodeId(maximizedNodeId === id ? null : id)}
+                onSelect={(id, multi) => {
+                    if (multi) {
+                        const newSelected = state.selectedNodeIds.includes(id) 
+                            ? state.selectedNodeIds.filter(i => i !== id)
+                            : [...state.selectedNodeIds, id];
+                        dispatchLocal({ type: 'SET_SELECTED_NODES', payload: newSelected });
+                    } else {
+                         dispatchLocal({ type: 'SET_SELECTED_NODES', payload: [id] });
+                    }
+                }}
+                collaboratorInfo={
+                    state.collaborators.find(c => c.draggingNodeId === node.id && c.id !== sessionId) 
+                    ? { name: 'Remote User', color: state.collaborators.find(c => c.draggingNodeId === node.id && c.id !== sessionId)!.color, action: 'dragging' } 
+                    : undefined
+                }
+                logs={state.logs[node.id]}
+                folderContents={
+                    node.type === 'FOLDER' 
+                    ? state.connections
+                        .filter(c => c.targetNodeId === node.id && c.targetPortId.includes('in-files'))
+                        .map(c => state.nodes.find(n => n.id === c.sourceNodeId)?.title || 'Unknown')
+                    : undefined
+                }
+            />
+        ))}
+
+        {/* Selection Box */}
         {selectionBox && (
             <div 
-                className="absolute bg-blue-500/10 border border-blue-500 z-[999]"
-                style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.w, height: selectionBox.h, pointerEvents: 'none' }}
+                className="absolute border border-blue-500 bg-blue-500/20 pointer-events-none z-50"
+                style={{
+                    left: selectionBox.x,
+                    top: selectionBox.y,
+                    width: selectionBox.w,
+                    height: selectionBox.h
+                }}
             />
         )}
 
-        <div 
-            style={{ 
-                transform: `translate(${state.pan.x}px, ${state.pan.y}px) scale(${state.zoom})`,
-                transformOrigin: '0 0',
-                width: '100%',
-                height: '100%',
-                pointerEvents: 'none',
-                transition: isPanning ? 'none' : 'transform 0.6s cubic-bezier(0.25, 1, 0.5, 1)' 
-            }}
-        >
-            <div className="pointer-events-none w-full h-full relative">
-                <svg className="absolute top-0 left-0 w-full h-full overflow-visible pointer-events-none z-0">
-                    {state.connections.map(conn => {
-                        if (hiddenNodeIds.has(conn.sourceNodeId) || hiddenNodeIds.has(conn.targetNodeId)) return null;
-                        const sourceNode = regularNodes.find(n => n.id === conn.sourceNodeId);
-                        const targetNode = regularNodes.find(n => n.id === conn.targetNodeId);
-                        if (!sourceNode || !targetNode) return null;
-                        const start = calculatePortPosition(sourceNode, conn.sourcePortId, 'output');
-                        const end = calculatePortPosition(targetNode, conn.targetPortId, 'input');
-                        return <Wire key={conn.id} x1={start.x} y1={start.y} x2={end.x} y2={end.y} />;
-                    })}
-                </svg>
+        {/* Collaborators */}
+        {state.collaborators.map(c => {
+            if (c.id === sessionId) return null;
+            return <CollaboratorCursor key={c.id} x={c.x * state.zoom + state.pan.x} y={c.y * state.zoom + state.pan.y} color={c.color} />;
+        })}
 
-                {displayNodes.map(node => {
-                    let logs: LogEntry[] = [];
-                    let folderContents: string[] = [];
-                    if (node.type === 'TERMINAL') {
-                         const sources = state.connections.filter(c => c.targetNodeId === node.id).map(c => c.sourceNodeId);
-                         logs = sources.flatMap(sid => state.logs[sid] || []).sort((a, b) => a.timestamp - b.timestamp);
-                    }
-                    if (node.type === 'FOLDER') {
-                        folderContents = state.connections.filter(c => c.targetNodeId === node.id && c.targetPortId.includes('in-files')).map(c => state.nodes.find(n => n.id === c.sourceNodeId)?.title).filter((t): t is string => !!t);
-                    }
-                    
-                    return (
-                        <div key={node.id} onContextMenu={(e) => { e.stopPropagation(); handleContextMenu(e, node.id); }}>
-                            <Node
-                                data={node}
-                                isSelected={state.selectedNodeIds.includes(node.id)}
-                                isHighlighted={node.id === highlightedNodeId}
-                                isRunning={state.runningPreviewIds.includes(node.id)}
-                                isMaximized={maximizedNodeId === node.id}
-                                scale={state.zoom}
-                                pan={state.pan}
-                                isConnected={isConnected}
-                                onMove={handleNodeMove}
-                                onDragEnd={handleNodeDragEnd}
-                                onResize={(id, size) => dispatchLocal({ type: 'UPDATE_NODE_SIZE', payload: { id, size } })}
-                                onDelete={(id) => checkPermission(id) && dispatchLocal({ type: 'DELETE_NODE', payload: id })}
-                                onToggleRun={handleToggleRun}
-                                onRefresh={handleRefresh}
-                                onPortDown={handlePortDown}
-                                onPortContextMenu={handlePortContextMenu}
-                                onContextMenu={(e) => { e.stopPropagation(); handleContextMenu(e, node.id); }}
-                                onUpdateTitle={handleUpdateTitle}
-                                onUpdateContent={(id, content) => checkPermission(id) && dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id, content } })}
-                                onSendMessage={handleSendMessageWrapper}
-                                onStartContextSelection={handleStartContextSelection}
-                                onAiAction={handleAiGenerateWrapper}
-                                onCancelAi={handleCancelAi}
-                                onInjectImport={handleInjectImport}
-                                onFixError={handleFixError}
-                                onInteraction={(id, type) => dispatch({ type: 'SET_NODE_INTERACTION', payload: { nodeId: id, type } })}
-                                onToggleMinimize={(id) => dispatchLocal({ type: 'TOGGLE_MINIMIZE', payload: { id } })}
-                                onToggleMaximize={(id) => setMaximizedNodeId(maximizedNodeId === id ? null : id)}
-                                onSelect={handleToggleSelectNode}
-                                logs={logs}
-                                folderContents={folderContents}
-                            />
-                        </div>
-                    );
-                })}
-                {dragWire && <svg className="absolute top-0 left-0 w-full h-full overflow-visible pointer-events-none" style={{ zIndex: 999 }}><Wire x1={dragWire.x1} y1={dragWire.y1} x2={dragWire.x2} y2={dragWire.y2} active /></svg>}
-            </div>
+        {/* UI Controls */}
+        <div className="fixed top-4 left-4 z-50 flex flex-col gap-2">
+            <button 
+                onClick={() => setIsSidebarOpen(true)}
+                className="p-2 bg-panel border border-panelBorder rounded-lg shadow-xl text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+            >
+                <Menu size={20} />
+            </button>
+             <div className="p-2 bg-panel border border-panelBorder rounded-lg shadow-xl flex flex-col items-center gap-2">
+                 <button onClick={() => dispatch({ type: 'ZOOM', payload: { zoom: Math.min(state.zoom + 0.1, 5) } })} className="p-1 hover:bg-zinc-800 rounded text-zinc-400">+</button>
+                 <span className="text-[10px] text-zinc-500">{Math.round(state.zoom * 100)}%</span>
+                 <button onClick={() => dispatch({ type: 'ZOOM', payload: { zoom: Math.max(state.zoom - 0.1, 0.1) } })} className="p-1 hover:bg-zinc-800 rounded text-zinc-400">-</button>
+             </div>
         </div>
-      </div>
-      {contextMenu && (
-        <>
-            <div className="fixed inset-0 z-40" onClick={() => setContextMenu(null)} />
+
+        {/* Sync Status Indicator */}
+        <div className="fixed bottom-4 left-4 z-50 px-3 py-1.5 bg-panel border border-panelBorder rounded-full shadow-xl flex items-center gap-2 text-xs font-medium text-zinc-400">
+             {syncStatus === 'synced' && <Cloud size={14} className="text-emerald-500" />}
+             {syncStatus === 'saving' && <UploadCloud size={14} className="text-amber-500 animate-pulse" />}
+             {syncStatus === 'error' && <AlertTriangle size={14} className="text-red-500" />}
+             {syncStatus === 'offline' && <CloudOff size={14} className="text-zinc-600" />}
+             <span>{syncStatus === 'synced' ? 'Saved' : syncStatus === 'saving' ? 'Saving...' : syncStatus === 'error' ? 'Error' : 'Offline'}</span>
+             {currentUser && <span className="ml-2 border-l border-zinc-700 pl-2 text-zinc-500">{currentUser.displayName}</span>}
+        </div>
+
+        {/* Context Menu */}
+        {contextMenu && (
             <ContextMenu 
-                position={contextMenu} 
+                position={{ x: contextMenu.x, y: contextMenu.y }}
                 targetNodeId={contextMenu.targetNodeId}
                 targetNode={contextMenu.targetNode}
                 targetPortId={contextMenu.targetPortId}
                 selectedNodeIds={state.selectedNodeIds}
-                onAdd={handleAddNode} 
-                onDeleteNode={(id) => { checkPermission(id) && dispatchLocal({ type: 'DELETE_NODE', payload: id }); setContextMenu(null); }}
-                onDuplicateNode={(id) => { /* dup logic */ setContextMenu(null); }}
-                onDisconnect={(id) => { if (contextMenu.targetPortId) { dispatchLocal({ type: 'DISCONNECT', payload: id }); setContextMenu(null); } }}
-                onClearImage={handleClearImage}
+                currentUser={currentUser}
+                onAdd={(type) => {
+                    const id = `node-${Date.now()}`;
+                    const defs = NODE_DEFAULTS[type] || { width: 300, height: 300, title: 'Node', content: '' };
+                    const pos = { 
+                        x: (contextMenu.x - state.pan.x) / state.zoom, 
+                        y: (contextMenu.y - state.pan.y) / state.zoom 
+                    };
+                    dispatchLocal({ type: 'ADD_NODE', payload: { id, type, position: pos, size: { width: defs.width, height: defs.height }, title: defs.title, content: defs.content, autoHeight: (defs as any).autoHeight } });
+                    setContextMenu(null);
+                }}
+                onDeleteNode={(id) => { if(checkPermission(id)) dispatchLocal({ type: 'DELETE_NODE', payload: id }); setContextMenu(null); }}
+                onDuplicateNode={(id) => {
+                    const original = state.nodes.find(n => n.id === id);
+                    if (original) {
+                         const newId = `node-${Date.now()}`;
+                         dispatchLocal({ type: 'ADD_NODE', payload: { ...original, id: newId, position: { x: original.position.x + 50, y: original.position.y + 50 }, title: `${original.title} (Copy)` } });
+                    }
+                    setContextMenu(null);
+                }}
+                onDisconnect={(portId) => {
+                     const conns = state.connections.filter(c => c.sourcePortId === portId || c.targetPortId === portId);
+                     conns.forEach(c => dispatchLocal({ type: 'DISCONNECT', payload: c.id }));
+                     setContextMenu(null);
+                }}
+                onClearImage={(id) => {
+                    if (checkPermission(id)) {
+                        dispatchLocal({ type: 'UPDATE_NODE_CONTENT', payload: { id, content: '' } });
+                        dispatchLocal({ type: 'UPDATE_NODE_TITLE', payload: { id, title: 'Image' } });
+                    }
+                    setContextMenu(null);
+                }}
                 onAlign={handleAlign}
                 onDistribute={handleDistribute}
                 onCompact={handleCompact}
-                onToggleLock={handleToggleLock}
-                onForceUnlock={handleForceUnlock}
-                currentUser={currentUser}
-                canAlignHorizontal={(contextMenu as any).canAlignHorizontal}
-                canAlignVertical={(contextMenu as any).canAlignVertical}
-                canDistributeHorizontal={(contextMenu as any).canDistributeHorizontal}
-                canDistributeVertical={(contextMenu as any).canDistributeVertical}
-                canCompactHorizontal={(contextMenu as any).canCompactHorizontal}
-                canCompactVertical={(contextMenu as any).canCompactVertical}
-                onClose={() => setContextMenu(null)} 
+                onToggleLock={(id) => {
+                    if (!currentUser) return;
+                    const idsToToggle = state.selectedNodeIds.includes(id) ? state.selectedNodeIds : [id];
+                    const targetNode = state.nodes.find(n => n.id === id);
+                    const isLocking = !targetNode?.lockedBy;
+                    
+                    dispatchLocal({ 
+                        type: 'LOCK_NODES', 
+                        payload: { 
+                            ids: idsToToggle, 
+                            user: isLocking ? { uid: currentUser.uid, displayName: currentUser.displayName } : undefined 
+                        } 
+                    });
+                    setContextMenu(null);
+                }}
+                onForceUnlock={(id) => {
+                     dispatchLocal({ type: 'LOCK_NODES', payload: { ids: [id], user: undefined } });
+                     setContextMenu(null);
+                }}
+                canAlignHorizontal={contextMenu.canAlignHorizontal}
+                canAlignVertical={contextMenu.canAlignVertical}
+                canDistributeHorizontal={contextMenu.canDistributeHorizontal}
+                canDistributeVertical={contextMenu.canDistributeVertical}
+                canCompactHorizontal={contextMenu.canCompactHorizontal}
+                canCompactVertical={contextMenu.canCompactVertical}
+                onClose={() => setContextMenu(null)}
             />
-        </>
-      )}
+        )}
+        
+        <Sidebar 
+            isOpen={isSidebarOpen} 
+            nodes={state.nodes} 
+            onNodeClick={(id) => {
+                const node = state.nodes.find(n => n.id === id);
+                if (node) {
+                    const centerX = (window.innerWidth / 2 - node.size.width / 2);
+                    const centerY = (window.innerHeight / 2 - node.size.height / 2);
+                    const newPanX = centerX - node.position.x * state.zoom;
+                    const newPanY = centerY - node.position.y * state.zoom;
+                    
+                    dispatch({ type: 'PAN', payload: { x: newPanX, y: newPanY } });
+                    setHighlightedNodeId(id);
+                    setTimeout(() => setHighlightedNodeId(null), 2000);
+                    if (window.innerWidth < 768) setIsSidebarOpen(false);
+                }
+            }}
+            onClose={() => setIsSidebarOpen(false)}
+            selectionMode={state.selectionMode?.isActive ? {
+                isActive: true,
+                selectedIds: state.selectionMode.selectedIds,
+                onToggle: handleToggleSelection,
+                onConfirm: handleConfirmSelection
+            } : undefined}
+        />
+        
     </div>
   );
 }

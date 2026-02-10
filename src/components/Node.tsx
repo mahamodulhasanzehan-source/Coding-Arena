@@ -567,6 +567,10 @@ export const Node = React.memo<NodeProps>(({
       boxShadow: `0 0 15px ${collaboratorInfo.color}40`
   } : {};
 
+  // FIX 1a: Adjust port container positioning
+  // When minimized, move ports up to align with header
+  const portContainerStyle = data.isMinimized ? { top: '14px' } : { top: '52px' };
+
   return (
     <div
       ref={nodeRef}
@@ -732,7 +736,6 @@ export const Node = React.memo<NodeProps>(({
 
       {/* Content Area */}
       <div className={`flex-1 relative group nodrag flex flex-col min-h-0 overflow-hidden ${data.isMinimized ? 'hidden' : ''}`}>
-        {/* ... (Existing Content Logic - Rendered as before) ... */}
         {data.type === 'CODE' ? (
             <div className="w-full h-full bg-[#1e1e1e]" onPointerDown={(e) => e.stopPropagation()}>
                  <MonacoEditor
@@ -995,8 +998,11 @@ export const Node = React.memo<NodeProps>(({
         )}
       </div>
 
-      {/* FIX 1a: Inputs (Left) - Adjust Position if Minimized */}
-      <div className={`absolute ${data.isMinimized ? 'top-[20px]' : 'top-[52px]'} -left-3 flex flex-col gap-[28px] pointer-events-none`}>
+      {/* Inputs (Left) */}
+      <div 
+        className="absolute -left-3 flex flex-col gap-[28px] pointer-events-none"
+        style={portContainerStyle}
+      >
         {inputs.map((port) => {
             const connected = isConnected(port.id);
             return (
@@ -1022,8 +1028,11 @@ export const Node = React.memo<NodeProps>(({
         })}
       </div>
 
-      {/* FIX 1a: Outputs (Right) - Adjust Position if Minimized */}
-      <div className={`absolute ${data.isMinimized ? 'top-[20px]' : 'top-[52px]'} -right-3 flex flex-col gap-[28px] pointer-events-none`}>
+      {/* Outputs (Right) */}
+      <div 
+        className="absolute -right-3 flex flex-col gap-[28px] pointer-events-none"
+        style={portContainerStyle}
+      >
         {outputs.map((port) => {
             const connected = isConnected(port.id);
             return (
