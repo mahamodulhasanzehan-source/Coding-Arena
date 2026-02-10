@@ -567,10 +567,6 @@ export const Node = React.memo<NodeProps>(({
       boxShadow: `0 0 15px ${collaboratorInfo.color}40`
   } : {};
 
-  // FIX 1a: Adjust port container positioning
-  // When minimized, move ports up to align with header
-  const portContainerStyle = data.isMinimized ? { top: '14px' } : { top: '52px' };
-
   return (
     <div
       ref={nodeRef}
@@ -999,10 +995,7 @@ export const Node = React.memo<NodeProps>(({
       </div>
 
       {/* Inputs (Left) */}
-      <div 
-        className="absolute -left-3 flex flex-col gap-[28px] pointer-events-none"
-        style={portContainerStyle}
-      >
+      <div className="absolute top-[52px] -left-3 flex flex-col gap-[28px] pointer-events-none">
         {inputs.map((port) => {
             const connected = isConnected(port.id);
             return (
@@ -1029,10 +1022,7 @@ export const Node = React.memo<NodeProps>(({
       </div>
 
       {/* Outputs (Right) */}
-      <div 
-        className="absolute -right-3 flex flex-col gap-[28px] pointer-events-none"
-        style={portContainerStyle}
-      >
+      <div className="absolute top-[52px] -right-3 flex flex-col gap-[28px] pointer-events-none">
         {outputs.map((port) => {
             const connected = isConnected(port.id);
             return (

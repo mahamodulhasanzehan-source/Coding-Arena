@@ -21,16 +21,8 @@ export const calculatePortPosition = (
 
   if (portIndex === -1) return { x: node.position.x, y: node.position.y };
 
-  // FIX 1a: Minimized connection points
-  // If minimized, center ports vertically in the header (height 40)
-  // We stack them if there are multiple (though usually not visible or singular)
-  let yRelative;
-  if (node.isMinimized) {
-      yRelative = (HEADER_HEIGHT / 2); // Center of header
-  } else {
-      yRelative = PORT_START_Y + 6 + (portIndex * PORT_STRIDE);
-  }
-  
+  const startY = node.isMinimized ? 14 : PORT_START_Y;
+  const yRelative = startY + 6 + (portIndex * PORT_STRIDE);
   const y = node.position.y + yRelative;
 
   const width = node.size.width;
@@ -206,18 +198,24 @@ export const compilePreview = (
           try {
               let content = node.content;
 
-              // AUTO-IMPORT INJECTION
+              // AUTO-IMPORT INJECTION: Detect connections and inject import statements if missing
+              // This is crucial for implicit connections visualized by wires
               const imports = getAllConnectedSources(node.id, 'file', nodes, connections);
               const injections: string[] = [];
               
               imports.forEach(imp => {
                   if (imp.type === 'CODE' || imp.type === 'NPM') {
                       const identifier = toIdentifier(imp.title);
+                      // Look for usage of identifier, but ignore if already imported
+                      // We look for "import ... from ...imp.title..."
                       const hasImportRegex = new RegExp(`import\\s+.*?['"](.*/)?${imp.title.replace('.', '\\.')}['"]`);
                       const hasImport = hasImportRegex.test(content);
+                      
+                      // Also check if the identifier is even used in the code to avoid unused imports
                       const isUsed = new RegExp(`\\b${identifier}\\b`).test(content);
 
                       if (!hasImport && isUsed) {
+                          // Inject default import.
                           injections.push(`import ${identifier} from './${imp.title}';`);
                       }
                   }
@@ -235,6 +233,8 @@ export const compilePreview = (
 
               let transformedCode = content;
               if (transformFn) {
+                 // IMPORTANT: 'modules: false' prevents Babel from converting ESM to CJS (require)
+                 // which browser cannot handle. We want browser-native ESM.
                  // @ts-ignore
                  const res = transformFn(content, {
                      presets: [
@@ -251,8 +251,11 @@ export const compilePreview = (
               
               const fullPath = getNodePath(node, nodes, connections);
               const fileName = node.title;
+              // Handle extensions and paths
               const fileNameNoExt = fileName.replace(/\.[^/.]+$/, "");
               
+              // Register multiple paths for the same file to handle various import styles
+              // Map: Button.jsx -> blob, ./Button.jsx -> blob, Button -> blob
               const paths = new Set<string>();
               paths.add(fileName);
               paths.add(`./${fileName}`);
@@ -269,6 +272,7 @@ export const compilePreview = (
                   paths.add(`./${fullPath}`);
                   paths.add(`/${fullPath}`);
                   
+                  // Also handle folder paths without extension
                   const fullPathNoExt = fullPath.replace(/\.[^/.]+$/, "");
                   if (fullPath !== fullPathNoExt) {
                       paths.add(fullPathNoExt);
@@ -283,6 +287,7 @@ export const compilePreview = (
               
           } catch (e: any) {
               console.error(`Failed to transpile ${node.title}:`, e);
+              // Register an error script to throw immediately in the preview
               const errBlob = new Blob([`console.error("Transpilation Error in ${node.title}: ${e.message.replace(/"/g, '\\"')}");`], { type: 'application/javascript' });
               pathToBlobUrl[node.title] = URL.createObjectURL(errBlob);
           }
@@ -304,30 +309,60 @@ export const compilePreview = (
     <script>
       (function() {
         const PREVIEW_ID = '${previewNodeId}';
+        
         function send(type, args) {
             try {
+                // Safe serialization to prevent cyclic error issues
                 const message = args.map(arg => {
                     if (arg === undefined) return 'undefined';
                     if (arg === null) return 'null';
                     if (arg instanceof Error) return arg.toString();
                     if (typeof arg === 'object') {
-                        try { return JSON.stringify(arg); } catch(e) { return '[Object]'; }
+                        try {
+                            return JSON.stringify(arg);
+                        } catch(e) {
+                            return '[Object]';
+                        }
                     }
                     return String(arg);
                 }).join(' ');
-                window.parent.postMessage({ source: 'preview-iframe', nodeId: PREVIEW_ID, type: type, message: message, timestamp: Date.now() }, '*');
-            } catch (e) {}
+                
+                window.parent.postMessage({
+                    source: 'preview-iframe',
+                    nodeId: PREVIEW_ID,
+                    type: type,
+                    message: message,
+                    timestamp: Date.now()
+                }, '*');
+            } catch (e) {
+                // If everything fails, send a simple string
+                window.parent.postMessage({
+                    source: 'preview-iframe',
+                    nodeId: PREVIEW_ID,
+                    type: 'error',
+                    message: 'Logging Error: ' + e.message,
+                    timestamp: Date.now()
+                }, '*');
+            }
         }
+
         const oldLog = console.log;
         const oldError = console.error;
         const oldWarn = console.warn;
         const oldInfo = console.info;
+
         console.log = function(...args) { oldLog.apply(console, args); send('log', args); };
         console.error = function(...args) { oldError.apply(console, args); send('error', args); };
         console.warn = function(...args) { oldWarn.apply(console, args); send('warn', args); };
         console.info = function(...args) { oldInfo.apply(console, args); send('info', args); };
-        window.addEventListener('error', function(event) { send('error', [event.message + ' (' + (event.filename || 'script') + ':' + event.lineno + ')']); });
-        window.addEventListener('unhandledrejection', function(event) { send('error', ['Unhandled Promise Rejection: ' + event.reason]); });
+        
+        window.addEventListener('error', function(event) {
+           send('error', [event.message + ' (' + (event.filename || 'script') + ':' + event.lineno + ')']);
+        });
+
+        window.addEventListener('unhandledrejection', function(event) {
+           send('error', ['Unhandled Promise Rejection: ' + event.reason]);
+        });
       })();
     </script>
   `;
@@ -338,24 +373,28 @@ export const compilePreview = (
 
   if (isHtmlRoot) {
       htmlBody = rootNode.content;
-      htmlBody = htmlBody.replace(/<link[^>]+rel=["']stylesheet["'][^>]*>/gi, ''); 
+      htmlBody = htmlBody.replace(/<link[^>]+rel=["']stylesheet["'][^>]*>/gi, ''); // Remove existing styles since we injected CSS content
       
-      // FIX 4: JavaScript split file injection
-      // Directly replace src attribute with Blob URL
+      // Inject module imports for scripts
       htmlBody = htmlBody.replace(/<script\s+([^>]*?)src=["']([^"']+)["']([^>]*)><\/script>/gi, (match, p1, src, p3) => {
+          // If it's a known internal file, use module type so importmap applies
+          // We check if we have a mapping for it
           const cleanSrc = src.replace(/^(\.\/|\/)/, '');
-          const blobUrl = pathToBlobUrl[cleanSrc] || pathToBlobUrl[src] || pathToBlobUrl[`./${src}`];
+          const isInternal = pathToBlobUrl[cleanSrc] || pathToBlobUrl[src] || pathToBlobUrl[`./${src}`];
           
-          if (blobUrl) {
-              // We force type="module" to support imports within that file, unless user specifically didn't use it?
-              // Standard browsers don't use importmap for non-module scripts.
-              // So for the importmap to work for dependencies of this script, it MUST be a module.
-              const typeAttr = (p1.includes('type=') || p3.includes('type=')) ? '' : ' type="module"';
-              return `<script${typeAttr} src="${blobUrl}" ${p1} ${p3}></script>`;
+          if (isInternal) {
+              // We don't replace the SRC with blob URL here because importmap handles it!
+              // We just ensure type="module" is present.
+              // Actually, if we use importmap, we can keep the src as is (e.g. src="./App.js")
+              // providing type="module" is set.
+              if (!p1.includes('type="module"') && !p3.includes('type="module"')) {
+                  return `<script type="module" src="${src}" ${p1} ${p3}></script>`;
+              }
           }
           return match;
       });
   } else {
+      // JS Root (React App Entry)
       htmlBody = '<div id="root"></div>';
   }
 
@@ -384,14 +423,20 @@ export const compilePreview = (
         ${htmlBody}
         ${!isHtmlRoot ? `
         <script type="module">
+            // Mount the root node
+            // We use the raw title as specifier, relying on importmap to resolve it to blob
             import Entry from './${rootNode.title}';
+            
             const rootEl = document.getElementById('root');
             if (rootEl && Entry) {
+                // Determine if Entry is a React component or just side-effects
                 if (typeof Entry === 'function' || typeof Entry === 'object') {
                     try {
                         const root = window.ReactDOM.createRoot(rootEl);
                         root.render(window.React.createElement(Entry));
-                    } catch(e) { console.error("Auto-mount failed:", e); }
+                    } catch(e) {
+                        console.error("Auto-mount failed:", e);
+                    }
                 }
             }
         </script>` : ''}
@@ -399,3 +444,4 @@ export const compilePreview = (
     </html>
   `;
 };
+        
